@@ -92,3 +92,73 @@ def test_render_report_writes_html(tmp_path, indicators_cfg):
         assert keyword in text, f"missing {keyword!r} in report"
 
     assert (tmp_path / "latest.html").exists()
+
+
+from unittest.mock import patch
+
+from stockpool.cli import main
+
+
+def test_cli_run_smoke(tmp_path, monkeypatch):
+    """End-to-end: mock fetcher + trading-day check, confirm CLI produces report."""
+    out_dir = (tmp_path / "out").as_posix()
+    config_yaml = tmp_path / "config.yaml"
+    config_yaml.write_text(f"""
+stocks:
+  - {{code: "605589", name: "圣泉集团"}}
+data: {{history_days: 120, cache_dir: "data", force_refresh: false}}
+indicators:
+  ma_periods: [5, 10, 20, 60]
+  macd: {{fast: 12, slow: 26, signal: 9}}
+  kdj: {{n: 9, m1: 3, m2: 3}}
+  rsi_periods: [6, 12, 24]
+  boll: {{n: 20, k: 2}}
+  volume_ratio_window: 5
+  breakout_window: 20
+weights:
+  ma_cross_strong: 2
+  ma_alignment: 1
+  macd_cross_above_zero: 2
+  macd_cross_below_zero: 1
+  macd_histogram_expand: 1
+  kdj_oversold_cross: 2
+  kdj_overbought_cross: 2
+  kdj_normal_cross: 1
+  rsi_oversold: 1
+  rsi_overbought: 1
+  boll_band_touch: 2
+  boll_mid_cross: 1
+  volume_surge_bullish: 1
+  volume_surge_bearish: 1
+  breakout_new_high: 2
+  breakout_new_low: 2
+scoring: {{daily_weight: 0.7, weekly_weight: 0.3, resonance_bonus: 2,
+          resonance_daily_threshold: 3, resonance_weekly_threshold: 1}}
+verdicts: {{strong_buy: 6, buy: 3, sell: -3, strong_sell: -6}}
+backtest: {{forward_days: [5, 10, 20]}}
+report: {{output_dir: "{out_dir}", keep_history: true, klines_to_show: 120}}
+""", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+
+    rng = np.random.default_rng(7)
+    close = 10 + np.cumsum(rng.normal(0.02, 0.3, 200))
+    fake = pd.DataFrame({
+        "日期": pd.date_range("2025-08-01", periods=200, freq="B").strftime("%Y-%m-%d"),
+        "开盘": close - 0.1, "收盘": close, "最高": close + 0.2, "最低": close - 0.2,
+        "成交量": rng.integers(500_000, 2_000_000, 200), "成交额": [0] * 200,
+        "振幅": [0] * 200, "涨跌幅": [0] * 200, "涨跌额": [0] * 200, "换手率": [0] * 200,
+    })
+
+    with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake), \
+         patch("stockpool.cli.ak.tool_trade_date_hist_sina",
+               return_value=pd.DataFrame({"trade_date": [pd.Timestamp.today().date()]})):
+        exit_code = main(["run", "--config", str(config_yaml)])
+
+    assert exit_code == 0
+    reports = list((tmp_path / "out").rglob("index.html"))
+    assert len(reports) == 1
+    text = reports[0].read_text(encoding="utf-8")
+    assert "605589" in text
+    assert "圣泉集团" in text
+    assert (tmp_path / "out" / "latest.html").exists()
