@@ -79,3 +79,15 @@ def test_config_hash_is_stable(tmp_path):
     cfg2 = load_config(cfg_file)
     assert cfg1.content_hash == cfg2.content_hash
     assert len(cfg1.content_hash) == 8
+
+
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_default_config_yaml_loads():
+    """Sanity check: the repo's own config.yaml is valid."""
+    cfg = load_config(PROJECT_ROOT / "config.yaml")
+    assert len(cfg.stocks) >= 1
+    assert all(len(s.code) == 6 for s in cfg.stocks)

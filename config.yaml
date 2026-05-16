@@ -1,0 +1,62 @@
+stocks:
+  - {code: "605589", name: "圣泉集团"}
+  - {code: "603986", name: "兆易创新"}
+  - {code: "000528", name: "柳工"}
+  - {code: "603026", name: "石大胜华"}
+  - {code: "603757", name: "大元泵业"}
+  - {code: "603667", name: "五洲新春"}
+  - {code: "002081", name: "金螳螂"}
+  - {code: "000922", name: "华电辽能"}
+
+data:
+  history_days: 500
+  cache_dir: "data"
+  force_refresh: false
+
+indicators:
+  ma_periods: [5, 10, 20, 60]
+  macd: {fast: 12, slow: 26, signal: 9}
+  kdj: {n: 9, m1: 3, m2: 3}
+  rsi_periods: [6, 12, 24]
+  boll: {n: 20, k: 2}
+  volume_ratio_window: 5
+  breakout_window: 20
+
+weights:
+  ma_cross_strong: 2
+  ma_alignment: 1
+  macd_cross_above_zero: 2
+  macd_cross_below_zero: 1
+  macd_histogram_expand: 1
+  kdj_oversold_cross: 2
+  kdj_overbought_cross: 2
+  kdj_normal_cross: 1
+  rsi_oversold: 1
+  rsi_overbought: 1
+  boll_band_touch: 2
+  boll_mid_cross: 1
+  volume_surge_bullish: 1
+  volume_surge_bearish: 1
+  breakout_new_high: 2
+  breakout_new_low: 2
+
+scoring:
+  daily_weight: 0.7
+  weekly_weight: 0.3
+  resonance_bonus: 2
+  resonance_daily_threshold: 3
+  resonance_weekly_threshold: 1
+
+verdicts:
+  strong_buy: 6
+  buy: 3
+  sell: -3
+  strong_sell: -6
+
+backtest:
+  forward_days: [5, 10, 20]
+
+report:
+  output_dir: "reports"
+  keep_history: true
+  klines_to_show: 120
