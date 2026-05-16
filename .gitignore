@@ -14,8 +14,10 @@ dist/
 venv/
 
 # Project-specific
-data/                # AKShare 缓存(Parquet),每次跑会重建
-reports/             # 每日报告归档,体积会涨
+# AKShare 缓存(Parquet),每次跑会重建
+data/
+# 每日报告归档,体积会涨
+reports/
 *.log
 
 # IDE / OS
