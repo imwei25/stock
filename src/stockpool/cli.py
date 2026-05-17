@@ -13,7 +13,8 @@ import pandas as pd
 
 from stockpool import __version__
 from stockpool.backtest import compute_hit_rates
-from stockpool.backtest_composite import verdict_bucket_stats, walk_forward_verdicts
+from stockpool.backtest_composite import simulate_equity_curve, verdict_bucket_stats, walk_forward_verdicts
+from stockpool.backtest_report import render_backtest_report
 from stockpool.config import AppConfig, load_config
 from stockpool.fetcher import fetch_daily, resample_to_weekly
 from stockpool.indicators import add_all
@@ -120,6 +121,55 @@ def _analyze_one(stock, cfg: AppConfig, force_refresh: bool) -> StockAnalysis:
     )
 
 
+def cmd_backtest(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+
+    run_date = date.today().isoformat()
+    backtest_root = Path(cfg.report.output_dir) / "backtest"
+    _setup_logging(backtest_root / run_date)
+    log.info("stockpool backtest v%s starting for %s", __version__, run_date)
+
+    stocks = cfg.stocks
+    if args.stocks:
+        wanted = set(args.stocks.split(","))
+        stocks = [s for s in stocks if s.code in wanted]
+        if not stocks:
+            log.error("No stocks match --stocks filter: %s", args.stocks)
+            return 2
+
+    per_stock: list = []
+    for s in stocks:
+        log.info("Backtesting %s (%s)...", s.code, s.name)
+        try:
+            daily = fetch_daily(
+                s.code, cfg.data.history_days, cfg.data.cache_dir,
+                force_refresh=args.refresh,
+            )
+            wf = walk_forward_verdicts(
+                daily, cfg.weights, cfg.scoring, cfg.verdicts, cfg.indicators
+            )
+            if len(wf) == 0:
+                log.warning("%s: insufficient history, skipping", s.code)
+                continue
+            result = simulate_equity_curve(
+                wf,
+                holding_days_list=cfg.backtest.equity_curve_holding_days,
+                with_buy_and_hold=True,
+            )
+            per_stock.append((s.code, s.name, result))
+        except Exception as e:
+            log.error("Backtest failed for %s: %s\n%s", s.code, e, traceback.format_exc())
+
+    if not per_stock:
+        log.error("No stocks could be backtested.")
+        return 1
+
+    out = render_backtest_report(per_stock, run_date=run_date, output_dir=backtest_root)
+    log.info("Backtest report written: %s", out)
+    log.info("Latest also at: %s", backtest_root / "latest.html")
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
 
@@ -179,6 +229,12 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--skip-trading-day-check", action="store_true",
                        help="Run even on non-trading days (debug)")
     p_run.set_defaults(func=cmd_run)
+
+    p_bt = sub.add_parser("backtest", help="Composite-strategy equity-curve backtest")
+    p_bt.add_argument("--config", default="config.yaml", help="Path (default: config.yaml)")
+    p_bt.add_argument("--refresh", action="store_true", help="Bypass cache, refetch all")
+    p_bt.add_argument("--stocks", default="", help="Only run listed codes (comma-separated)")
+    p_bt.set_defaults(func=cmd_backtest)
 
     args = parser.parse_args(argv)
     return args.func(args)
