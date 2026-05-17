@@ -5,7 +5,7 @@ from stockpool.config import load_config, AppConfig
 
 
 def _minimal_yaml() -> dict:
-    """Smallest valid config — every required field present."""
+    """Smallest valid config — every field explicitly provided."""
     return {
         "stocks": [{"code": "605589", "name": "圣泉集团"}],
         "data": {"history_days": 500, "cache_dir": "data", "force_refresh": False},
@@ -48,6 +48,7 @@ def test_load_valid_config(tmp_path):
     assert cfg.stocks[0].code == "605589"
     assert cfg.data.history_days == 500
     assert cfg.scoring.daily_weight == 0.7
+    assert cfg.backtest.equity_curve_holding_days == [5, 10, 20]
 
 
 def test_missing_required_field_raises(tmp_path):
@@ -93,13 +94,6 @@ def test_default_config_yaml_loads():
     assert all(len(s.code) == 6 for s in cfg.stocks)
 
 
-def test_equity_curve_holding_days_loads(tmp_path):
-    cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text(yaml.safe_dump(_minimal_yaml()), encoding="utf-8")
-    cfg = load_config(cfg_file)
-    assert cfg.backtest.equity_curve_holding_days == [5, 10, 20]
-
-
 def test_equity_curve_holding_days_defaults_when_missing(tmp_path):
     raw = _minimal_yaml()
     del raw["backtest"]["equity_curve_holding_days"]
@@ -107,3 +101,21 @@ def test_equity_curve_holding_days_defaults_when_missing(tmp_path):
     cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
     cfg = load_config(cfg_file)
     assert cfg.backtest.equity_curve_holding_days == [5, 10, 20]
+
+
+def test_equity_curve_holding_days_rejects_empty(tmp_path):
+    raw = _minimal_yaml()
+    raw["backtest"]["equity_curve_holding_days"] = []
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_config(cfg_file)
+
+
+def test_equity_curve_holding_days_rejects_non_positive(tmp_path):
+    raw = _minimal_yaml()
+    raw["backtest"]["equity_curve_holding_days"] = [5, 0, 10]
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_config(cfg_file)

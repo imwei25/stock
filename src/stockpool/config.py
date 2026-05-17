@@ -5,7 +5,7 @@ import hashlib
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Stock(BaseModel):
@@ -84,6 +84,15 @@ class VerdictsConfig(BaseModel):
 class BacktestConfig(BaseModel):
     forward_days: list[int]
     equity_curve_holding_days: list[int] = Field(default_factory=lambda: [5, 10, 20])
+
+    @field_validator("equity_curve_holding_days")
+    @classmethod
+    def _validate_holding_days(cls, v: list[int]) -> list[int]:
+        if not v:
+            raise ValueError("equity_curve_holding_days must be a non-empty list")
+        if any(n <= 0 for n in v):
+            raise ValueError("equity_curve_holding_days entries must be positive integers")
+        return v
 
 
 class ReportConfig(BaseModel):
