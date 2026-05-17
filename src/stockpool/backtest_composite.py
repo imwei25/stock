@@ -46,15 +46,18 @@ def walk_forward_verdicts(
             "date", "close", "daily_score", "weekly_score", "final_score", "verdict",
         ])
 
+    enriched_daily = add_all(daily_df, indicators_cfg)
+
     rows: list[dict] = []
     cached_week_key: tuple[int, int] | None = None
     cached_weekly_score: int = 0
 
     for i in range(_DAILY_WARMUP - 1, len(daily_df)):
-        # Daily score: use only data up to bar i (no future leakage)
-        sub_daily = daily_df.iloc[:i + 1].copy()
-        enriched_daily = add_all(sub_daily, indicators_cfg)
-        daily_triggers = detect_signals(enriched_daily, weights)
+        # Daily score: slice up to bar i (indicators precomputed left-to-right,
+        # so bar i depends only on bars ≤ i — no future leakage).
+        # detect_signals reads only iloc[-2], iloc[-1], iloc[-3:] from this slice.
+        daily_window = enriched_daily.iloc[:i + 1]
+        daily_triggers = detect_signals(daily_window, weights)
         daily_score = score_triggers(daily_triggers)
 
         # Weekly score: cache by ISO week to avoid redundant resampling,
