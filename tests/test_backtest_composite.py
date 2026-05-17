@@ -103,13 +103,12 @@ def test_walk_forward_matches_live_at_final_bar(weights, scoring, verdicts_cfg, 
 
 
 def test_walk_forward_matches_live_at_middle_bars(weights, scoring, verdicts_cfg, indicators_cfg):
-    """For three random middle bars, walk-forward output must equal live pipeline."""
+    """For 20 random middle bars, walk-forward output must equal live pipeline."""
     daily = _synthetic_history(n=300, seed=7)
     wf = walk_forward_verdicts(daily, weights, scoring, verdicts_cfg, indicators_cfg)
 
     rng = np.random.default_rng(123)
-    # wf row k corresponds to daily index (29 + k); pick 3 rows away from edges
-    middle_indices = rng.choice(range(20, len(wf) - 20), size=3, replace=False)
+    middle_indices = rng.choice(range(20, len(wf) - 20), size=20, replace=False)
 
     for k in middle_indices:
         daily_idx = 29 + int(k)

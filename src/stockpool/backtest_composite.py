@@ -6,8 +6,6 @@ historical day, without future-data leakage.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import pandas as pd
 
 from stockpool.config import (
@@ -21,11 +19,6 @@ from stockpool.signals import (
 
 
 _DAILY_WARMUP = 30  # match cli.py::_analyze_one's threshold
-
-
-def _iso_week_key(ts) -> tuple[int, int]:
-    iso = pd.Timestamp(ts).isocalendar()
-    return (int(iso.year), int(iso.week))
 
 
 def walk_forward_verdicts(
@@ -49,33 +42,18 @@ def walk_forward_verdicts(
     enriched_daily = add_all(daily_df, indicators_cfg)
 
     rows: list[dict] = []
-    cached_week_key: tuple[int, int] | None = None
-    cached_weekly_score: int = 0
 
     for i in range(_DAILY_WARMUP - 1, len(daily_df)):
-        # Daily score: slice up to bar i (indicators precomputed left-to-right,
-        # so bar i depends only on bars ≤ i — no future leakage).
-        # detect_signals reads only iloc[-2], iloc[-1], iloc[-3:] from this slice.
         daily_window = enriched_daily.iloc[:i + 1]
         daily_triggers = detect_signals(daily_window, weights)
         daily_score = score_triggers(daily_triggers)
 
-        # Weekly score: cache by ISO week to avoid redundant resampling,
-        # but always recompute on a new week (week boundary forces re-aggregation)
-        week_key = _iso_week_key(daily_df["date"].iloc[i])
-        if cached_week_key == week_key:
-            weekly_score = cached_weekly_score
+        weekly = resample_to_weekly(daily_df.iloc[:i + 1])
+        if len(weekly) >= 30:
+            enriched_w = add_all(weekly, indicators_cfg)
+            weekly_score = score_triggers(detect_signals(enriched_w, weights))
         else:
-            # Always slice daily_df.iloc[:i+1] so the most-recent partial week
-            # is not contaminated by future days
-            weekly = resample_to_weekly(daily_df.iloc[:i + 1])
-            if len(weekly) >= 30:
-                enriched_w = add_all(weekly, indicators_cfg)
-                weekly_score = score_triggers(detect_signals(enriched_w, weights))
-            else:
-                weekly_score = 0
-            cached_week_key = week_key
-            cached_weekly_score = weekly_score
+            weekly_score = 0
 
         final_score = combine_daily_weekly(daily_score, weekly_score, scoring_cfg)
         verdict = verdict_of(final_score, verdicts_cfg)
