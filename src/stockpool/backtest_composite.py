@@ -68,3 +68,72 @@ def walk_forward_verdicts(
         })
 
     return pd.DataFrame(rows)
+
+
+_VERDICT_LABELS = ("strong_buy", "buy", "neutral", "sell", "strong_sell")
+_BULL_VERDICTS = {"strong_buy", "buy"}
+_BEAR_VERDICTS = {"strong_sell", "sell"}
+
+
+def verdict_bucket_stats(
+    wf_df: pd.DataFrame, forward_days: list[int]
+) -> dict[str, dict]:
+    """For each verdict bucket, aggregate forward-N return stats.
+
+    Returns:
+        {
+          "strong_buy": {"count": N, "forward_5": {"mean_return_pct", "win_rate", "sample_size"}, ...},
+          "buy":        {...},
+          "neutral":    {...},
+          "sell":       {...},
+          "strong_sell":{...},
+        }
+    Every bucket key is always present, even with count=0.
+    """
+    closes = wf_df["close"].values
+    verdicts = wf_df["verdict"].values
+
+    buckets: dict[str, dict] = {
+        label: {"count": 0, "_returns": {n: [] for n in forward_days}}
+        for label in _VERDICT_LABELS
+    }
+
+    for i in range(len(wf_df)):
+        v = verdicts[i]
+        if v not in buckets:
+            continue
+        buckets[v]["count"] += 1
+        for n in forward_days:
+            j = i + n
+            if j >= len(closes):
+                continue
+            ret_pct = (closes[j] / closes[i] - 1) * 100
+            buckets[v]["_returns"][n].append(ret_pct)
+
+    result: dict[str, dict] = {}
+    for label, b in buckets.items():
+        entry: dict = {"count": b["count"]}
+        for n in forward_days:
+            rets = b["_returns"][n]
+            if rets:
+                mean_ret = sum(rets) / len(rets)
+                if label in _BULL_VERDICTS:
+                    wins = sum(1 for r in rets if r > 0)
+                elif label in _BEAR_VERDICTS:
+                    wins = sum(1 for r in rets if r < 0)
+                else:
+                    wins = sum(1 for r in rets if r > 0)
+                win_rate = wins / len(rets)
+                entry[f"forward_{n}"] = {
+                    "mean_return_pct": mean_ret,
+                    "win_rate": win_rate,
+                    "sample_size": len(rets),
+                }
+            else:
+                entry[f"forward_{n}"] = {
+                    "mean_return_pct": 0.0,
+                    "win_rate": 0.0,
+                    "sample_size": 0,
+                }
+        result[label] = entry
+    return result

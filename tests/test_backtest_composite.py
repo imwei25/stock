@@ -139,3 +139,69 @@ def test_walk_forward_weekly_score_zero_when_insufficient_weekly_bars(
     wf = walk_forward_verdicts(daily, weights, scoring, verdicts_cfg, indicators_cfg)
     assert len(wf) > 0
     assert (wf["weekly_score"] == 0).all()
+
+
+from stockpool.backtest_composite import verdict_bucket_stats
+
+
+def _wf_from_verdicts(verdicts: list[str], closes: list[float]) -> pd.DataFrame:
+    """Build a synthetic walk-forward DataFrame from manually-set verdicts."""
+    return pd.DataFrame({
+        "date": pd.date_range("2026-01-02", periods=len(verdicts), freq="B"),
+        "close": closes,
+        "daily_score": [0] * len(verdicts),
+        "weekly_score": [0] * len(verdicts),
+        "final_score": [0.0] * len(verdicts),
+        "verdict": verdicts,
+    })
+
+
+def test_verdict_bucket_stats_counts():
+    wf = _wf_from_verdicts(
+        ["buy", "buy", "neutral", "sell", "buy", "neutral", "strong_buy", "strong_sell", "neutral", "neutral"],
+        [100, 102, 103, 104, 100, 105, 110, 108, 105, 106],
+    )
+    stats = verdict_bucket_stats(wf, forward_days=[2])
+
+    assert stats["buy"]["count"] == 3
+    assert stats["neutral"]["count"] == 4
+    assert stats["sell"]["count"] == 1
+    assert stats["strong_buy"]["count"] == 1
+    assert stats["strong_sell"]["count"] == 1
+
+
+def test_verdict_bucket_stats_forward_return_and_win_rate():
+    """buy at idx 0 (close 100), idx 1 (close 102), idx 4 (close 100).
+    Forward 2 returns: idx 0 → close[2]=103 → +3.0%; idx 1 → close[3]=104 → +1.96%;
+    idx 4 → close[6]=110 → +10.0%.
+    All positive → win_rate 1.0 (buy wins on positive return).
+    Mean ≈ (3.0 + 1.96 + 10.0) / 3 ≈ 4.99%
+    """
+    wf = _wf_from_verdicts(
+        ["buy", "buy", "neutral", "sell", "buy", "neutral", "strong_buy", "strong_sell", "neutral", "neutral"],
+        [100, 102, 103, 104, 100, 105, 110, 108, 105, 106],
+    )
+    stats = verdict_bucket_stats(wf, forward_days=[2])
+    buy = stats["buy"]["forward_2"]
+    assert buy["sample_size"] == 3
+    assert buy["mean_return_pct"] == pytest.approx((3.0 + (104/102 - 1) * 100 + 10.0) / 3, rel=1e-4)
+    assert buy["win_rate"] == 1.0
+
+
+def test_verdict_bucket_stats_sell_win_rate_direction():
+    """sell at idx 0 (close 100), close[2]=95 → -5% → win for sell (negative is good)."""
+    wf = _wf_from_verdicts(
+        ["sell", "neutral", "neutral", "neutral"],
+        [100, 99, 95, 96],
+    )
+    stats = verdict_bucket_stats(wf, forward_days=[2])
+    assert stats["sell"]["forward_2"]["win_rate"] == 1.0
+    assert stats["sell"]["forward_2"]["mean_return_pct"] == pytest.approx(-5.0, rel=1e-4)
+
+
+def test_verdict_bucket_stats_omits_out_of_range_forward():
+    """Last 2 rows can't have forward_2; sample_size reflects that."""
+    wf = _wf_from_verdicts(["buy", "buy", "buy"], [100, 101, 102])
+    stats = verdict_bucket_stats(wf, forward_days=[2])
+    # Only idx 0 has close[2]=102 available; idx 1 and 2 are out of range.
+    assert stats["buy"]["forward_2"]["sample_size"] == 1
