@@ -13,6 +13,7 @@ import pandas as pd
 
 from stockpool import __version__
 from stockpool.backtest import compute_hit_rates
+from stockpool.backtest_composite import verdict_bucket_stats, walk_forward_verdicts
 from stockpool.config import AppConfig, load_config
 from stockpool.fetcher import fetch_daily, resample_to_weekly
 from stockpool.indicators import add_all
@@ -96,7 +97,16 @@ def _analyze_one(stock, cfg: AppConfig, force_refresh: bool) -> StockAnalysis:
     try:
         hit_rates = compute_hit_rates(enriched_daily, cfg.weights, cfg.backtest.forward_days)
     except Exception as e:
-        warnings.append(f"回测计算失败: {e}")
+        warnings.append(f"单信号回测失败: {e}")
+
+    verdict_hit_rates: dict = {}
+    try:
+        wf = walk_forward_verdicts(
+            daily, cfg.weights, cfg.scoring, cfg.verdicts, cfg.indicators
+        )
+        verdict_hit_rates = verdict_bucket_stats(wf, cfg.backtest.forward_days)
+    except Exception as e:
+        warnings.append(f"综合评级回测失败: {e}")
 
     return StockAnalysis(
         code=stock.code, name=stock.name,
@@ -104,6 +114,7 @@ def _analyze_one(stock, cfg: AppConfig, force_refresh: bool) -> StockAnalysis:
         final_score=final_score, verdict=verdict,
         triggers_daily=triggers_daily, triggers_weekly=triggers_weekly,
         hit_rates=hit_rates,
+        verdict_hit_rates=verdict_hit_rates,
         daily_with_indicators=enriched_daily,
         warnings=warnings,
     )

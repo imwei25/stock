@@ -198,6 +198,7 @@ class StockAnalysis:
     triggers_daily: list[Trigger] = field(default_factory=list)
     triggers_weekly: list[Trigger] = field(default_factory=list)
     hit_rates: dict[str, Any] = field(default_factory=dict)
+    verdict_hit_rates: dict[str, Any] = field(default_factory=dict)
     daily_with_indicators: pd.DataFrame | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -262,6 +263,50 @@ def _hit_rate_table(hit_rates: dict[str, Any]) -> str:
     """
 
 
+def _verdict_bucket_table(stats: dict[str, Any]) -> str:
+    if not stats:
+        return "<p style='color:#888'>本股历史窗口内无综合评级样本。</p>"
+
+    label_map = {
+        "strong_buy":   ("🟢🟢", "强烈买入"),
+        "buy":          ("🟢",   "买入"),
+        "neutral":      ("⚪",   "中性"),
+        "sell":         ("🔴",   "卖出"),
+        "strong_sell":  ("🔴🔴", "强烈卖出"),
+    }
+    rows = []
+    for key in ("strong_buy", "buy", "neutral", "sell", "strong_sell"):
+        data = stats.get(key)
+        if not data:
+            continue
+        emoji, label = label_map[key]
+        cells = [
+            f"<td>{emoji} {label}</td>",
+            f"<td>{data['count']}</td>",
+        ]
+        for n in (5, 10, 20):
+            d = data.get(f"forward_{n}")
+            if d and d["sample_size"] > 0:
+                cells.append(
+                    f"<td>{d['mean_return_pct']:+.2f}%</td>"
+                    f"<td><span style='color:#666'>{d['win_rate']*100:.0f}%</span></td>"
+                )
+            else:
+                cells.append("<td>—</td><td>—</td>")
+        rows.append(f"<tr>{''.join(cells)}</tr>")
+    return f"""
+      <table class="hit-rate">
+        <thead><tr>
+          <th>评级</th><th>样本</th>
+          <th>5 日均涨幅</th><th>5 日胜率</th>
+          <th>10 日均涨幅</th><th>10 日胜率</th>
+          <th>20 日均涨幅</th><th>20 日胜率</th>
+        </tr></thead>
+        <tbody>{"".join(rows)}</tbody>
+      </table>
+    """
+
+
 def _stock_section_html(a: StockAnalysis, klines_to_show: int) -> str:
     emoji, label, color = _VERDICT_LABEL.get(a.verdict, ("⚪", "观望", "#999"))
     warnings_html = ""
@@ -296,8 +341,11 @@ def _stock_section_html(a: StockAnalysis, klines_to_show: int) -> str:
         </div>
       </div>
 
-      <h4>历史命中率(过去 500 日)</h4>
+      <h4>单信号历史命中率(过去 500 日)</h4>
       {_hit_rate_table(a.hit_rates)}
+
+      <h4>综合评级历史回测(过去 500 日)</h4>
+      {_verdict_bucket_table(a.verdict_hit_rates)}
     </details>
     """
 

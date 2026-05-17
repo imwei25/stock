@@ -162,3 +162,23 @@ report: {{output_dir: "{out_dir}", keep_history: true, klines_to_show: 120}}
     assert "605589" in text
     assert "圣泉集团" in text
     assert (tmp_path / "out" / "latest.html").exists()
+
+
+def test_report_includes_verdict_bucket_section():
+    from stockpool.report import _stock_section_html, StockAnalysis
+    a = StockAnalysis(
+        code="000001", name="测试",
+        daily_score=2, weekly_score=1, final_score=3.0, verdict="buy",
+        verdict_hit_rates={
+            "buy": {
+                "count": 5,
+                "forward_5":  {"mean_return_pct": 1.2, "win_rate": 0.6, "sample_size": 5},
+                "forward_10": {"mean_return_pct": 0.0, "win_rate": 0.0, "sample_size": 0},
+                "forward_20": {"mean_return_pct": 0.0, "win_rate": 0.0, "sample_size": 0},
+            },
+        },
+    )
+    html = _stock_section_html(a, klines_to_show=60)
+    assert "综合评级历史回测" in html
+    assert "🟢 买入" in html
+    assert "+1.20%" in html
