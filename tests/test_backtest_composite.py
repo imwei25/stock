@@ -205,3 +205,74 @@ def test_verdict_bucket_stats_omits_out_of_range_forward():
     stats = verdict_bucket_stats(wf, forward_days=[2])
     # Only idx 0 has close[2]=102 available; idx 1 and 2 are out of range.
     assert stats["buy"]["forward_2"]["sample_size"] == 1
+
+
+from stockpool.backtest_composite import simulate_equity_curve
+
+
+def test_simulate_all_neutral_flat_equity():
+    wf = _wf_from_verdicts(["neutral"] * 10, [100, 101, 102, 99, 100, 103, 105, 104, 106, 108])
+    result = simulate_equity_curve(wf, holding_days_list=[5], with_buy_and_hold=False)
+    curve = result.curves[5]
+    assert (curve["equity"] == 1.0).all()
+    assert result.metrics[5]["trade_count"] == 0
+
+
+def test_simulate_hold_to_n_exit():
+    """Buy at idx 0 (close 100), neutral after, N=3 → exit at idx 3 close 130.
+    Equity should be 1.30 by end."""
+    closes = [100, 110, 120, 130, 125, 125, 125]
+    wf = _wf_from_verdicts(["buy"] + ["neutral"] * 6, closes)
+    result = simulate_equity_curve(wf, holding_days_list=[3], with_buy_and_hold=False)
+    curve = result.curves[3]
+    # Day 0: position[0]=0, equity=1.0
+    # Day 1: prev_verdict=buy, flat → long; entry at close[0]=100; equity = 1.0 * (110/100) = 1.10
+    # Day 2: held 1 day; equity = 1.10 * (120/110) = 1.20
+    # Day 3: held 2 days; equity = 1.20 * (130/120) = 1.30
+    # Day 4: held 3 days → exit; position[4]=0; equity stays at 1.30
+    assert curve["equity"].iloc[3] == pytest.approx(1.30, rel=1e-6)
+    assert curve["equity"].iloc[-1] == pytest.approx(1.30, rel=1e-6)
+    assert result.metrics[3]["trade_count"] == 1
+    assert result.metrics[3]["win_rate"] == 1.0
+
+
+def test_simulate_sell_signal_early_exit():
+    """Buy at idx 0, sell at idx 2, N=10 → exit on idx 3 (prev_verdict=sell)."""
+    closes = [100, 110, 105, 100, 95, 90]
+    wf = _wf_from_verdicts(["buy", "neutral", "sell", "neutral", "neutral", "neutral"], closes)
+    result = simulate_equity_curve(wf, holding_days_list=[10], with_buy_and_hold=False)
+    curve = result.curves[10]
+    # Day 3: prev_verdict=sell → exit. Final equity should equal close[2]/close[0]=1.05.
+    assert curve["equity"].iloc[3] == pytest.approx(1.05, rel=1e-6)
+    assert curve["equity"].iloc[-1] == pytest.approx(1.05, rel=1e-6)
+    assert result.metrics[10]["trade_count"] == 1
+
+
+def test_simulate_buy_while_long_ignored():
+    """Second buy signal while already long must not reopen."""
+    closes = [100, 110, 110, 110, 110, 100, 100]
+    wf = _wf_from_verdicts(
+        ["buy", "neutral", "buy", "neutral", "neutral", "neutral", "neutral"], closes
+    )
+    result = simulate_equity_curve(wf, holding_days_list=[10], with_buy_and_hold=False)
+    # Held continuously from day 1 onward (no exit triggered before len-1 because N=10>len).
+    assert result.metrics[10]["trade_count"] == 0  # open position at end → not counted
+
+
+def test_simulate_buy_and_hold_baseline():
+    closes = [100, 110, 120, 130]
+    wf = _wf_from_verdicts(["neutral"] * 4, closes)
+    result = simulate_equity_curve(wf, holding_days_list=[5], with_buy_and_hold=True)
+    bh = result.buy_and_hold
+    assert bh is not None
+    assert bh["equity"].iloc[0] == pytest.approx(1.0)
+    assert bh["equity"].iloc[-1] == pytest.approx(1.30)
+    assert result.buy_and_hold_metrics["total_return"] == pytest.approx(0.30, rel=1e-6)
+
+
+def test_simulate_metrics_max_drawdown():
+    """Hand-built drawdown: equity 1.0 → 2.0 → 1.0 → 1.5. Max DD = (2.0-1.0)/2.0 = 0.5."""
+    closes = [100, 200, 100, 150]
+    wf = _wf_from_verdicts(["buy", "neutral", "neutral", "neutral"], closes)
+    result = simulate_equity_curve(wf, holding_days_list=[10], with_buy_and_hold=False)
+    assert result.metrics[10]["max_drawdown"] == pytest.approx(0.5, rel=1e-6)
