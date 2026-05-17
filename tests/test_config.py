@@ -32,7 +32,7 @@ def _minimal_yaml() -> dict:
             "resonance_bonus": 2, "resonance_daily_threshold": 3, "resonance_weekly_threshold": 1,
         },
         "verdicts": {"strong_buy": 6, "buy": 3, "sell": -3, "strong_sell": -6},
-        "backtest": {"forward_days": [5, 10, 20]},
+        "backtest": {"forward_days": [5, 10, 20], "equity_curve_holding_days": [5, 10, 20]},
         "report": {"output_dir": "reports", "keep_history": True, "klines_to_show": 120},
     }
 
@@ -91,3 +91,19 @@ def test_default_config_yaml_loads():
     cfg = load_config(PROJECT_ROOT / "config.yaml")
     assert len(cfg.stocks) >= 1
     assert all(len(s.code) == 6 for s in cfg.stocks)
+
+
+def test_equity_curve_holding_days_loads(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(_minimal_yaml()), encoding="utf-8")
+    cfg = load_config(cfg_file)
+    assert cfg.backtest.equity_curve_holding_days == [5, 10, 20]
+
+
+def test_equity_curve_holding_days_defaults_when_missing(tmp_path):
+    raw = _minimal_yaml()
+    del raw["backtest"]["equity_curve_holding_days"]
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    cfg = load_config(cfg_file)
+    assert cfg.backtest.equity_curve_holding_days == [5, 10, 20]

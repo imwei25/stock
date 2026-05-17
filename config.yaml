@@ -55,6 +55,7 @@ verdicts:
 
 backtest:
   forward_days: [5, 10, 20]
+  equity_curve_holding_days: [5, 10, 20]
 
 report:
   output_dir: "reports"

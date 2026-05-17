@@ -83,6 +83,7 @@ class VerdictsConfig(BaseModel):
 
 class BacktestConfig(BaseModel):
     forward_days: list[int]
+    equity_curve_holding_days: list[int] = Field(default_factory=lambda: [5, 10, 20])
 
 
 class ReportConfig(BaseModel):
