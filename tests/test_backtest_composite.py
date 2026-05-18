@@ -319,6 +319,26 @@ def test_sharpe_positive_for_steady_uptrend():
     assert result.metrics[n - 1]["sharpe"] > 0
 
 
+def test_simulate_equity_curve_multi_lot_engine():
+    """engine='multi_lot' opens an independent lot per buy; trade_count > 1."""
+    wf = _wf_from_verdicts(
+        ["buy", "buy", "hold", "hold", "hold", "hold", "hold"],
+        [100, 100, 100, 100, 100, 100, 100],
+    )
+    r = simulate_equity_curve(
+        wf, [3], with_buy_and_hold=False,
+        engine="multi_lot", position_size=0.1,
+    )
+    # Two buy signals → two independent lots; each hits N=3 separately.
+    assert r.metrics[3]["trade_count"] == 2
+
+
+def test_simulate_equity_curve_invalid_engine_raises():
+    wf = _wf_from_verdicts(["neutral"], [100])
+    with pytest.raises(ValueError):
+        simulate_equity_curve(wf, [3], with_buy_and_hold=False, engine="bogus")
+
+
 def test_round_trip_cost_total_return():
     """Exact arithmetic: buy at 100, hold N=3 bars to 130, costs 0.1% buy + 0.2% sell.
     entry_equity = 1.0 * (1 - 0.001) = 0.999

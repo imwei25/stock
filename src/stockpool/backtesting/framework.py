@@ -10,7 +10,7 @@ See ``docs/backtesting_framework.md`` for the full API guide.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 import pandas as pd
@@ -79,6 +79,14 @@ class Strategy(ABC):
         separately enforces ``days_held >= max_holding_days``, so returning
         ``False`` here is always bounded by ``N``.
 
+    Optional override (non-abstract, defaults to ``False``):
+
+      * ``should_reset_timer(ctx) -> bool`` — when long, return ``True`` to
+        refresh ``days_held`` to ``0`` for this bar instead of evaluating
+        exits. Useful for "strong re-buy resets the N-day timer" semantics.
+        If both ``should_reset_timer`` and ``should_exit`` would fire on the
+        same bar, **reset wins** (the position is renewed, not closed).
+
     Look-ahead safety contract: signal row ``i`` may only depend on data
     available at bar ``i`` (i.e. ``daily_df.iloc[:i+1]``). The engine separately
     delays use of signal[t-1] until bar ``t``, so a correct walk-forward
@@ -97,6 +105,14 @@ class Strategy(ABC):
 
     @abstractmethod
     def should_exit(self, ctx: PositionContext) -> bool: ...
+
+    def should_reset_timer(self, ctx: PositionContext) -> bool:
+        """Optional hook: refresh ``days_held`` to 0 for the current bar.
+
+        Default: never reset. Override to extend a hold when a re-entry
+        signal appears (e.g. ``strong_buy`` while already long).
+        """
+        return False
 
 
 @dataclass
@@ -227,6 +243,12 @@ def _simulate(
                 entry_idx=entry_idx, entry_price=entry_price,
                 days_held=held_now, max_holding_days=max_holding_days,
             )
+            if strategy.should_reset_timer(pctx):
+                # Refresh the N-day clock; skip exit checks this bar.
+                position[t] = 1
+                days_held = 0
+                equity[t] = equity[t - 1] * (1 + daily_ret)
+                continue
             time_exit = held_now >= max_holding_days
             if time_exit or strategy.should_exit(pctx):
                 position[t] = 0
@@ -248,6 +270,201 @@ def _simulate(
                 position[t] = 1
                 days_held = held_now
                 equity[t] = equity[t - 1] * (1 + daily_ret)
+
+    curve = pd.DataFrame({
+        "date": dates,
+        "equity": equity,
+        "position": position,
+    })
+    metrics = compute_metrics(curve["equity"], trades, risk_free_rate=risk_free_rate)
+    return BacktestResult(
+        signals=signals,
+        curve=curve,
+        trades=trades,
+        metrics=metrics,
+        max_holding_days=max_holding_days,
+        strategy_name=strategy.name,
+    )
+
+
+@dataclass
+class _OpenLot:
+    """Internal: one open lot in the multi-lot engine."""
+    entry_idx: int
+    entry_price: float
+    committed_cash: float    # cash actually invested, AFTER buy_cost
+    current_value: float     # mark-to-market value of this lot
+    days_held: int = 0
+
+
+class MultiLotBacktestEngine:
+    """Multi-lot engine: each enter signal opens an independent fixed-size lot.
+
+    Differences from ``BacktestEngine``:
+
+      * Multiple positions can be open concurrently. Each enter signal
+        commits ``position_size`` of starting capital as a new lot.
+      * Each lot has its own ``days_held`` timer. A lot exits when its own
+        timer hits ``max_holding_days`` OR ``strategy.should_exit`` returns
+        True for it.
+      * Trade returns are per-lot (each closed lot ⇒ one ``Trade``).
+      * ``curve["position"]`` becomes the *count of open lots* at each bar.
+
+    Capital model:
+
+      * Total equity starts at 1.0; ``position_size`` is a fraction of that
+        starting capital (e.g. ``0.1`` = each lot is 10% of original equity).
+      * "Cash" is the un-invested portion. Each buy deducts ``position_size``
+        from cash and creates a lot worth ``position_size * (1 - buy_cost)``.
+      * If cash < ``position_size`` when a buy signal arrives, that buy is
+        skipped (no partial fill).
+      * Buy-and-hold and ``compute_metrics`` semantics are unchanged.
+
+    All other conventions match ``BacktestEngine`` (T+1, long-only, costs).
+    """
+
+    def __init__(
+        self,
+        strategy: Strategy,
+        position_size: float,
+        costs: TradeCosts = TradeCosts(),
+        risk_free_rate: float = 0.02,
+        max_concurrent_lots: int | None = None,
+    ):
+        if not (0 < position_size <= 1.0):
+            raise ValueError(
+                f"position_size must be in (0, 1], got {position_size}"
+            )
+        self.strategy = strategy
+        self.position_size = position_size
+        self.costs = costs
+        self.risk_free_rate = risk_free_rate
+        self.max_concurrent_lots = max_concurrent_lots
+
+    def run(self, daily_df: pd.DataFrame, max_holding_days: int) -> BacktestResult:
+        signals = self.strategy.generate_signals(daily_df)
+        return self.run_on_signals(signals, max_holding_days)
+
+    def run_on_signals(
+        self, signals: pd.DataFrame, max_holding_days: int,
+    ) -> BacktestResult:
+        return _simulate_multi_lot(
+            signals,
+            strategy=self.strategy,
+            position_size=self.position_size,
+            max_concurrent_lots=self.max_concurrent_lots,
+            max_holding_days=max_holding_days,
+            costs=self.costs,
+            risk_free_rate=self.risk_free_rate,
+        )
+
+    def sweep_holding_days(
+        self,
+        daily_df: pd.DataFrame,
+        holding_days_list: Sequence[int],
+    ) -> dict[int, BacktestResult]:
+        signals = self.strategy.generate_signals(daily_df)
+        return {N: self.run_on_signals(signals, N) for N in holding_days_list}
+
+
+def _simulate_multi_lot(
+    signals: pd.DataFrame,
+    *,
+    strategy: Strategy,
+    position_size: float,
+    max_concurrent_lots: int | None,
+    max_holding_days: int,
+    costs: TradeCosts,
+    risk_free_rate: float,
+) -> BacktestResult:
+    n = len(signals)
+    if n == 0:
+        empty_curve = pd.DataFrame({"date": [], "equity": [], "position": []})
+        return BacktestResult(
+            signals=signals,
+            curve=empty_curve,
+            trades=[],
+            metrics=compute_metrics(pd.Series([], dtype=float), [], risk_free_rate),
+            max_holding_days=max_holding_days,
+            strategy_name=strategy.name,
+        )
+
+    dates = signals["date"].values
+    closes = signals["close"].values
+    sig_values = signals["signal"].values
+
+    cash = 1.0
+    open_lots: list[_OpenLot] = []
+    trades: list[Trade] = []
+    equity = [1.0] * n
+    position = [0] * n
+
+    for t in range(1, n):
+        prev_signal = sig_values[t - 1]
+        prev_close = float(closes[t - 1])
+        prev_date = pd.Timestamp(dates[t - 1])
+        ret_t = closes[t] / closes[t - 1] - 1
+
+        # 1. Age all open lots (do NOT mark-to-market yet — exits price at
+        #    yesterday's close, same as the single-position engine).
+        for lot in open_lots:
+            lot.days_held += 1
+
+        # 2. Per-lot exit / reset decisions. current_value still reflects close[t-1].
+        still_open: list[_OpenLot] = []
+        for lot in open_lots:
+            pctx = PositionContext(
+                bar_idx=t - 1, date=prev_date,
+                close=prev_close, signal=prev_signal,
+                entry_idx=lot.entry_idx, entry_price=lot.entry_price,
+                days_held=lot.days_held, max_holding_days=max_holding_days,
+            )
+            if strategy.should_reset_timer(pctx):
+                lot.days_held = 0
+                still_open.append(lot)
+                continue
+            time_exit = lot.days_held >= max_holding_days
+            if time_exit or strategy.should_exit(pctx):
+                exit_value = lot.current_value * (1 - costs.sell_cost)
+                cash += exit_value
+                trades.append(Trade(
+                    entry_idx=lot.entry_idx,
+                    exit_idx=t - 1,
+                    entry_price=lot.entry_price,
+                    exit_price=prev_close,
+                    ret=float(exit_value / lot.committed_cash - 1),
+                    days_held=lot.days_held,
+                ))
+            else:
+                still_open.append(lot)
+        open_lots = still_open
+
+        # 3. Mark surviving lots with today's price return.
+        for lot in open_lots:
+            lot.current_value *= (1 + ret_t)
+
+        # 4. Maybe open a new lot.
+        bctx = BarContext(
+            bar_idx=t - 1, date=prev_date,
+            close=prev_close, signal=prev_signal,
+        )
+        capacity_ok = (
+            max_concurrent_lots is None
+            or len(open_lots) < max_concurrent_lots
+        )
+        if strategy.should_enter(bctx) and cash >= position_size and capacity_ok:
+            cash -= position_size
+            committed = position_size * (1 - costs.buy_cost)
+            open_lots.append(_OpenLot(
+                entry_idx=t - 1,
+                entry_price=prev_close,
+                committed_cash=committed,
+                current_value=committed * (1 + ret_t),
+                days_held=0,
+            ))
+
+        equity[t] = cash + sum(lot.current_value for lot in open_lots)
+        position[t] = len(open_lots)
 
     curve = pd.DataFrame({
         "date": dates,

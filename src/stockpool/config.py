@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -113,6 +114,9 @@ class BacktestConfig(BaseModel):
     equity_curve_holding_days: list[int] = Field(default_factory=lambda: [5, 10, 20])
     risk_free_rate: float = 0.02
     costs: BacktestCostConfig = Field(default_factory=BacktestCostConfig)
+    engine: Literal["single", "multi_lot"] = "multi_lot"
+    position_size: float = Field(default=0.1, gt=0.0, le=1.0)
+    max_concurrent_lots: int | None = Field(default=None, gt=0)
 
     @field_validator("equity_curve_holding_days")
     @classmethod

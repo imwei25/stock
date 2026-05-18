@@ -21,6 +21,7 @@ import pandas as pd
 from stockpool.backtesting import (
     BacktestEngine,
     CompositeVerdictStrategy,
+    MultiLotBacktestEngine,
     TradeCosts,
     VerdictExecution,
     buy_and_hold_baseline,
@@ -156,25 +157,50 @@ def simulate_equity_curve(
     buy_cost: float = 0.0,
     sell_cost: float = 0.0,
     risk_free_rate: float = 0.02,
+    engine: str = "single",
+    position_size: float = 0.1,
+    max_concurrent_lots: int | None = None,
 ) -> EquityResult:
     """Simulate the composite strategy for each holding-day cap in the list.
 
-    Delegates to ``BacktestEngine`` under the hood; the only adaptation here
-    is renaming the ``verdict`` column to the framework's ``signal`` and
-    repacking framework ``BacktestResult`` objects into the original
-    ``EquityResult`` aggregate.
+    Delegates to either ``BacktestEngine`` (single-position) or
+    ``MultiLotBacktestEngine`` (each buy opens an independent lot) under the
+    hood. Default is ``engine="single"`` to preserve legacy behaviour for
+    direct callers; the CLI overrides this via ``BacktestConfig.engine``.
+
+    Args:
+        engine: ``"single"`` (default, satisfies legacy callers/tests) or
+                ``"multi_lot"``.
+        position_size: only used when ``engine="multi_lot"`` — fraction of
+                       starting capital per lot, must be in (0, 1].
+        max_concurrent_lots: only used when ``engine="multi_lot"`` — cap on
+                             simultaneous open lots; None = uncapped by count
+                             (cash still self-caps).
     """
     signals = wf_df.rename(columns={"verdict": "signal"})
-    engine = BacktestEngine(
-        VerdictExecution(),
-        costs=TradeCosts(buy_cost=buy_cost, sell_cost=sell_cost),
-        risk_free_rate=risk_free_rate,
-    )
+    costs = TradeCosts(buy_cost=buy_cost, sell_cost=sell_cost)
+
+    if engine == "single":
+        bt = BacktestEngine(
+            VerdictExecution(),
+            costs=costs,
+            risk_free_rate=risk_free_rate,
+        )
+    elif engine == "multi_lot":
+        bt = MultiLotBacktestEngine(
+            VerdictExecution(),
+            position_size=position_size,
+            costs=costs,
+            risk_free_rate=risk_free_rate,
+            max_concurrent_lots=max_concurrent_lots,
+        )
+    else:
+        raise ValueError(f"engine must be 'single' or 'multi_lot', got {engine!r}")
 
     curves: dict[int, pd.DataFrame] = {}
     metrics: dict[int, dict] = {}
     for N in holding_days_list:
-        result = engine.run_on_signals(signals, max_holding_days=N)
+        result = bt.run_on_signals(signals, max_holding_days=N)
         curves[N] = result.curve
         metrics[N] = result.metrics
 

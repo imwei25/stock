@@ -66,6 +66,12 @@ backtest:
     commission_rate: 0.0003
     stamp_duty_rate: 0.0005
     slippage_rate: 0.0005
+  # engine: "multi_lot" (default) or "single"
+  #   multi_lot — 每次 buy 开独立的 position_size 小单,各自 N 天平仓
+  #   single    — 同时只持一只票,sell 或 N 满才平仓
+  engine: multi_lot
+  position_size: 0.1            # multi_lot 模式下每单占用的起始资本比例 (0, 1]
+  max_concurrent_lots: null     # null = 由现金自然封顶
 
 report:
   output_dir: "reports"

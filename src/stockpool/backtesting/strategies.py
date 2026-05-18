@@ -36,6 +36,10 @@ class CompositeVerdictStrategy(Strategy):
 
     Entry: signal in ``buy_verdicts`` (defaults to ``buy``, ``strong_buy``).
     Exit: signal in ``sell_verdicts`` (defaults to ``sell``, ``strong_sell``).
+    Timer reset (while long): signal in ``refresh_verdicts``
+        (defaults to ``strong_buy``) — restarts the N-day hold from this bar.
+        Pass ``refresh_verdicts=()`` to opt out and keep the old
+        "ignore signals while long" behavior.
     The engine separately bounds the hold by ``max_holding_days``.
     """
 
@@ -47,6 +51,7 @@ class CompositeVerdictStrategy(Strategy):
         indicators_cfg: IndicatorsConfig,
         buy_verdicts: tuple[str, ...] = ("buy", "strong_buy"),
         sell_verdicts: tuple[str, ...] = ("sell", "strong_sell"),
+        refresh_verdicts: tuple[str, ...] = ("strong_buy",),
     ):
         self.weights = weights
         self.scoring = scoring
@@ -54,6 +59,7 @@ class CompositeVerdictStrategy(Strategy):
         self.indicators_cfg = indicators_cfg
         self.buy_verdicts = set(buy_verdicts)
         self.sell_verdicts = set(sell_verdicts)
+        self.refresh_verdicts = set(refresh_verdicts)
 
     @property
     def name(self) -> str:
@@ -98,6 +104,9 @@ class CompositeVerdictStrategy(Strategy):
     def should_exit(self, ctx: PositionContext) -> bool:
         return ctx.signal in self.sell_verdicts
 
+    def should_reset_timer(self, ctx: PositionContext) -> bool:
+        return ctx.signal in self.refresh_verdicts
+
 
 class VerdictExecution(Strategy):
     """Execution-only adapter for pre-generated verdict frames.
@@ -112,11 +121,13 @@ class VerdictExecution(Strategy):
         self,
         buy_verdicts: tuple[str, ...] = ("buy", "strong_buy"),
         sell_verdicts: tuple[str, ...] = ("sell", "strong_sell"),
+        refresh_verdicts: tuple[str, ...] = ("strong_buy",),
         name: str = "verdict_execution",
     ):
         self._name = name
         self.buy_verdicts = set(buy_verdicts)
         self.sell_verdicts = set(sell_verdicts)
+        self.refresh_verdicts = set(refresh_verdicts)
 
     @property
     def name(self) -> str:
@@ -133,6 +144,9 @@ class VerdictExecution(Strategy):
 
     def should_exit(self, ctx: PositionContext) -> bool:
         return ctx.signal in self.sell_verdicts
+
+    def should_reset_timer(self, ctx: PositionContext) -> bool:
+        return ctx.signal in self.refresh_verdicts
 
 
 class SMACrossStrategy(Strategy):

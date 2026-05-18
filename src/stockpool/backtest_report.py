@@ -154,10 +154,14 @@ def render_backtest_report(
     per_stock: list[tuple[str, str, EquityResult]],
     run_date: str,
     output_dir: str | Path,
+    engine_label: str = "",
 ) -> Path:
     """Render the backtest HTML page.
 
     per_stock: list of (code, name, EquityResult) tuples.
+    engine_label: human-readable string describing the engine + params used
+        (shown in the page header so future-you remembers which mode produced
+        the chart). Empty string omits the line.
     Returns the path to <output_dir>/<run_date>.html. Also writes latest.html.
     """
     output_dir = Path(output_dir)
@@ -170,6 +174,11 @@ def render_backtest_report(
     )
     sections = "".join(_stock_section(c, n, r) for c, n, r in per_stock)
 
+    engine_line = (
+        f'<p class="meta"><strong>引擎:</strong> {engine_label}</p>'
+        if engine_label else ""
+    )
+
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -180,12 +189,13 @@ def render_backtest_report(
 <body>
   <h1>综合策略回测 · {run_date}</h1>
   <p class="meta">基于当前权重对历史每日重建综合评级,模拟 N=5/10/20 持有期策略与 Buy &amp; Hold 基准。</p>
+  {engine_line}
   <h2>索引</h2>
   <ul>{index_rows}</ul>
   {sections}
   <footer>
     <p>⚠️ <strong>免责声明:</strong>策略曲线已扣除双边佣金 0.03%、卖出印花税 0.05%、单边滑点 0.05%；
-       Buy &amp; Hold 曲线为未扣税基准；无 T+1 限制外的真实市场摩擦；仅供技术参考。</p>
+       Buy &amp; Hold 曲线为未扣税基准;无 T+1 限制外的真实市场摩擦；仅供技术参考。</p>
   </footer>
 </body>
 </html>

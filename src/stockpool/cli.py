@@ -201,6 +201,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
                 buy_cost=cfg.backtest.costs.buy_cost,
                 sell_cost=cfg.backtest.costs.sell_cost,
                 risk_free_rate=cfg.backtest.risk_free_rate,
+                engine=cfg.backtest.engine,
+                position_size=cfg.backtest.position_size,
+                max_concurrent_lots=cfg.backtest.max_concurrent_lots,
             )
             per_stock.append((s.code, s.name, result))
         except Exception as e:
@@ -210,7 +213,16 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         log.error("No stocks could be backtested.")
         return 1
 
-    out = render_backtest_report(per_stock, run_date=run_date, output_dir=backtest_root)
+    if cfg.backtest.engine == "multi_lot":
+        engine_label = (
+            f"multi_lot · 每次买入 {cfg.backtest.position_size:.0%} 起始资本独立一单"
+        )
+    else:
+        engine_label = "single · 同时只持一只票,信号反转换仓"
+    out = render_backtest_report(
+        per_stock, run_date=run_date, output_dir=backtest_root,
+        engine_label=engine_label,
+    )
     log.info("Backtest report written: %s", out)
     log.info("Latest also at: %s", backtest_root / "latest.html")
     return 0
