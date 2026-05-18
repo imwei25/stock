@@ -22,6 +22,17 @@ _VERDICT_LABEL = {
 }
 
 
+# 5 个子图的纵向布局（百分比基于 Grid 总高度 1100px）
+# 每个子图前留 4% 给该子图的 legend；slider 放底部 4%
+_LAYOUT = {
+    "kline":  {"top": "5%",  "height": "25%", "legend": "1%"},   # K线占大头
+    "volume": {"top": "34%", "height": "8%",  "legend": None},   # 成交量无 legend
+    "macd":   {"top": "47%", "height": "12%", "legend": "44%"},
+    "kdj":    {"top": "64%", "height": "12%", "legend": "61%"},
+    "rsi":    {"top": "81%", "height": "12%", "legend": "78%"},
+}
+
+
 def _kline_main(code: str, name: str, df: pd.DataFrame) -> Kline:
     dates = df["date"].dt.strftime("%Y-%m-%d").tolist()
     ohlc = df[["open", "close", "low", "high"]].values.tolist()
@@ -35,16 +46,16 @@ def _kline_main(code: str, name: str, df: pd.DataFrame) -> Kline:
             itemstyle_opts=opts.ItemStyleOpts(color="#ec0000", color0="#00da3c"),
         )
         .set_global_opts(
-            title_opts=opts.TitleOpts(title=f"{code} {name}"),
             xaxis_opts=opts.AxisOpts(is_scale=True),
             yaxis_opts=opts.AxisOpts(is_scale=True,
                                      splitarea_opts=opts.SplitAreaOpts(is_show=True)),
             datazoom_opts=[
                 opts.DataZoomOpts(type_="inside", xaxis_index=[0, 1, 2, 3, 4]),
-                opts.DataZoomOpts(type_="slider", xaxis_index=[0, 1, 2, 3, 4]),
+                opts.DataZoomOpts(type_="slider", xaxis_index=[0, 1, 2, 3, 4],
+                                  pos_top="94%", pos_bottom="2%"),
             ],
             tooltip_opts=opts.TooltipOpts(trigger="axis", axis_pointer_type="cross"),
-            legend_opts=opts.LegendOpts(pos_top="2%"),
+            legend_opts=opts.LegendOpts(pos_top=_LAYOUT["kline"]["legend"]),
         )
     )
     return kline
@@ -61,7 +72,7 @@ def _ma_boll_overlay(df: pd.DataFrame) -> Line:
                            is_smooth=True, is_symbol_show=False,
                            label_opts=opts.LabelOpts(is_show=False),
                            linestyle_opts=opts.LineStyleOpts(width=1))
-    line.set_global_opts(legend_opts=opts.LegendOpts(pos_top="2%"))
+    line.set_global_opts(legend_opts=opts.LegendOpts(pos_top=_LAYOUT["kline"]["legend"]))
     return line
 
 
@@ -108,7 +119,7 @@ def _macd_chart(df: pd.DataFrame) -> Bar:
         xaxis_opts=opts.AxisOpts(grid_index=2,
                                  axislabel_opts=opts.LabelOpts(is_show=False)),
         yaxis_opts=opts.AxisOpts(grid_index=2, is_scale=True),
-        legend_opts=opts.LegendOpts(pos_top="34%"),
+        legend_opts=opts.LegendOpts(pos_top=_LAYOUT["macd"]["legend"]),
     )
 
     line = (
@@ -142,7 +153,7 @@ def _kdj_chart(df: pd.DataFrame) -> Line:
             xaxis_opts=opts.AxisOpts(grid_index=3,
                                      axislabel_opts=opts.LabelOpts(is_show=False)),
             yaxis_opts=opts.AxisOpts(grid_index=3, is_scale=True),
-            legend_opts=opts.LegendOpts(pos_top="56%"),
+            legend_opts=opts.LegendOpts(pos_top=_LAYOUT["kdj"]["legend"]),
         )
     )
     return line
@@ -157,9 +168,10 @@ def _rsi_chart(df: pd.DataFrame) -> Line:
                            is_smooth=True, is_symbol_show=False,
                            label_opts=opts.LabelOpts(is_show=False))
     line.set_global_opts(
-        xaxis_opts=opts.AxisOpts(grid_index=4, is_scale=True),
+        xaxis_opts=opts.AxisOpts(grid_index=4, is_scale=True,
+                                 axislabel_opts=opts.LabelOpts(rotate=30, font_size=10)),
         yaxis_opts=opts.AxisOpts(grid_index=4, is_scale=True),
-        legend_opts=opts.LegendOpts(pos_top="78%"),
+        legend_opts=opts.LegendOpts(pos_top=_LAYOUT["rsi"]["legend"]),
     )
     return line
 
@@ -175,12 +187,22 @@ def build_stock_chart(code: str, name: str, df: pd.DataFrame, klines_to_show: in
     rsi = _rsi_chart(show)
 
     grid = (
-        Grid(init_opts=opts.InitOpts(width="100%", height="900px"))
-        .add(kline,   grid_opts=opts.GridOpts(pos_top="6%",  height="28%"))
-        .add(volume,  grid_opts=opts.GridOpts(pos_top="38%", height="10%"))
-        .add(macd,    grid_opts=opts.GridOpts(pos_top="50%", height="14%"))
-        .add(kdj,     grid_opts=opts.GridOpts(pos_top="66%", height="14%"))
-        .add(rsi,     grid_opts=opts.GridOpts(pos_top="82%", height="14%"))
+        Grid(init_opts=opts.InitOpts(width="100%", height="1100px"))
+        .add(kline,
+             grid_opts=opts.GridOpts(pos_top=_LAYOUT["kline"]["top"],
+                                     height=_LAYOUT["kline"]["height"]))
+        .add(volume,
+             grid_opts=opts.GridOpts(pos_top=_LAYOUT["volume"]["top"],
+                                     height=_LAYOUT["volume"]["height"]))
+        .add(macd,
+             grid_opts=opts.GridOpts(pos_top=_LAYOUT["macd"]["top"],
+                                     height=_LAYOUT["macd"]["height"]))
+        .add(kdj,
+             grid_opts=opts.GridOpts(pos_top=_LAYOUT["kdj"]["top"],
+                                     height=_LAYOUT["kdj"]["height"]))
+        .add(rsi,
+             grid_opts=opts.GridOpts(pos_top=_LAYOUT["rsi"]["top"],
+                                     height=_LAYOUT["rsi"]["height"]))
     )
     return grid
 
