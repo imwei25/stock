@@ -1,7 +1,9 @@
 """AKShare 数据获取 + Parquet 本地缓存."""
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -21,6 +23,26 @@ _AKSHARE_COLUMN_MAP = {
 
 _RETRY_DELAYS = [2, 4, 8]
 
+_PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy")
+
+
+@contextlib.contextmanager
+def _no_proxy():
+    """强制 AKShare 的 requests.get 直连，不走任何代理，退出后还原。"""
+    import requests as _req
+    _orig = _req.get
+
+    def _direct_get(url, **kwargs):
+        # proxies={} 会被 setdefault 覆盖；显式设 None 才能真正禁用
+        kwargs["proxies"] = {"http": None, "https": None}
+        return _orig(url, **kwargs)
+
+    _req.get = _direct_get
+    try:
+        yield
+    finally:
+        _req.get = _orig
+
 
 def _cache_path(cache_dir: str | Path, code: str) -> Path:
     return Path(cache_dir) / f"{code}_daily.parquet"
@@ -39,13 +61,14 @@ def _fetch_from_akshare(code: str, start: str | None = None) -> pd.DataFrame:
     last_err: Exception | None = None
     for attempt, delay in enumerate(_RETRY_DELAYS, 1):
         try:
-            raw = ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start or "19900101",
-                end_date="20991231",
-                adjust="qfq",
-            )
+            with _no_proxy():
+                raw = ak.stock_zh_a_hist(
+                    symbol=code,
+                    period="daily",
+                    start_date=start or "19900101",
+                    end_date="20991231",
+                    adjust="qfq",
+                )
             return _normalize(raw)
         except Exception as e:
             last_err = e
