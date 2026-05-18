@@ -77,3 +77,60 @@ report:
   output_dir: "reports"
   keep_history: true
   klines_to_show: 120
+
+# === 策略选择 ===
+# name: composite_verdict (默认, 原综合评级) | ml_factor (Lasso + IC 两步法)
+strategy:
+  name: ml_factor
+
+  # 只有 name == ml_factor 时生效。
+  # 该策略走流程: Lasso 筛因子 -> IC/IR/equal 加权 -> 训练集分位数映射到 verdict。
+  ml_factor:
+    # 要参与组合的因子(注册名见 stockpool.factors 内置列表)。
+    # 加新因子: 在 factors/technical.py 写一个 Factor 子类 + @register("xxx"),
+    # 然后把名字加到这个列表即可。
+    factors:
+      - momentum_20
+      - macd_hist
+      - rsi_centered_14
+      - ma_distance_20
+      - vol_ratio_5
+      - boll_position_20
+      - ma_slope_20_5
+      - kdj_j
+
+    horizon: 5                # 预测未来 N 日收益
+    # train_window 是 "每只票最近多少 bars" 的语义:
+    #   per_stock 模式 -> 训练样本数 = train_window
+    #   pooled    模式 -> 训练样本数 ≈ train_window × 活跃股票数
+    # 经验值: 日线 250-500 (约 1-2 年); 不要超过 2 年以避免跨越市场状态
+    train_window: 250
+    min_train_samples: 60     # 第一次拟合所需最小样本数
+    refit_every: 20           # 每多少根 bar 重训一次
+
+    # per_stock: 每只票独立训练; pooled: 池化所有票样本训一个共用模型
+    panel_mode: pooled
+
+    selector:
+      type: lasso             # 目前唯一支持的 selector
+      alpha: 0.001            # L1 强度; 越大越稀疏 (1e-4 ~ 1e-1 合理)
+      max_iter: 1000
+      tol: 1.0e-6
+
+    weighter:
+      type: ic                # ic | ir | equal
+      use_rank: true          # rank IC (Spearman) 更稳健
+      min_abs_ic: 0.0
+      n_chunks: 6             # 仅 type=ir 时用
+      min_abs_ir: 0.0
+
+    # 训练集分位数 -> verdict; 必须 strong_sell < sell < buy < strong_buy
+    thresholds:
+      strong_buy: 0.90
+      buy: 0.70
+      sell: 0.30
+      strong_sell: 0.10
+
+    buy_verdicts:     ["buy", "strong_buy"]
+    sell_verdicts:    ["sell", "strong_sell"]
+    refresh_verdicts: ["strong_buy"]

@@ -25,6 +25,7 @@ from stockpool.signals import (
     score_triggers,
     verdict_of,
 )
+from stockpool.strategy_factory import build_strategy, simulate_strategy_equity_curve
 
 log = logging.getLogger("stockpool")
 
@@ -180,31 +181,68 @@ def cmd_backtest(args: argparse.Namespace) -> int:
             log.error("No stocks match --stocks filter: %s", args.stocks)
             return 2
 
+    # For ml_factor in pooled mode, preload every stock's history once so
+    # the strategy can build a panel at each refit point.
+    pool_data: dict[str, pd.DataFrame] = {}
+    needs_pool = (
+        cfg.strategy.name == "ml_factor"
+        and cfg.strategy.ml_factor.panel_mode == "pooled"
+    )
+    if needs_pool:
+        for s in stocks:
+            try:
+                pool_data[s.code] = fetch_daily(
+                    s.code, cfg.data.history_days, cfg.data.cache_dir,
+                    force_refresh=args.refresh,
+                )
+            except Exception as e:
+                log.warning("Pool preload skipped for %s: %s", s.code, e)
+
     per_stock: list = []
     for s in stocks:
         log.info("Backtesting %s (%s)...", s.code, s.name)
         try:
-            daily = fetch_daily(
-                s.code, cfg.data.history_days, cfg.data.cache_dir,
-                force_refresh=args.refresh,
-            )
-            wf = walk_forward_verdicts(
-                daily, cfg.weights, cfg.scoring, cfg.verdicts, cfg.indicators
-            )
-            if len(wf) == 0:
-                log.warning("%s: insufficient history, skipping", s.code)
-                continue
-            result = simulate_equity_curve(
-                wf,
-                holding_days_list=cfg.backtest.equity_curve_holding_days,
-                with_buy_and_hold=True,
-                buy_cost=cfg.backtest.costs.buy_cost,
-                sell_cost=cfg.backtest.costs.sell_cost,
-                risk_free_rate=cfg.backtest.risk_free_rate,
-                engine=cfg.backtest.engine,
-                position_size=cfg.backtest.position_size,
-                max_concurrent_lots=cfg.backtest.max_concurrent_lots,
-            )
+            daily = pool_data.get(s.code) if needs_pool else None
+            if daily is None:
+                daily = fetch_daily(
+                    s.code, cfg.data.history_days, cfg.data.cache_dir,
+                    force_refresh=args.refresh,
+                )
+            if cfg.strategy.name == "composite_verdict":
+                wf = walk_forward_verdicts(
+                    daily, cfg.weights, cfg.scoring, cfg.verdicts, cfg.indicators
+                )
+                if len(wf) == 0:
+                    log.warning("%s: insufficient history, skipping", s.code)
+                    continue
+                result = simulate_equity_curve(
+                    wf,
+                    holding_days_list=cfg.backtest.equity_curve_holding_days,
+                    with_buy_and_hold=True,
+                    buy_cost=cfg.backtest.costs.buy_cost,
+                    sell_cost=cfg.backtest.costs.sell_cost,
+                    risk_free_rate=cfg.backtest.risk_free_rate,
+                    engine=cfg.backtest.engine,
+                    position_size=cfg.backtest.position_size,
+                    max_concurrent_lots=cfg.backtest.max_concurrent_lots,
+                )
+            else:
+                strategy = build_strategy(
+                    cfg,
+                    pool_data=pool_data if needs_pool else None,
+                    current_stock_code=s.code,
+                )
+                result = simulate_strategy_equity_curve(
+                    daily, strategy,
+                    holding_days_list=cfg.backtest.equity_curve_holding_days,
+                    with_buy_and_hold=True,
+                    buy_cost=cfg.backtest.costs.buy_cost,
+                    sell_cost=cfg.backtest.costs.sell_cost,
+                    risk_free_rate=cfg.backtest.risk_free_rate,
+                    engine=cfg.backtest.engine,
+                    position_size=cfg.backtest.position_size,
+                    max_concurrent_lots=cfg.backtest.max_concurrent_lots,
+                )
             per_stock.append((s.code, s.name, result))
         except Exception as e:
             log.error("Backtest failed for %s: %s\n%s", s.code, e, traceback.format_exc())

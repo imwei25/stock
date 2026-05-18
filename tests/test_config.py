@@ -119,3 +119,70 @@ def test_equity_curve_holding_days_rejects_non_positive(tmp_path):
     cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_config(cfg_file)
+
+
+# === Strategy / MLFactor configuration ===
+
+def test_strategy_defaults_to_composite_verdict(tmp_path):
+    """When the yaml omits `strategy:`, the legacy composite path is used."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(_minimal_yaml()), encoding="utf-8")
+    cfg = load_config(cfg_file)
+    assert cfg.strategy.name == "composite_verdict"
+    # ml_factor sub-block exists with sensible defaults.
+    assert cfg.strategy.ml_factor.horizon == 5
+    assert cfg.strategy.ml_factor.train_window == 250
+    assert cfg.strategy.ml_factor.panel_mode == "per_stock"
+
+
+def test_strategy_can_be_set_to_ml_factor(tmp_path):
+    raw = _minimal_yaml()
+    raw["strategy"] = {
+        "name": "ml_factor",
+        "ml_factor": {
+            "factors": ["momentum_5", "macd_hist"],
+            "horizon": 10,
+            "train_window": 500,
+            "refit_every": 30,
+            "panel_mode": "pooled",
+            "selector": {"type": "lasso", "alpha": 0.01},
+            "weighter": {"type": "ir", "n_chunks": 8},
+            "thresholds": {
+                "strong_buy": 0.85, "buy": 0.65, "sell": 0.35, "strong_sell": 0.15,
+            },
+        },
+    }
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    cfg = load_config(cfg_file)
+    assert cfg.strategy.name == "ml_factor"
+    assert cfg.strategy.ml_factor.factors == ["momentum_5", "macd_hist"]
+    assert cfg.strategy.ml_factor.panel_mode == "pooled"
+    assert cfg.strategy.ml_factor.weighter.type == "ir"
+    assert cfg.strategy.ml_factor.weighter.n_chunks == 8
+    assert cfg.strategy.ml_factor.thresholds.strong_buy == 0.85
+
+
+def test_strategy_rejects_unknown_name(tmp_path):
+    raw = _minimal_yaml()
+    raw["strategy"] = {"name": "neural_net"}
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_config(cfg_file)
+
+
+def test_quantile_thresholds_must_be_ordered(tmp_path):
+    raw = _minimal_yaml()
+    raw["strategy"] = {
+        "name": "ml_factor",
+        "ml_factor": {
+            "thresholds": {
+                "strong_buy": 0.30, "buy": 0.70, "sell": 0.40, "strong_sell": 0.10,
+            },
+        },
+    }
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_config(cfg_file)

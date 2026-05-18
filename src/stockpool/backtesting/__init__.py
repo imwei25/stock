@@ -34,6 +34,7 @@ from stockpool.backtesting.metrics import (
 )
 from stockpool.backtesting.strategies import (
     CompositeVerdictStrategy,
+    MLFactorStrategy,
     SMACrossStrategy,
     VerdictExecution,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "compute_metrics",
     "TRADING_DAYS_PER_YEAR",
     "CompositeVerdictStrategy",
+    "MLFactorStrategy",
     "VerdictExecution",
     "SMACrossStrategy",
 ]

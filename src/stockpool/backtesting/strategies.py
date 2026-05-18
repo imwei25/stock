@@ -7,16 +7,27 @@ Adding a new strategy:
 """
 from __future__ import annotations
 
+from typing import Mapping
+
 import pandas as pd
 
 from stockpool.backtesting.framework import (
     BarContext, PositionContext, Strategy,
 )
 from stockpool.config import (
-    IndicatorsConfig, ScoringConfig, VerdictsConfig, WeightsConfig,
+    IndicatorsConfig, MLFactorConfig, ScoringConfig,
+    VerdictsConfig, WeightsConfig,
 )
 from stockpool.fetcher import resample_to_weekly
 from stockpool.indicators import add_all
+from stockpool.ml.dataset import (
+    align_xy, build_factor_matrix, build_panel, forward_return,
+)
+from stockpool.ml.pipeline import TwoStepPipeline
+from stockpool.ml.selectors import LassoSelector
+from stockpool.ml.weighters import (
+    EqualWeighter, FactorWeighter, ICWeighter, IRWeighter,
+)
 from stockpool.signals import (
     combine_daily_weekly, detect_signals, score_triggers, verdict_of,
 )
@@ -201,3 +212,214 @@ class SMACrossStrategy(Strategy):
 
     def should_exit(self, ctx: PositionContext) -> bool:
         return ctx.signal == "sell"
+
+
+def _build_weighter(cfg) -> FactorWeighter:
+    """Translate WeighterConfig → concrete FactorWeighter."""
+    if cfg.type == "ic":
+        return ICWeighter(use_rank=cfg.use_rank, min_abs_ic=cfg.min_abs_ic)
+    if cfg.type == "ir":
+        return IRWeighter(
+            n_chunks=cfg.n_chunks, use_rank=cfg.use_rank,
+            min_abs_ir=cfg.min_abs_ir,
+        )
+    if cfg.type == "equal":
+        return EqualWeighter()
+    raise ValueError(f"unknown weighter type: {cfg.type!r}")
+
+
+class MLFactorStrategy(Strategy):
+    """Walk-forward two-step ML factor strategy.
+
+    Per bar ``t``:
+
+      1. **Refit** the ``TwoStepPipeline`` (Lasso → IC/IR/equal) on the most
+         recent ``train_window`` samples where the forward return is observable
+         (i.e. trained on bars whose date ≤ date[t] - horizon).
+      2. **Predict** the score for the current bar's factor row.
+      3. **Map** the score to a verdict via the *training-set* quantiles (so
+         the discretisation adapts to the fit-time distribution).
+
+    Refit cadence: every ``refit_every`` bars. Between refits the most recent
+    pipeline + quantiles are reused, predict-only.
+
+    Panel mode:
+
+      * ``per_stock``: training window comes from this stock's own history.
+      * ``pooled``: training panel is built from ``pool_data`` (a mapping of
+        ``{code: daily_df}``) plus this stock's history, truncated to bars
+        whose date < the current decision date.
+
+    Look-ahead safety: factors at bar ``i`` use only ``daily_df.iloc[:i+1]``;
+    forward-return labels exclude bars whose future close lies past the
+    truncation point; pool truncation uses strict ``date < current_date`` so
+    other stocks contribute only past data.
+    """
+
+    def __init__(
+        self,
+        cfg: MLFactorConfig,
+        pool_data: Mapping[str, pd.DataFrame] | None = None,
+        current_stock_code: str | None = None,
+    ):
+        self.cfg = cfg
+        self.pool_data: dict[str, pd.DataFrame] = dict(pool_data or {})
+        self._current_stock_code = current_stock_code
+        self.buy_verdicts = set(cfg.buy_verdicts)
+        self.sell_verdicts = set(cfg.sell_verdicts)
+        self.refresh_verdicts = set(cfg.refresh_verdicts)
+
+    @property
+    def name(self) -> str:
+        return f"ml_factor_{self.cfg.weighter.type}_{self.cfg.panel_mode}"
+
+    def with_stock(self, code: str) -> "MLFactorStrategy":
+        """Return a copy bound to a specific stock (used in pooled mode)."""
+        return MLFactorStrategy(
+            cfg=self.cfg, pool_data=self.pool_data, current_stock_code=code,
+        )
+
+    def generate_signals(self, daily_df: pd.DataFrame) -> pd.DataFrame:
+        cfg = self.cfg
+        cols = ["date", "close", "signal", "score"]
+        n = len(daily_df)
+        if n == 0:
+            return pd.DataFrame(columns=cols)
+
+        # Factor matrix and labels are computed once on the full history.
+        # The walk-forward training slices use `.iloc` cuts that never look
+        # past the current bar, so this is still look-ahead-safe.
+        X_full = build_factor_matrix(daily_df, cfg.factors)
+        y_full = forward_return(daily_df, cfg.horizon)
+
+        pipeline: TwoStepPipeline | None = None
+        quantiles: dict[str, float] | None = None
+        last_fit_bar = -10**9
+
+        rows: list[dict] = []
+        for i in range(n):
+            date_i = daily_df["date"].iloc[i]
+            close_i = float(daily_df["close"].iloc[i])
+
+            if (
+                (pipeline is None or (i - last_fit_bar) >= cfg.refit_every)
+                and i - cfg.horizon >= cfg.min_train_samples
+            ):
+                fitted = self._try_fit(daily_df, X_full, y_full, i)
+                if fitted is not None:
+                    pipeline, quantiles = fitted
+                    last_fit_bar = i
+
+            signal = "neutral"
+            score_value: float = float("nan")
+            if pipeline is not None and quantiles is not None:
+                xi_row = X_full.iloc[[i]]
+                if bool(xi_row.notna().all(axis=1).iloc[0]):
+                    pred = float(pipeline.predict(xi_row).iloc[0])
+                    score_value = pred
+                    signal = _classify_by_quantile(pred, quantiles)
+
+            rows.append({
+                "date": date_i, "close": close_i,
+                "signal": signal, "score": score_value,
+            })
+
+        return pd.DataFrame(rows, columns=cols)
+
+    def _try_fit(
+        self,
+        daily_df: pd.DataFrame,
+        X_full: pd.DataFrame,
+        y_full: pd.Series,
+        current_bar: int,
+    ) -> tuple[TwoStepPipeline, dict[str, float]] | None:
+        cfg = self.cfg
+        # Labels are NaN for the last `horizon` rows of any window; we
+        # exclude those from training to avoid using unobserved futures.
+        label_end = current_bar - cfg.horizon
+        if label_end <= 0:
+            return None
+
+        if cfg.panel_mode == "per_stock":
+            train_start = max(0, label_end - cfg.train_window)
+            X_train_raw = X_full.iloc[train_start:label_end]
+            y_train_raw = y_full.iloc[train_start:label_end]
+            X_train, y_train = align_xy(X_train_raw, y_train_raw)
+        else:
+            # In pooled mode `train_window` is the per-stock recency window:
+            # each pool stock contributes at most its last `train_window`
+            # post-warmup rows, then we concatenate. Total training rows
+            # ≈ train_window × (# stocks with usable history at current_date).
+            current_date = daily_df["date"].iloc[current_bar]
+            pool = self._build_truncated_pool(daily_df, current_date, current_bar)
+            X_pool, y_pool = build_panel(pool, cfg.factors, cfg.horizon)
+            if len(X_pool) > 0 and cfg.train_window > 0:
+                X_pool = X_pool.groupby(
+                    level="stock", group_keys=False, sort=False,
+                ).tail(cfg.train_window)
+                y_pool = y_pool.loc[X_pool.index]
+            X_train, y_train = X_pool, y_pool
+
+        if len(X_train) < cfg.min_train_samples:
+            return None
+
+        pipeline = TwoStepPipeline(
+            selector=LassoSelector(
+                alpha=cfg.selector.alpha,
+                max_iter=cfg.selector.max_iter,
+                tol=cfg.selector.tol,
+            ),
+            weighter=_build_weighter(cfg.weighter),
+        )
+        pipeline.fit(X_train, y_train)
+        train_preds = pipeline.predict(X_train)
+        q = {
+            "strong_buy":  float(train_preds.quantile(cfg.thresholds.strong_buy)),
+            "buy":         float(train_preds.quantile(cfg.thresholds.buy)),
+            "sell":        float(train_preds.quantile(cfg.thresholds.sell)),
+            "strong_sell": float(train_preds.quantile(cfg.thresholds.strong_sell)),
+        }
+        return pipeline, q
+
+    def _build_truncated_pool(
+        self, daily_df: pd.DataFrame, current_date, current_bar: int,
+    ) -> dict[str, pd.DataFrame]:
+        """All pool stocks truncated to ``date < current_date``; the host
+        stock's truncation is via row index (``iloc[:current_bar]``)."""
+        out: dict[str, pd.DataFrame] = {}
+        for code, df in self.pool_data.items():
+            if code == self._current_stock_code:
+                continue
+            mask = df["date"] < current_date
+            sub = df.loc[mask].reset_index(drop=True)
+            if len(sub) > 0:
+                out[code] = sub
+        host_key = self._current_stock_code or "_self_"
+        out[host_key] = daily_df.iloc[:current_bar].reset_index(drop=True)
+        return out
+
+    def should_enter(self, ctx: BarContext) -> bool:
+        return ctx.signal in self.buy_verdicts
+
+    def should_exit(self, ctx: PositionContext) -> bool:
+        return ctx.signal in self.sell_verdicts
+
+    def should_reset_timer(self, ctx: PositionContext) -> bool:
+        return ctx.signal in self.refresh_verdicts
+
+
+def _classify_by_quantile(pred: float, q: dict[str, float]) -> str:
+    """Map a predicted score to one of strong_buy / buy / neutral / sell / strong_sell.
+
+    Order of checks matters: ``strong_*`` thresholds are stricter and must be
+    tested before ``buy`` / ``sell``.
+    """
+    if pred >= q["strong_buy"]:
+        return "strong_buy"
+    if pred >= q["buy"]:
+        return "buy"
+    if pred <= q["strong_sell"]:
+        return "strong_sell"
+    if pred <= q["sell"]:
+        return "sell"
+    return "neutral"

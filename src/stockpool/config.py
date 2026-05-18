@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Stock(BaseModel):
@@ -134,6 +134,101 @@ class ReportConfig(BaseModel):
     klines_to_show: int
 
 
+# === ML factor strategy ===
+
+class SelectorConfig(BaseModel):
+    """Step-1 (factor selection) settings.
+
+    Currently only ``type: lasso`` is supported; ``alpha`` is the L1 penalty
+    strength on standardised features (typical range 1e-4 — 1e-1).
+    """
+    type: Literal["lasso"] = "lasso"
+    alpha: float = Field(default=0.001, ge=0.0)
+    max_iter: int = Field(default=1000, gt=0)
+    tol: float = Field(default=1e-6, gt=0.0)
+
+
+class WeighterConfig(BaseModel):
+    """Step-2 (factor weighting) settings.
+
+    * ``ic``: weight ∝ Spearman/Pearson IC against the target.
+    * ``ir``: weight ∝ information ratio (mean(IC)/std(IC)) over sub-windows.
+    * ``equal``: equal weight on every selected factor (baseline).
+    """
+    type: Literal["ic", "ir", "equal"] = "ic"
+    use_rank: bool = True
+    min_abs_ic: float = Field(default=0.0, ge=0.0)
+    # IR-only
+    n_chunks: int = Field(default=6, gt=0)
+    min_abs_ir: float = Field(default=0.0, ge=0.0)
+
+
+class QuantileThresholds(BaseModel):
+    """Map continuous predicted scores → discrete verdicts via training-set quantiles.
+
+    Quantiles are computed once per refit on the training-window predictions.
+    The order must be strong_sell < sell < buy < strong_buy ∈ (0, 1).
+    """
+    strong_buy: float = Field(default=0.90, gt=0.0, lt=1.0)
+    buy: float = Field(default=0.70, gt=0.0, lt=1.0)
+    sell: float = Field(default=0.30, gt=0.0, lt=1.0)
+    strong_sell: float = Field(default=0.10, gt=0.0, lt=1.0)
+
+    @model_validator(mode="after")
+    def _check_order(self) -> "QuantileThresholds":
+        if not (
+            self.strong_sell < self.sell < self.buy < self.strong_buy
+        ):
+            raise ValueError(
+                "thresholds must satisfy strong_sell < sell < buy < strong_buy"
+            )
+        return self
+
+
+class MLFactorConfig(BaseModel):
+    """Settings for the two-step ML factor strategy.
+
+    Decoupled from the legacy ``weights``/``scoring``/``verdicts`` block; both
+    strategies can coexist in the same config (chosen via ``StrategyConfig``).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    factors: list[str] = Field(default_factory=lambda: [
+        "momentum_20", "macd_hist", "rsi_centered_14",
+        "ma_distance_20", "vol_ratio_5", "boll_position_20",
+    ])
+    horizon: int = Field(default=5, gt=0)
+    train_window: int = Field(
+        default=250, gt=0,
+        description=(
+            "Per-stock recency window in bars. In per_stock mode this is also "
+            "the total training-sample count. In pooled mode each stock "
+            "contributes at most this many of its most-recent rows, so the "
+            "total sample count ≈ train_window × (# active stocks)."
+        ),
+    )
+    min_train_samples: int = Field(
+        default=60, gt=0,
+        description="Minimum non-NaN rows required before the first fit.",
+    )
+    refit_every: int = Field(default=20, gt=0)
+    panel_mode: Literal["per_stock", "pooled"] = "per_stock"
+    selector: SelectorConfig = Field(default_factory=SelectorConfig)
+    weighter: WeighterConfig = Field(default_factory=WeighterConfig)
+    thresholds: QuantileThresholds = Field(default_factory=QuantileThresholds)
+    # Persistent enter/exit verdict sets (mirrors CompositeVerdictStrategy).
+    buy_verdicts: list[str] = Field(default_factory=lambda: ["buy", "strong_buy"])
+    sell_verdicts: list[str] = Field(default_factory=lambda: ["sell", "strong_sell"])
+    refresh_verdicts: list[str] = Field(default_factory=lambda: ["strong_buy"])
+
+
+class StrategyConfig(BaseModel):
+    """Top-level strategy selector. ``name`` picks the strategy implementation."""
+    model_config = ConfigDict(extra="forbid")
+    name: Literal["composite_verdict", "ml_factor"] = "composite_verdict"
+    ml_factor: MLFactorConfig = Field(default_factory=MLFactorConfig)
+
+
 class AppConfig(BaseModel):
     """Root config. `content_hash` is set post-load, not in YAML."""
     stocks: list[Stock]
@@ -145,6 +240,7 @@ class AppConfig(BaseModel):
     backtest: BacktestConfig
     report: ReportConfig
     context: ContextConfig = Field(default_factory=ContextConfig)
+    strategy: StrategyConfig = Field(default_factory=StrategyConfig)
 
     content_hash: str = ""
 
