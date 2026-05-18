@@ -150,7 +150,16 @@ report: {{output_dir: "{out_dir}", keep_history: true, klines_to_show: 120}}
         "振幅": [0] * 200, "涨跌幅": [0] * 200, "涨跌额": [0] * 200, "换手率": [0] * 200,
     })
 
+    idx_close = 3000 + np.cumsum(rng.normal(0, 10, 200))
+    fake_index = pd.DataFrame({
+        "date": pd.date_range("2025-08-01", periods=200, freq="B"),
+        "open": idx_close - 5, "close": idx_close,
+        "high": idx_close + 10, "low": idx_close - 10,
+        "volume": rng.integers(10_000_000, 100_000_000, 200).astype(float),
+    })
+
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake), \
+         patch("stockpool.fetcher.ak.stock_zh_index_daily", return_value=fake_index), \
          patch("stockpool.cli.ak.tool_trade_date_hist_sina",
                return_value=pd.DataFrame({"trade_date": [pd.Timestamp.today().date()]})):
         exit_code = main(["run", "--config", str(config_yaml)])

@@ -36,6 +36,11 @@ def isolated_cache(tmp_path, monkeypatch):
 
 def test_backtest_cli_produces_html(tmp_path, isolated_cache, monkeypatch):
     """End-to-end: backtest CLI produces a non-trivial HTML report."""
+    # Pin today to 1 day after the last cached bar so the staleness check passes.
+    cache_last = pd.date_range("2024-01-02", periods=200, freq="B")[-1]
+    fresh_today = pd.Timestamp(cache_last) + pd.Timedelta(days=1)
+    monkeypatch.setattr("stockpool.fetcher._today", lambda: fresh_today)
+
     # Build a config pointing at the seeded cache + tmp output dir
     import yaml
     raw = yaml.safe_load((PROJECT_ROOT / "config.yaml").read_text(encoding="utf-8"))

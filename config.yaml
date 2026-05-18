@@ -1,17 +1,22 @@
 stocks:
-  - {code: "605589", name: "圣泉集团"}
-  - {code: "603986", name: "兆易创新"}
-  - {code: "000528", name: "柳工"}
-  - {code: "603026", name: "石大胜华"}
-  - {code: "603757", name: "大元泵业"}
-  - {code: "603667", name: "五洲新春"}
-  - {code: "002081", name: "金螳螂"}
-  - {code: "000922", name: "华电辽能"}
+  - {code: "605589", name: "圣泉集团",  sector: "化工"}
+  - {code: "603986", name: "兆易创新",  sector: "半导体"}
+  - {code: "000528", name: "柳工",      sector: "工程机械"}
+  - {code: "603026", name: "石大胜华",  sector: "化工"}
+  - {code: "603757", name: "大元泵业",  sector: "通用机械"}
+  - {code: "603667", name: "五洲新春",  sector: "通用机械"}
+  - {code: "002081", name: "金螳螂",    sector: "装修装饰"}
+  - {code: "000922", name: "华电辽能",  sector: "电力"}
 
 data:
   history_days: 500
   cache_dir: "data"
   force_refresh: false
+
+context:
+  indices:
+    - {code: "sh000001", name: "上证指数"}
+    - {code: "sz399001", name: "深证成指"}
 
 indicators:
   ma_periods: [5, 10, 20, 60]
@@ -56,6 +61,11 @@ verdicts:
 backtest:
   forward_days: [5, 10, 20]
   equity_curve_holding_days: [5, 10, 20]
+  risk_free_rate: 0.02
+  costs:
+    commission_rate: 0.0003
+    stamp_duty_rate: 0.0005
+    slippage_rate: 0.0005
 
 report:
   output_dir: "reports"

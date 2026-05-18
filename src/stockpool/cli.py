@@ -16,9 +16,9 @@ from stockpool.backtest import compute_hit_rates
 from stockpool.backtest_composite import simulate_equity_curve, verdict_bucket_stats, walk_forward_verdicts
 from stockpool.backtest_report import render_backtest_report
 from stockpool.config import AppConfig, load_config
-from stockpool.fetcher import fetch_daily, resample_to_weekly
+from stockpool.fetcher import fetch_daily, fetch_index_daily, fetch_sector_daily, resample_to_weekly, validate_ohlcv
 from stockpool.indicators import add_all
-from stockpool.report import StockAnalysis, render_report
+from stockpool.report import ContextSignal, StockAnalysis, render_report
 from stockpool.signals import (
     combine_daily_weekly,
     detect_signals,
@@ -27,6 +27,25 @@ from stockpool.signals import (
 )
 
 log = logging.getLogger("stockpool")
+
+
+def _compute_verdict(df: pd.DataFrame, cfg: AppConfig):
+    """Run indicator+signal pipeline. Returns (d_score, w_score, final, verdict, trig_d, trig_w)."""
+    from stockpool.indicators import add_all as _add_all
+    enriched = _add_all(df, cfg.indicators)
+    trig_d = detect_signals(enriched, cfg.weights)
+    d_score = score_triggers(trig_d)
+
+    weekly = resample_to_weekly(df)
+    trig_w: list = []
+    w_score = 0
+    if len(weekly) >= 30:
+        trig_w = detect_signals(_add_all(weekly, cfg.indicators), cfg.weights)
+        w_score = score_triggers(trig_w)
+
+    final = combine_daily_weekly(d_score, w_score, cfg.scoring)
+    verdict = verdict_of(final, cfg.verdicts)
+    return d_score, w_score, final, verdict, trig_d, trig_w
 
 
 def _is_trading_day(today: date) -> bool:
@@ -55,7 +74,10 @@ def _setup_logging(log_dir: Path) -> None:
     root.handlers = [file_h, stream_h]
 
 
-def _analyze_one(stock, cfg: AppConfig, force_refresh: bool) -> StockAnalysis:
+def _analyze_one(
+    stock, cfg: AppConfig, force_refresh: bool,
+    market_context: list[ContextSignal] | None = None,
+) -> StockAnalysis:
     """Full per-stock pipeline. Single failures are caught → verdict=neutral + warnings."""
     warnings: list[str] = []
     daily_score = 0
@@ -64,6 +86,7 @@ def _analyze_one(stock, cfg: AppConfig, force_refresh: bool) -> StockAnalysis:
     triggers_weekly: list = []
     hit_rates: dict = {}
     enriched_daily = None
+    context = list(market_context or [])
 
     try:
         daily = fetch_daily(stock.code, cfg.data.history_days,
@@ -75,10 +98,13 @@ def _analyze_one(stock, cfg: AppConfig, force_refresh: bool) -> StockAnalysis:
             daily_score=0, weekly_score=0,
             final_score=0.0, verdict="neutral",
             warnings=warnings,
+            context=context,
         )
 
     if len(daily) < 30:
         warnings.append(f"历史数据不足 ({len(daily)} 根),指标可能不可靠")
+
+    warnings.extend(validate_ohlcv(daily))
 
     enriched_daily = add_all(daily, cfg.indicators)
     triggers_daily = detect_signals(enriched_daily, cfg.weights)
@@ -109,6 +135,22 @@ def _analyze_one(stock, cfg: AppConfig, force_refresh: bool) -> StockAnalysis:
     except Exception as e:
         warnings.append(f"综合评级回测失败: {e}")
 
+    if stock.sector:
+        try:
+            sector_df = fetch_sector_daily(
+                stock.sector, cfg.data.history_days,
+                cfg.data.cache_dir, force_refresh
+            )
+            d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(sector_df, cfg)
+            context.append(ContextSignal(
+                label=f"{stock.sector}板块",
+                daily_score=d_s, weekly_score=w_s,
+                final_score=f_s, verdict=v,
+                triggers_daily=trig_d,
+            ))
+        except Exception as e:
+            warnings.append(f"板块({stock.sector})数据失败: {e}")
+
     return StockAnalysis(
         code=stock.code, name=stock.name,
         daily_score=daily_score, weekly_score=weekly_score,
@@ -118,6 +160,7 @@ def _analyze_one(stock, cfg: AppConfig, force_refresh: bool) -> StockAnalysis:
         verdict_hit_rates=verdict_hit_rates,
         daily_with_indicators=enriched_daily,
         warnings=warnings,
+        context=context,
     )
 
 
@@ -155,6 +198,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
                 wf,
                 holding_days_list=cfg.backtest.equity_curve_holding_days,
                 with_buy_and_hold=True,
+                buy_cost=cfg.backtest.costs.buy_cost,
+                sell_cost=cfg.backtest.costs.sell_cost,
+                risk_free_rate=cfg.backtest.risk_free_rate,
             )
             per_stock.append((s.code, s.name, result))
         except Exception as e:
@@ -192,11 +238,30 @@ def cmd_run(args: argparse.Namespace) -> int:
             log.error("No stocks match --stocks filter: %s", args.stocks)
             return 2
 
+    market_context: list[ContextSignal] = []
+    for idx_cfg in cfg.context.indices:
+        try:
+            idx_df = fetch_index_daily(
+                idx_cfg.code, cfg.data.history_days,
+                cfg.data.cache_dir, force_refresh=args.refresh,
+            )
+            d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(idx_df, cfg)
+            market_context.append(ContextSignal(
+                label=idx_cfg.name,
+                daily_score=d_s, weekly_score=w_s,
+                final_score=f_s, verdict=v,
+                triggers_daily=trig_d,
+            ))
+            log.info("Market index %s: %s (%+.1f)", idx_cfg.name, v, f_s)
+        except Exception as e:
+            log.warning("Market index %s failed: %s", idx_cfg.code, e)
+
     analyses: list[StockAnalysis] = []
     for s in stocks:
         log.info("Analyzing %s (%s)...", s.code, s.name)
         try:
-            analyses.append(_analyze_one(s, cfg, force_refresh=args.refresh))
+            analyses.append(_analyze_one(s, cfg, force_refresh=args.refresh,
+                                         market_context=market_context))
         except Exception as e:
             log.error("Unexpected failure on %s: %s\n%s", s.code, e, traceback.format_exc())
             analyses.append(StockAnalysis(
@@ -204,6 +269,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 daily_score=0, weekly_score=0, final_score=0.0,
                 verdict="neutral",
                 warnings=[f"未预期错误: {e}"],
+                context=list(market_context),
             ))
 
     out = render_report(
@@ -212,6 +278,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         output_dir=cfg.report.output_dir,
         keep_history=cfg.report.keep_history,
         klines_to_show=cfg.report.klines_to_show,
+        market_context=market_context,
     )
     log.info("Report written: %s", out)
     log.info("Latest also at: %s", Path(cfg.report.output_dir) / "latest.html")

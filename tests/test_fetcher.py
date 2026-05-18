@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stockpool.fetcher import fetch_daily, resample_to_weekly
+from stockpool.fetcher import fetch_daily, resample_to_weekly, validate_ohlcv
 
 
 def _make_akshare_df(start: str, periods: int) -> pd.DataFrame:
@@ -38,13 +38,17 @@ def test_fetch_creates_cache(tmp_path):
 
 
 def test_second_call_uses_cache_no_request(tmp_path):
-    """Cache covers request window → no second akshare call."""
+    """Cache covers request window and is fresh → no second akshare call."""
     fake = _make_akshare_df("2026-01-02", 60)
 
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake):
         fetch_daily("605589", history_days=30, cache_dir=tmp_path)
 
-    with patch("stockpool.fetcher.ak.stock_zh_a_hist") as mocked:
+    # Pretend today is 1 day after the last cached date so staleness check passes.
+    last_cached = pd.Timestamp("2026-01-02") + pd.offsets.BDay(59)
+    fresh_today = last_cached + pd.Timedelta(days=1)
+    with patch("stockpool.fetcher._today", return_value=fresh_today), \
+         patch("stockpool.fetcher.ak.stock_zh_a_hist") as mocked:
         df = fetch_daily("605589", history_days=30, cache_dir=tmp_path)
         assert not mocked.called
 
@@ -105,3 +109,59 @@ def test_resample_to_weekly():
     assert weekly.iloc[0]["low"] == pytest.approx(9.5)
     assert weekly.iloc[0]["close"] == pytest.approx(10.6)
     assert weekly.iloc[0]["volume"] == 5_000_000
+
+
+def test_stale_cache_triggers_refetch(tmp_path):
+    """Cache is older than _STALE_CALENDAR_DAYS → incremental fetch is called."""
+    fake = _make_akshare_df("2026-01-02", 60)
+
+    with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake):
+        fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+
+    # Advance today far past the cache's last date to make it stale.
+    stale_today = pd.Timestamp("2026-01-02") + pd.offsets.BDay(59) + pd.Timedelta(days=30)
+    with patch("stockpool.fetcher._today", return_value=stale_today), \
+         patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake) as mocked:
+        fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+        assert mocked.called
+
+
+# --- validate_ohlcv ---
+
+def _make_ohlcv(closes: list[float], volumes: list[int],
+                start: str = "2026-01-02") -> pd.DataFrame:
+    dates = pd.bdate_range(start, periods=len(closes))
+    return pd.DataFrame({"date": dates, "close": closes, "volume": volumes})
+
+
+def test_validate_clean_data():
+    df = _make_ohlcv([10.0 + i * 0.01 for i in range(10)], [1_000_000] * 10)
+    assert validate_ohlcv(df) == []
+
+
+def test_validate_zero_volume_flagged():
+    df = _make_ohlcv([10.0, 10.1, 10.2, 10.3, 10.4],
+                     [1_000_000, 0, 0, 1_000_000, 1_000_000])
+    issues = validate_ohlcv(df)
+    assert any("停牌" in w for w in issues)
+    assert any("2" in w for w in issues)  # 2 suspended bars
+
+
+def test_validate_large_move_flagged():
+    # One bar jumps 50% (e.g., after long suspension)
+    df = _make_ohlcv([10.0, 10.1, 15.2, 15.3], [1_000_000] * 4)
+    issues = validate_ohlcv(df)
+    assert any("涨跌幅" in w for w in issues)
+
+
+def test_validate_calendar_gap_flagged():
+    # Insert a 15-day gap between two dates
+    dates = list(pd.bdate_range("2026-01-02", periods=3))
+    dates.append(dates[-1] + pd.Timedelta(days=15))
+    df = pd.DataFrame({
+        "date": dates,
+        "close": [10.0, 10.1, 10.2, 10.3],
+        "volume": [1_000_000] * 4,
+    })
+    issues = validate_ohlcv(df)
+    assert any("间隔" in w for w in issues)

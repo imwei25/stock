@@ -11,6 +11,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class Stock(BaseModel):
     code: str
     name: str
+    sector: str | None = None
+
+
+class IndexConfig(BaseModel):
+    code: str  # e.g. "sh000001"
+    name: str  # e.g. "上证指数"
+
+
+class ContextConfig(BaseModel):
+    indices: list[IndexConfig] = Field(default_factory=lambda: [
+        IndexConfig(code="sh000001", name="上证指数"),
+        IndexConfig(code="sz399001", name="深证成指"),
+    ])
 
 
 class DataConfig(BaseModel):
@@ -81,9 +94,25 @@ class VerdictsConfig(BaseModel):
     strong_sell: int
 
 
+class BacktestCostConfig(BaseModel):
+    commission_rate: float = 0.0003   # 双边佣金 0.03%
+    stamp_duty_rate: float = 0.0005   # 卖出印花税 0.05%（2023 年后减半）
+    slippage_rate: float = 0.0005     # 单边冲击成本估算 0.05%
+
+    @property
+    def buy_cost(self) -> float:
+        return self.commission_rate + self.slippage_rate
+
+    @property
+    def sell_cost(self) -> float:
+        return self.commission_rate + self.stamp_duty_rate + self.slippage_rate
+
+
 class BacktestConfig(BaseModel):
     forward_days: list[int]
     equity_curve_holding_days: list[int] = Field(default_factory=lambda: [5, 10, 20])
+    risk_free_rate: float = 0.02
+    costs: BacktestCostConfig = Field(default_factory=BacktestCostConfig)
 
     @field_validator("equity_curve_holding_days")
     @classmethod
@@ -111,6 +140,7 @@ class AppConfig(BaseModel):
     verdicts: VerdictsConfig
     backtest: BacktestConfig
     report: ReportConfig
+    context: ContextConfig = Field(default_factory=ContextConfig)
 
     content_hash: str = ""
 

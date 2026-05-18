@@ -35,7 +35,7 @@ def _equity_chart(result: EquityResult, title: str) -> Line:
     dates = pd.DatetimeIndex(any_curve["date"]).strftime("%Y-%m-%d").tolist()
 
     line = (
-        Line(init_opts=opts.InitOpts(width="100%", height="380px"))
+        Line(init_opts=opts.InitOpts(width="100%", height="480px"))
         .add_xaxis(dates)
     )
     for N in sorted(result.curves.keys()):
@@ -55,16 +55,27 @@ def _equity_chart(result: EquityResult, title: str) -> Line:
         )
 
     line.set_global_opts(
-        title_opts=opts.TitleOpts(title=title),
-        xaxis_opts=opts.AxisOpts(is_scale=True),
-        yaxis_opts=opts.AxisOpts(is_scale=True, name="净值"),
+        title_opts=opts.TitleOpts(title=title, pos_left="center", pos_top="2%"),
+        xaxis_opts=opts.AxisOpts(
+            is_scale=True,
+            axislabel_opts=opts.LabelOpts(rotate=30, font_size=10, margin=8),
+        ),
+        yaxis_opts=opts.AxisOpts(
+            is_scale=True, name="净值",
+            name_gap=20, name_location="end",
+        ),
         datazoom_opts=[
-            opts.DataZoomOpts(type_="inside"),
-            opts.DataZoomOpts(type_="slider"),
+            opts.DataZoomOpts(type_="inside", range_start=0, range_end=100),
+            opts.DataZoomOpts(type_="slider", pos_bottom="2%", pos_top="92%"),
         ],
         tooltip_opts=opts.TooltipOpts(trigger="axis", axis_pointer_type="cross"),
-        legend_opts=opts.LegendOpts(pos_top="6%"),
+        legend_opts=opts.LegendOpts(pos_top="10%", pos_left="center"),
     )
+    # 给上方 title+legend (≈20%) 和下方 slider (≈8%) 留出空间
+    line.options["grid"] = {
+        "top": "22%", "bottom": "16%", "left": "8%", "right": "4%",
+        "containLabel": True,
+    }
     return line
 
 
@@ -74,6 +85,12 @@ def _fmt_pct(x: float | None, signed: bool = False) -> str:
     if signed:
         return f"{x*100:+.2f}%"
     return f"{x*100:.2f}%"
+
+
+def _fmt_sharpe(x: float | None) -> str:
+    if x is None:
+        return "—"
+    return f"{x:+.2f}"
 
 
 def _metrics_table(result: EquityResult) -> str:
@@ -86,6 +103,7 @@ def _metrics_table(result: EquityResult) -> str:
             f"<td>{_fmt_pct(m['total_return'], signed=True)}</td>"
             f"<td>{_fmt_pct(m['annualized_return'], signed=True)}</td>"
             f"<td>{_fmt_pct(m['max_drawdown'])}</td>"
+            f"<td>{_fmt_sharpe(m.get('sharpe'))}</td>"
             f"<td>{m['trade_count']}</td>"
             f"<td>{_fmt_pct(m['win_rate'])}</td>"
             f"<td>{m['avg_trade_return_pct']:+.2f}%</td>"
@@ -95,10 +113,11 @@ def _metrics_table(result: EquityResult) -> str:
         m = result.buy_and_hold_metrics
         rows.append(
             f"<tr>"
-            f"<td>Buy &amp; Hold</td>"
+            f"<td>Buy &amp; Hold <span style='color:#888;font-size:.85em'>(含税前)</span></td>"
             f"<td>{_fmt_pct(m['total_return'], signed=True)}</td>"
             f"<td>{_fmt_pct(m['annualized_return'], signed=True)}</td>"
             f"<td>{_fmt_pct(m['max_drawdown'])}</td>"
+            f"<td>{_fmt_sharpe(m.get('sharpe'))}</td>"
             f"<td>{m['trade_count']}</td>"
             f"<td>—</td>"
             f"<td>—</td>"
@@ -108,7 +127,7 @@ def _metrics_table(result: EquityResult) -> str:
       <table>
         <thead><tr>
           <th>策略</th><th>总收益</th><th>年化</th><th>最大回撤</th>
-          <th>交易次数</th><th>胜率</th><th>平均单笔</th>
+          <th>夏普</th><th>交易次数</th><th>胜率</th><th>平均单笔</th>
         </tr></thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
@@ -165,7 +184,8 @@ def render_backtest_report(
   <ul>{index_rows}</ul>
   {sections}
   <footer>
-    <p>⚠️ <strong>免责声明:</strong>回测假设无手续费、无 T+1、无滑点,与真实交易存在差距,仅供技术参考。</p>
+    <p>⚠️ <strong>免责声明:</strong>策略曲线已扣除双边佣金 0.03%、卖出印花税 0.05%、单边滑点 0.05%；
+       Buy &amp; Hold 曲线为未扣税基准；无 T+1 限制外的真实市场摩擦；仅供技术参考。</p>
   </footer>
 </body>
 </html>

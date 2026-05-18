@@ -276,3 +276,62 @@ def test_simulate_metrics_max_drawdown():
     wf = _wf_from_verdicts(["buy", "neutral", "neutral", "neutral"], closes)
     result = simulate_equity_curve(wf, holding_days_list=[10], with_buy_and_hold=False)
     assert result.metrics[10]["max_drawdown"] == pytest.approx(0.5, rel=1e-6)
+
+
+# --- cost model ---
+
+def test_costs_reduce_equity():
+    """With non-zero costs, final equity must be strictly less than zero-cost run."""
+    closes = [100, 110, 120, 130, 125, 125, 125]
+    wf = _wf_from_verdicts(["buy"] + ["neutral"] * 6, closes)
+    no_cost = simulate_equity_curve(wf, [3], with_buy_and_hold=False)
+    with_cost = simulate_equity_curve(wf, [3], with_buy_and_hold=False,
+                                       buy_cost=0.001, sell_cost=0.002)
+    assert with_cost.curves[3]["equity"].iloc[-1] < no_cost.curves[3]["equity"].iloc[-1]
+
+
+def test_cost_reduces_trade_return():
+    """Net trade return with costs must be less than without costs."""
+    closes = [100, 110, 120, 130, 125, 125, 125]
+    wf = _wf_from_verdicts(["buy"] + ["neutral"] * 6, closes)
+    no_cost = simulate_equity_curve(wf, [3], with_buy_and_hold=False)
+    with_cost = simulate_equity_curve(wf, [3], with_buy_and_hold=False,
+                                       buy_cost=0.001, sell_cost=0.002)
+    assert with_cost.metrics[3]["avg_trade_return_pct"] < no_cost.metrics[3]["avg_trade_return_pct"]
+
+
+def test_sharpe_present_in_all_metrics():
+    """Every metrics dict — strategy and buy-and-hold — must contain a sharpe key."""
+    closes = [100, 110, 108, 115, 112, 118, 125]
+    wf = _wf_from_verdicts(["buy"] + ["neutral"] * 6, closes)
+    result = simulate_equity_curve(wf, [3], with_buy_and_hold=True)
+    assert "sharpe" in result.metrics[3]
+    assert result.buy_and_hold_metrics is not None
+    assert "sharpe" in result.buy_and_hold_metrics
+
+
+def test_sharpe_positive_for_steady_uptrend():
+    """Monotonically rising equity with low variance → Sharpe must be positive."""
+    n = 80
+    closes = [100 + i * 0.5 for i in range(n)]
+    wf = _wf_from_verdicts(["buy"] + ["neutral"] * (n - 1), closes)
+    result = simulate_equity_curve(wf, [n - 1], with_buy_and_hold=False)
+    assert result.metrics[n - 1]["sharpe"] > 0
+
+
+def test_round_trip_cost_total_return():
+    """Exact arithmetic: buy at 100, hold N=3 bars to 130, costs 0.1% buy + 0.2% sell.
+    entry_equity = 1.0 * (1 - 0.001) = 0.999
+    after 3 bars at +30%: equity = 0.999 * 1.30 = 1.2987
+    exit_equity = 1.2987 * (1 - 0.002) = 1.29610...
+    net_ret = 1.29610 / 0.999 - 1 ≈ 0.2974
+    """
+    closes = [100, 110, 120, 130, 125, 125, 125]
+    wf = _wf_from_verdicts(["buy"] + ["neutral"] * 6, closes)
+    result = simulate_equity_curve(wf, [3], with_buy_and_hold=False,
+                                    buy_cost=0.001, sell_cost=0.002)
+    entry_eq = 1.0 * (1 - 0.001)
+    after_hold = entry_eq * (130 / 100)
+    exit_eq = after_hold * (1 - 0.002)
+    expected_net_ret = (exit_eq / entry_eq - 1) * 100
+    assert result.metrics[3]["avg_trade_return_pct"] == pytest.approx(expected_net_ret, rel=1e-4)

@@ -188,6 +188,17 @@ def build_stock_chart(code: str, name: str, df: pd.DataFrame, klines_to_show: in
 # ===== Full-page report =====
 
 @dataclass
+class ContextSignal:
+    """Buy/sell signal for a market index or sector board."""
+    label: str           # e.g. "上证指数", "化工板块"
+    daily_score: int
+    weekly_score: int
+    final_score: float
+    verdict: str
+    triggers_daily: list[Trigger] = field(default_factory=list)
+
+
+@dataclass
 class StockAnalysis:
     code: str
     name: str
@@ -201,6 +212,7 @@ class StockAnalysis:
     verdict_hit_rates: dict[str, Any] = field(default_factory=dict)
     daily_with_indicators: pd.DataFrame | None = None
     warnings: list[str] = field(default_factory=list)
+    context: list[ContextSignal] = field(default_factory=list)
 
 
 def _overview_row(a: StockAnalysis) -> str:
@@ -307,6 +319,23 @@ def _verdict_bucket_table(stats: dict[str, Any]) -> str:
     """
 
 
+def _context_bar_html(context: list[ContextSignal]) -> str:
+    if not context:
+        return ""
+    parts = []
+    for c in context:
+        emoji, label, color = _VERDICT_LABEL.get(c.verdict, ("⚪", "观望", "#999"))
+        top = c.triggers_daily[0].description if c.triggers_daily else ""
+        tip = f' title="{top}"' if top else ""
+        parts.append(
+            f"<span class='ctx-pill' style='border-color:{color}'{tip}>"
+            f"<strong>{c.label}</strong>&nbsp;"
+            f"<span style='color:{color}'>{emoji}&nbsp;{label}&nbsp;{c.final_score:+.1f}</span>"
+            f"</span>"
+        )
+    return "<div class='context-bar'>" + "".join(parts) + "</div>"
+
+
 def _stock_section_html(a: StockAnalysis, klines_to_show: int) -> str:
     emoji, label, color = _VERDICT_LABEL.get(a.verdict, ("⚪", "观望", "#999"))
     warnings_html = ""
@@ -321,12 +350,15 @@ def _stock_section_html(a: StockAnalysis, klines_to_show: int) -> str:
         except Exception as e:
             chart_html = f"<p style='color:#a00'>图表生成失败: {e}</p>"
 
+    context_bar = _context_bar_html(a.context)
+
     return f"""
     <details id="stock-{a.code}" open>
       <summary>
         <span style="font-size:1.3em; font-weight:bold">{a.code} {a.name}</span>
         <span style="color:{color}; margin-left:1em">{emoji} {label} 终分 {a.final_score:+.1f}</span>
       </summary>
+      {context_bar}
       {warnings_html}
       <div class="chart-wrap">{chart_html}</div>
 
@@ -369,6 +401,9 @@ _CSS = """
   .hit-rate th { background: #fafafa; }
   .warning { background: #fff4e5; padding: 0.5em 1em; border-left: 3px solid #f80;
              margin: 0.5em 0; font-size: 0.9em; }
+  .context-bar { display: flex; flex-wrap: wrap; gap: 0.5em; margin: 0.6em 0 0.8em; }
+  .ctx-pill { border: 1px solid #ddd; border-radius: 4px; padding: 0.25em 0.7em;
+              font-size: 0.88em; cursor: default; background: #fafafa; }
   footer { margin-top: 3em; padding-top: 1em; border-top: 1px solid #eee;
            color: #888; font-size: 0.85em; }
   a { color: #2563eb; text-decoration: none; }
@@ -395,6 +430,7 @@ def render_report(
     output_dir: str | Path,
     keep_history: bool,
     klines_to_show: int = 120,
+    market_context: list[ContextSignal] | None = None,
 ) -> Path:
     """Render full-page HTML report, return file path."""
     output_dir = Path(output_dir)
@@ -406,6 +442,10 @@ def render_report(
 
     overview_rows = "".join(_overview_row(a) for a in analyses_sorted)
     stock_sections = "".join(_stock_section_html(a, klines_to_show) for a in analyses_sorted)
+
+    market_html = ""
+    if market_context:
+        market_html = f"<h2>市场环境</h2>{_context_bar_html(market_context)}"
 
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -419,6 +459,7 @@ def render_report(
   <p class="meta">
     扫描 {len(analyses)} 只 &nbsp; &nbsp; {_summary_counts(analyses_sorted)}
   </p>
+  {market_html}
 
   <h2>总览(按终分降序)</h2>
   <table class="overview">
