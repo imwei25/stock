@@ -31,6 +31,9 @@ class DataConfig(BaseModel):
     history_days: int = Field(gt=0)
     cache_dir: str
     force_refresh: bool = False
+    # 数据源后端: mootdx(通达信, 默认, 支持当日盘中) | baostock(无 token, 收盘后更新)
+    # | akshare(东财爬虫, 兜底)。板块(行业)数据始终走 akshare,因为另两家不直接提供。
+    source: Literal["mootdx", "baostock", "akshare"] = "mootdx"
 
 
 class MACDConfig(BaseModel):
@@ -197,6 +200,9 @@ class MLFactorConfig(BaseModel):
         "momentum_20", "macd_hist", "rsi_centered_14",
         "ma_distance_20", "vol_ratio_5", "boll_position_20",
     ])
+    # 或者从 HTML 选择器导出的 JSON 文件加载因子列表(与 factors 二选一)。
+    # JSON 格式: {"factors": ["alpha_001", "momentum_20", ...]}
+    factors_file: str | None = None
     horizon: int = Field(default=5, gt=0)
     train_window: int = Field(
         default=250, gt=0,
@@ -213,6 +219,12 @@ class MLFactorConfig(BaseModel):
     )
     refit_every: int = Field(default=20, gt=0)
     panel_mode: Literal["per_stock", "pooled"] = "per_stock"
+    # 训练用股池:
+    #   pool — 仅用 cfg.stocks(应用池,向后兼容,默认)
+    #   all  — 用 data/ 缓存中已 fetch-universe 拉到的全市场 A 股(剔除 ST/科创/北交)
+    # 仅在 panel_mode=pooled 时生效;per_stock 永远是单股训练,该选项被忽略。
+    # 注意:all 需先跑 `python -m stockpool fetch-universe` 准备全市场缓存。
+    training_universe: Literal["pool", "all"] = "pool"
     selector: SelectorConfig = Field(default_factory=SelectorConfig)
     weighter: WeighterConfig = Field(default_factory=WeighterConfig)
     thresholds: QuantileThresholds = Field(default_factory=QuantileThresholds)
@@ -220,6 +232,30 @@ class MLFactorConfig(BaseModel):
     buy_verdicts: list[str] = Field(default_factory=lambda: ["buy", "strong_buy"])
     sell_verdicts: list[str] = Field(default_factory=lambda: ["sell", "strong_sell"])
     refresh_verdicts: list[str] = Field(default_factory=lambda: ["strong_buy"])
+
+    @model_validator(mode="after")
+    def _load_factors_file(self) -> "MLFactorConfig":
+        if self.factors_file:
+            import json
+            data = json.loads(Path(self.factors_file).read_text(encoding="utf-8"))
+            if "factors" not in data or not isinstance(data["factors"], list):
+                raise ValueError(
+                    f"factors_file {self.factors_file!r} must contain "
+                    f"a 'factors' list"
+                )
+            # 用文件覆盖默认 factors;若用户两边都给且不一致 → 报错
+            file_factors = list(data["factors"])
+            default_factors = [
+                "momentum_20", "macd_hist", "rsi_centered_14",
+                "ma_distance_20", "vol_ratio_5", "boll_position_20",
+            ]
+            if self.factors and self.factors != default_factors:
+                raise ValueError(
+                    "Cannot specify both 'factors' and 'factors_file'; "
+                    "remove 'factors' to use the file"
+                )
+            object.__setattr__(self, "factors", file_factors)
+        return self
 
 
 class StrategyConfig(BaseModel):

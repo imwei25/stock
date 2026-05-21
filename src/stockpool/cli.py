@@ -16,7 +16,16 @@ from stockpool.backtest import compute_hit_rates
 from stockpool.backtest_composite import simulate_equity_curve, verdict_bucket_stats, walk_forward_verdicts
 from stockpool.backtest_report import render_backtest_report
 from stockpool.config import AppConfig, load_config
-from stockpool.fetcher import fetch_daily, fetch_index_daily, fetch_sector_daily, resample_to_weekly, validate_ohlcv
+from stockpool.fetcher import (
+    fetch_daily,
+    fetch_index_daily,
+    fetch_sector_daily,
+    fetch_universe,
+    list_universe,
+    load_universe_cache,
+    resample_to_weekly,
+    validate_ohlcv,
+)
 from stockpool.indicators import add_all
 from stockpool.report import ContextSignal, StockAnalysis, render_report
 from stockpool.signals import (
@@ -25,7 +34,7 @@ from stockpool.signals import (
     score_triggers,
     verdict_of,
 )
-from stockpool.strategy_factory import build_strategy, simulate_strategy_equity_curve
+from stockpool.strategy_factory import build_factor_panel, build_strategy, simulate_strategy_equity_curve
 
 log = logging.getLogger("stockpool")
 
@@ -75,9 +84,66 @@ def _setup_logging(log_dir: Path) -> None:
     root.handlers = [file_h, stream_h]
 
 
+def _prepare_ml_pool(
+    cfg: AppConfig, stocks, force_refresh: bool,
+) -> tuple[dict[str, pd.DataFrame] | None, dict | None]:
+    """Build (pool_data, factor_panel) for ml_factor strategies, or (None, None).
+
+    Pool composition depends on ``cfg.strategy.ml_factor.training_universe``:
+      * ``pool``: only ``cfg.stocks`` (legacy, ~10 stocks).
+      * ``all``: full A-share cache from ``data/`` (~4000 stocks, requires a
+        prior ``fetch-universe`` run). Application stocks are merged in so any
+        cfg.stocks entry missing from the universe cache (e.g. 北交) is still
+        usable. Cross-sec factors only become meaningful at panel widths in
+        the hundreds, so ``all`` is recommended whenever WQ101 alphas are used.
+
+    The factor panel is computed once on the combined pool and reused across
+    every per-stock predict — the panel-wide computation can be expensive on
+    the all-universe path.
+    """
+    if (
+        cfg.strategy.name != "ml_factor"
+        or cfg.strategy.ml_factor.panel_mode != "pooled"
+    ):
+        return None, None
+
+    ml_cfg = cfg.strategy.ml_factor
+    pool_data: dict[str, pd.DataFrame] = {}
+
+    if ml_cfg.training_universe == "all":
+        log.info("Loading universe cache (training_universe=all) ...")
+        pool_data = load_universe_cache(cfg.data.cache_dir, cfg.data.history_days)
+        if not pool_data:
+            log.warning(
+                "training_universe=all but data/ has no cached stocks. "
+                "Run `python -m stockpool fetch-universe` first; falling back to pool."
+            )
+        else:
+            log.info("Universe cache loaded: %d stocks", len(pool_data))
+
+    # Ensure every application stock is in the pool (fetch fresh if missing
+    # or stale; also picks up today's bar for already-cached stocks).
+    for s in stocks:
+        try:
+            pool_data[s.code] = fetch_daily(
+                s.code, cfg.data.history_days, cfg.data.cache_dir,
+                force_refresh=force_refresh, source=cfg.data.source,
+            )
+        except Exception as e:
+            log.warning("Pool preload skipped for %s: %s", s.code, e)
+
+    log.info("Building factor panel over %d stocks × %d factors ...",
+             len(pool_data), len(ml_cfg.factors))
+    factor_panel = build_factor_panel(ml_cfg.factors, pool_data)
+    log.info("Factor panel built: %d factors", len(factor_panel))
+    return pool_data, factor_panel
+
+
 def _analyze_one(
     stock, cfg: AppConfig, force_refresh: bool,
     market_context: list[ContextSignal] | None = None,
+    pool_data: dict[str, pd.DataFrame] | None = None,
+    factor_panel: dict | None = None,
 ) -> StockAnalysis:
     """Full per-stock pipeline. Single failures are caught → verdict=neutral + warnings."""
     warnings: list[str] = []
@@ -91,7 +157,8 @@ def _analyze_one(
 
     try:
         daily = fetch_daily(stock.code, cfg.data.history_days,
-                            cfg.data.cache_dir, force_refresh=force_refresh)
+                            cfg.data.cache_dir, force_refresh=force_refresh,
+                            source=cfg.data.source)
     except Exception as e:
         warnings.append(f"数据拉取失败: {e}")
         return StockAnalysis(
@@ -119,8 +186,33 @@ def _analyze_one(
     else:
         warnings.append("周 K 样本不足,本股不计算周 K 信号")
 
-    final_score = combine_daily_weekly(daily_score, weekly_score, cfg.scoring)
-    verdict = verdict_of(final_score, cfg.verdicts)
+    # Verdict + triggers come from the configured strategy. ml_factor's
+    # pipeline is refit at most once per calendar month per stock — see
+    # MLFactorStrategy.predict_latest.
+    strategy_name = cfg.strategy.name
+    try:
+        strategy = build_strategy(
+            cfg, pool_data=pool_data, current_stock_code=stock.code,
+            factor_panel=factor_panel,
+        )
+        latest = strategy.predict_latest(daily)
+        verdict = latest.get("signal", "neutral")
+        final_score = float(latest.get("final_score", 0.0))
+        if strategy_name == "composite_verdict":
+            daily_score = int(latest.get("daily_score", daily_score))
+            weekly_score = int(latest.get("weekly_score", weekly_score))
+        else:
+            # ml_factor: 替换 trigger 列表为因子贡献; 老的 indicator triggers/
+            # scores 在 ml 路径下没有语义,清零避免误导。
+            triggers_daily = list(latest.get("triggers_daily", []))
+            triggers_weekly = list(latest.get("triggers_weekly", []))
+            daily_score = 0
+            weekly_score = 0
+    except Exception as e:
+        warnings.append(f"策略 {strategy_name} 评级失败,回退到综合评级: {e}")
+        final_score = combine_daily_weekly(daily_score, weekly_score, cfg.scoring)
+        verdict = verdict_of(final_score, cfg.verdicts)
+        strategy_name = "composite_verdict"
 
     try:
         hit_rates = compute_hit_rates(enriched_daily, cfg.weights, cfg.backtest.forward_days)
@@ -140,7 +232,8 @@ def _analyze_one(
         try:
             sector_df = fetch_sector_daily(
                 stock.sector, cfg.data.history_days,
-                cfg.data.cache_dir, force_refresh
+                cfg.data.cache_dir, force_refresh,
+                source=cfg.data.source,
             )
             d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(sector_df, cfg)
             context.append(ContextSignal(
@@ -162,6 +255,7 @@ def _analyze_one(
         daily_with_indicators=enriched_daily,
         warnings=warnings,
         context=context,
+        strategy_name=strategy_name,
     )
 
 
@@ -182,21 +276,10 @@ def cmd_backtest(args: argparse.Namespace) -> int:
             return 2
 
     # For ml_factor in pooled mode, preload every stock's history once so
-    # the strategy can build a panel at each refit point.
-    pool_data: dict[str, pd.DataFrame] = {}
-    needs_pool = (
-        cfg.strategy.name == "ml_factor"
-        and cfg.strategy.ml_factor.panel_mode == "pooled"
-    )
-    if needs_pool:
-        for s in stocks:
-            try:
-                pool_data[s.code] = fetch_daily(
-                    s.code, cfg.data.history_days, cfg.data.cache_dir,
-                    force_refresh=args.refresh,
-                )
-            except Exception as e:
-                log.warning("Pool preload skipped for %s: %s", s.code, e)
+    # the strategy can build a panel at each refit point. Pool composition is
+    # decided by ``training_universe``.
+    pool_data, factor_panel = _prepare_ml_pool(cfg, stocks, args.refresh)
+    needs_pool = pool_data is not None
 
     per_stock: list = []
     for s in stocks:
@@ -206,7 +289,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
             if daily is None:
                 daily = fetch_daily(
                     s.code, cfg.data.history_days, cfg.data.cache_dir,
-                    force_refresh=args.refresh,
+                    force_refresh=args.refresh, source=cfg.data.source,
                 )
             if cfg.strategy.name == "composite_verdict":
                 wf = walk_forward_verdicts(
@@ -231,6 +314,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
                     cfg,
                     pool_data=pool_data if needs_pool else None,
                     current_stock_code=s.code,
+                    factor_panel=factor_panel,
                 )
                 result = simulate_strategy_equity_curve(
                     daily, strategy,
@@ -266,6 +350,41 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fetch_universe(args: argparse.Namespace) -> int:
+    """Bulk-fetch all A-shares (ex-ST/科创/北交) into the data cache.
+
+    Used to build the training universe for ML strategies. The application
+    universe (`config.yaml:stocks`) is unaffected.
+    """
+    cfg = load_config(args.config)
+    _setup_logging(Path(cfg.report.output_dir) / date.today().isoformat())
+
+    log.info("Listing A-share universe via %s ...", args.source)
+    listing = list_universe(source=args.source)
+    log.info("Universe size: %d stocks", len(listing))
+
+    if args.limit > 0:
+        listing = listing.head(args.limit)
+        log.info("--limit %d → pulling first %d", args.limit, len(listing))
+
+    codes = listing["code"].tolist()
+    listing_path = Path(cfg.data.cache_dir) / "universe.parquet"
+    Path(cfg.data.cache_dir).mkdir(parents=True, exist_ok=True)
+    listing.to_parquet(listing_path, index=False)
+    log.info("Universe listing cached: %s", listing_path)
+
+    result = fetch_universe(
+        codes,
+        history_days=cfg.data.history_days,
+        cache_dir=cfg.data.cache_dir,
+        source=args.source,
+        force_refresh=args.refresh,
+        max_workers=args.workers,
+    )
+    log.info("Fetched %d/%d stocks successfully.", len(result), len(codes))
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
 
@@ -294,6 +413,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             idx_df = fetch_index_daily(
                 idx_cfg.code, cfg.data.history_days,
                 cfg.data.cache_dir, force_refresh=args.refresh,
+                source=cfg.data.source,
             )
             d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(idx_df, cfg)
             market_context.append(ContextSignal(
@@ -306,12 +426,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         except Exception as e:
             log.warning("Market index %s failed: %s", idx_cfg.code, e)
 
+    # For ml_factor in pooled mode the strategy needs every stock's history
+    # to build cross-sectional factors at predict time. Pool composition is
+    # decided by ``training_universe`` (pool vs full A-share cache).
+    pool_data, factor_panel = _prepare_ml_pool(cfg, stocks, args.refresh)
+
     analyses: list[StockAnalysis] = []
     for s in stocks:
         log.info("Analyzing %s (%s)...", s.code, s.name)
         try:
-            analyses.append(_analyze_one(s, cfg, force_refresh=args.refresh,
-                                         market_context=market_context))
+            analyses.append(_analyze_one(
+                s, cfg, force_refresh=args.refresh,
+                market_context=market_context,
+                pool_data=pool_data,
+                factor_panel=factor_panel,
+            ))
         except Exception as e:
             log.error("Unexpected failure on %s: %s\n%s", s.code, e, traceback.format_exc())
             analyses.append(StockAnalysis(
@@ -352,6 +481,58 @@ def main(argv: list[str] | None = None) -> int:
     p_bt.add_argument("--refresh", action="store_true", help="Bypass cache, refetch all")
     p_bt.add_argument("--stocks", default="", help="Only run listed codes (comma-separated)")
     p_bt.set_defaults(func=cmd_backtest)
+
+    p_fu = sub.add_parser(
+        "fetch-universe",
+        help="Bulk-fetch all A-shares (ex-ST/科创/北交) into the data cache (for ML training)",
+    )
+    p_fu.add_argument("--config", default="config.yaml", help="Path (default: config.yaml)")
+    p_fu.add_argument("--source", default="mootdx", choices=["mootdx"],
+                      help="Data source (currently only mootdx is supported)")
+    p_fu.add_argument("--workers", type=int, default=8, help="Parallel threads (default 8)")
+    p_fu.add_argument("--refresh", action="store_true", help="Bypass cache, refetch all")
+    p_fu.add_argument("--limit", type=int, default=0,
+                      help="Limit to first N stocks (for smoke testing; 0 = all)")
+    p_fu.set_defaults(func=cmd_fetch_universe)
+
+    # `factors` sub-tree: list / show / pick
+    p_factors = sub.add_parser("factors", help="Inspect or select registered factors")
+    fsub = p_factors.add_subparsers(dest="factors_cmd", required=True)
+    from stockpool.factors_picker import cli_list, cli_pick, cli_show
+    p_list = fsub.add_parser("list", help="List all registered factors")
+    p_list.add_argument("--source", default=None, help="Filter by source tag (e.g. wq101)")
+    p_list.add_argument("--type", default=None, help="Filter by type tag (e.g. momentum)")
+    p_list.set_defaults(func=cli_list)
+    p_show = fsub.add_parser("show", help="Show one factor's metadata")
+    p_show.add_argument("name", help="Factor name (with or without suffix args)")
+    p_show.set_defaults(func=cli_show)
+    p_pick = fsub.add_parser(
+        "pick",
+        help="Open the HTML factor picker; '应用' button writes selection.json",
+    )
+    p_pick.add_argument(
+        "--output", default=None,
+        help="Selection JSON path (default: reports/selection.json). "
+             "Written when '应用' is clicked in the browser.",
+    )
+    p_pick.add_argument(
+        "--port", type=int, default=0,
+        help="Server port (default: 0 = auto-pick a free port)",
+    )
+    p_pick.add_argument(
+        "--no-open", action="store_true",
+        help="Don't auto-open the browser",
+    )
+    p_pick.add_argument(
+        "--static", action="store_true",
+        help="Fallback: write the picker as a static HTML file instead of running "
+             "a local server. '应用' button auto-degrades to 'download'.",
+    )
+    p_pick.add_argument(
+        "--html-output", default=None,
+        help="(--static only) HTML file path (default: reports/factors_picker.html)",
+    )
+    p_pick.set_defaults(func=cli_pick)
 
     args = parser.parse_args(argv)
     return args.func(args)

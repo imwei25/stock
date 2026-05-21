@@ -12,6 +12,10 @@ data:
   history_days: 500
   cache_dir: "data"
   force_refresh: false
+  # 数据源: mootdx(默认, 通达信 TCP, 含当日盘中) | baostock(无 token, 收盘后更新)
+  #        | akshare(东财爬虫, 兜底, 不稳定)
+  # 板块(行业)K 线始终走 akshare,因为另两家不直接提供。
+  source: mootdx
 
 context:
   indices:
@@ -110,6 +114,13 @@ strategy:
 
     # per_stock: 每只票独立训练; pooled: 池化所有票样本训一个共用模型
     panel_mode: pooled
+
+    # 训练用股池:
+    #   pool — 仅 cfg.stocks(~10 只,默认,向后兼容)
+    #   all  — 全市场 A 股(剔除 ST/科创/北交,~4350 只)
+    # 切到 all 前必须先跑: `python -m stockpool fetch-universe`
+    # 仅在 panel_mode=pooled 时生效;per_stock 永远单股训练。
+    training_universe: all
 
     selector:
       type: lasso             # 目前唯一支持的 selector

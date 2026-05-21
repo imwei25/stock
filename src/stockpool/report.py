@@ -235,6 +235,7 @@ class StockAnalysis:
     daily_with_indicators: pd.DataFrame | None = None
     warnings: list[str] = field(default_factory=list)
     context: list[ContextSignal] = field(default_factory=list)
+    strategy_name: str = "composite_verdict"
 
 
 def _overview_row(a: StockAnalysis) -> str:
@@ -252,6 +253,33 @@ def _overview_row(a: StockAnalysis) -> str:
         <td style="color:#666; font-size:0.9em">{trigger_text}</td>
       </tr>
     """
+
+
+def _triggers_section_html(a: "StockAnalysis") -> str:
+    """Strategy-aware trigger section.
+
+    composite_verdict → 日 K + 周 K 双列, 含分数加权公式。
+    ml_factor → 单列 "主要因子贡献" (按 |z×w| 降序), 不显示加权公式。
+    """
+    if a.strategy_name == "ml_factor":
+        return (
+            "<div class='signal-cols'>"
+            "<div>"
+            f"<h4>主要因子贡献 (预测分 {a.final_score:+.3f})</h4>"
+            f"<ul>{_trigger_list_html(a.triggers_daily)}</ul>"
+            "</div></div>"
+        )
+    return (
+        "<div class='signal-cols'>"
+        "<div>"
+        f"<h4>触发信号(日 K)— 日分 {a.daily_score:+d} × 0.7 = {a.daily_score * 0.7:+.2f}</h4>"
+        f"<ul>{_trigger_list_html(a.triggers_daily)}</ul>"
+        "</div>"
+        "<div>"
+        f"<h4>触发信号(周 K)— 周分 {a.weekly_score:+d} × 0.3 = {a.weekly_score * 0.3:+.2f}</h4>"
+        f"<ul>{_trigger_list_html(a.triggers_weekly)}</ul>"
+        "</div></div>"
+    )
 
 
 def _trigger_list_html(triggers: list[Trigger]) -> str:
@@ -384,16 +412,7 @@ def _stock_section_html(a: StockAnalysis, klines_to_show: int) -> str:
       {warnings_html}
       <div class="chart-wrap">{chart_html}</div>
 
-      <div class="signal-cols">
-        <div>
-          <h4>触发信号(日 K)— 日分 {a.daily_score:+d} × 0.7 = {a.daily_score * 0.7:+.2f}</h4>
-          <ul>{_trigger_list_html(a.triggers_daily)}</ul>
-        </div>
-        <div>
-          <h4>触发信号(周 K)— 周分 {a.weekly_score:+d} × 0.3 = {a.weekly_score * 0.3:+.2f}</h4>
-          <ul>{_trigger_list_html(a.triggers_weekly)}</ul>
-        </div>
-      </div>
+      {_triggers_section_html(a)}
 
       <h4>单信号历史命中率(过去 500 日)</h4>
       {_hit_rate_table(a.hit_rates)}

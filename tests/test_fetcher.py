@@ -44,9 +44,10 @@ def test_second_call_uses_cache_no_request(tmp_path):
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake):
         fetch_daily("605589", history_days=30, cache_dir=tmp_path)
 
-    # Pretend today is 1 day after the last cached date so staleness check passes.
+    # Pretend "today" is the same business day as the last cached bar so the
+    # staleness check passes (last cached == most recent business day).
     last_cached = pd.Timestamp("2026-01-02") + pd.offsets.BDay(59)
-    fresh_today = last_cached + pd.Timedelta(days=1)
+    fresh_today = last_cached
     with patch("stockpool.fetcher._today", return_value=fresh_today), \
          patch("stockpool.fetcher.ak.stock_zh_a_hist") as mocked:
         df = fetch_daily("605589", history_days=30, cache_dir=tmp_path)
@@ -112,7 +113,7 @@ def test_resample_to_weekly():
 
 
 def test_stale_cache_triggers_refetch(tmp_path):
-    """Cache is older than _STALE_CALENDAR_DAYS → incremental fetch is called."""
+    """Cache last bar is older than the most recent business day → incremental fetch is called."""
     fake = _make_akshare_df("2026-01-02", 60)
 
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake):

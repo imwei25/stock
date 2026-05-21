@@ -1,33 +1,34 @@
-"""Built-in technical factors.
+"""Built-in technical factors (panel-native).
 
-These are continuous reformulations of the discrete triggers in
-``stockpool.signals``: momentum, MACD histogram, RSI deviation,
-distance from MA, volume ratio, Bollinger position, breakout proximity.
+每个因子 ``compute(panel) -> DataFrame``,在 T × N 宽表上直接做向量化运算,
+不需要 per-stock loop。原来基于 ``stockpool.indicators`` 的公式被内联,因为
+indicators 是 long-form / 单股 API。
 
-Each factor's ``compute`` reuses ``stockpool.indicators`` so the underlying
-formulas stay in one place.
+types 至少含 ``"time_series"``;有趋势/反转/波动/量等子标签便于 HTML 粗筛。
 """
 from __future__ import annotations
+
+from typing import Mapping
 
 import numpy as np
 import pandas as pd
 
+from stockpool.factors import ops
 from stockpool.factors.base import Factor
 from stockpool.factors.registry import register
-from stockpool.indicators import (
-    add_boll,
-    add_kdj,
-    add_ma,
-    add_macd,
-    add_rsi,
-    add_volume_ratio,
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Momentum 系
+# ─────────────────────────────────────────────────────────────────────────────
+
+@register(
+    "momentum",
+    sources=("builtin",),
+    types=("momentum", "time_series"),
+    description="N 日动量: close[t]/close[t-n] - 1",
 )
-
-
-@register("momentum")
 class MomentumFactor(Factor):
-    """N-day momentum: close[t] / close[t-n] - 1."""
-
     def __init__(self, n: int = 20):
         if n <= 0:
             raise ValueError(f"momentum window must be > 0, got {n}")
@@ -37,14 +38,17 @@ class MomentumFactor(Factor):
     def name(self) -> str:
         return f"momentum_{self.n}"
 
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        return df["close"].pct_change(self.n)
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        return panel["close"].pct_change(self.n)
 
 
-@register("macd_hist")
+@register(
+    "macd_hist",
+    sources=("builtin",),
+    types=("momentum", "time_series"),
+    description="MACD 柱: 2*(DIF - DEA),正/负分别代表多/空动能",
+)
 class MACDHistFactor(Factor):
-    """Raw MACD histogram value (2 × (DIF - DEA))."""
-
     def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
         self.fast = fast
         self.slow = slow
@@ -54,32 +58,48 @@ class MACDHistFactor(Factor):
     def name(self) -> str:
         return "macd_hist"
 
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        return add_macd(df, self.fast, self.slow, self.signal)["macd_hist"]
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        close = panel["close"]
+        ema_f = close.ewm(span=self.fast, adjust=False).mean()
+        ema_s = close.ewm(span=self.slow, adjust=False).mean()
+        dif = ema_f - ema_s
+        dea = dif.ewm(span=self.signal, adjust=False).mean()
+        return 2.0 * (dif - dea)
 
 
-@register("macd_dif_norm")
+@register(
+    "macd_dif_norm",
+    sources=("builtin",),
+    types=("momentum", "time_series"),
+    description="MACD DIF 除以 close,跨股票可比",
+)
 class MACDDifNormFactor(Factor):
-    """MACD DIF normalised by close price — comparable across stocks."""
-
     def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
         self.fast = fast
         self.slow = slow
-        self.signal = signal
 
     @property
     def name(self) -> str:
         return "macd_dif_norm"
 
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        out = add_macd(df, self.fast, self.slow, self.signal)
-        return out["macd_dif"] / out["close"]
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        close = panel["close"]
+        ema_f = close.ewm(span=self.fast, adjust=False).mean()
+        ema_s = close.ewm(span=self.slow, adjust=False).mean()
+        return (ema_f - ema_s) / close
 
 
-@register("rsi_centered")
+# ─────────────────────────────────────────────────────────────────────────────
+# Reversal / 超买超卖
+# ─────────────────────────────────────────────────────────────────────────────
+
+@register(
+    "rsi_centered",
+    sources=("builtin",),
+    types=("reversal", "time_series"),
+    description="RSI 中心化: RSI - 50,正多负空",
+)
 class RSICenteredFactor(Factor):
-    """RSI - 50: positive = bullish, negative = bearish."""
-
     def __init__(self, n: int = 14):
         if n <= 0:
             raise ValueError(f"rsi window must be > 0, got {n}")
@@ -89,14 +109,64 @@ class RSICenteredFactor(Factor):
     def name(self) -> str:
         return f"rsi_centered_{self.n}"
 
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        return add_rsi(df, [self.n])[f"rsi{self.n}"] - 50.0
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        close = panel["close"]
+        diff = close.diff()
+        gain = diff.clip(lower=0.0)
+        loss = (-diff).clip(lower=0.0)
+        # SMMA / Wilder's smoothing 等价于 alpha=1/n 的 EWM
+        avg_g = gain.ewm(alpha=1.0 / self.n, adjust=False).mean()
+        avg_l = loss.ewm(alpha=1.0 / self.n, adjust=False).mean()
+        # loss=0 时 rs=inf → rsi=100 (持续上涨), 不要置 NaN
+        rs = avg_g / avg_l.replace(0.0, np.inf)
+        rsi = 100.0 - 100.0 / (1.0 + rs)
+        # warmup: 第一行 diff 是 NaN,顺势把 RSI 也置 NaN
+        rsi.iloc[0] = np.nan
+        return rsi - 50.0
 
 
-@register("ma_distance")
+@register(
+    "kdj_j",
+    sources=("builtin",),
+    types=("reversal", "time_series"),
+    description="KDJ J 线中心化 (J - 50)",
+)
+class KDJJFactor(Factor):
+    def __init__(self, n: int = 9, m1: int = 3, m2: int = 3):
+        self.n = n
+        self.m1 = m1
+        self.m2 = m2
+
+    @property
+    def name(self) -> str:
+        return "kdj_j"
+
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        high_n = panel["high"].rolling(self.n).max()
+        low_n = panel["low"].rolling(self.n).min()
+        rng = (high_n - low_n).replace(0.0, np.nan)
+        rsv = (panel["close"] - low_n) / rng * 100.0
+        rsv = rsv.fillna(50.0)
+        k = rsv.ewm(alpha=1.0 / self.m1, adjust=False).mean()
+        d = k.ewm(alpha=1.0 / self.m2, adjust=False).mean()
+        j = 3.0 * k - 2.0 * d
+        # warmup 前 n-1 行置 NaN
+        if self.n > 1:
+            j.iloc[: self.n - 1] = np.nan
+        return j - 50.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trend (距均线) 系
+# ─────────────────────────────────────────────────────────────────────────────
+
+@register(
+    "ma_distance",
+    sources=("builtin",),
+    types=("trend", "time_series"),
+    description="(close - MA_n) / MA_n,相对均线的距离",
+)
 class MADistanceFactor(Factor):
-    """(close - MA_n) / MA_n — relative distance to N-day MA."""
-
     def __init__(self, n: int = 20):
         if n <= 0:
             raise ValueError(f"ma window must be > 0, got {n}")
@@ -106,16 +176,19 @@ class MADistanceFactor(Factor):
     def name(self) -> str:
         return f"ma_distance_{self.n}"
 
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        out = add_ma(df, [self.n])
-        ma = out[f"ma{self.n}"]
-        return (out["close"] - ma) / ma
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        close = panel["close"]
+        ma = close.rolling(self.n).mean()
+        return (close - ma) / ma
 
 
-@register("ma_slope")
+@register(
+    "ma_slope",
+    sources=("builtin",),
+    types=("trend", "time_series"),
+    description="MA_n 的 k-bar 相对斜率,衡量趋势强度",
+)
 class MASlopeFactor(Factor):
-    """K-bar slope of MA_n, normalised by current MA — trend strength."""
-
     def __init__(self, n: int = 20, k: int = 5):
         if n <= 0 or k <= 0:
             raise ValueError(f"n and k must be > 0, got n={n}, k={k}")
@@ -126,15 +199,23 @@ class MASlopeFactor(Factor):
     def name(self) -> str:
         return f"ma_slope_{self.n}_{self.k}"
 
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        ma = add_ma(df, [self.n])[f"ma{self.n}"]
-        return (ma - ma.shift(self.k)) / ma.shift(self.k)
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        ma = panel["close"].rolling(self.n).mean()
+        prev = ma.shift(self.k)
+        return (ma - prev) / prev
 
 
-@register("vol_ratio")
+# ─────────────────────────────────────────────────────────────────────────────
+# Volume / Volatility
+# ─────────────────────────────────────────────────────────────────────────────
+
+@register(
+    "vol_ratio",
+    sources=("builtin",),
+    types=("volume", "time_series"),
+    description="volume / MA_n(volume).shift(1) - 1,放/缩量",
+)
 class VolumeRatioFactor(Factor):
-    """volume / MA_n(volume).shift(1) - 1, centered at 0."""
-
     def __init__(self, n: int = 5):
         if n <= 0:
             raise ValueError(f"vol window must be > 0, got {n}")
@@ -144,14 +225,19 @@ class VolumeRatioFactor(Factor):
     def name(self) -> str:
         return f"vol_ratio_{self.n}"
 
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        return add_volume_ratio(df, self.n)[f"vol_ratio{self.n}"] - 1.0
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        v = panel["volume"]
+        ma_v = v.rolling(self.n).mean().shift(1)
+        return v / ma_v - 1.0
 
 
-@register("boll_position")
+@register(
+    "boll_position",
+    sources=("builtin",),
+    types=("reversal", "volatility", "time_series"),
+    description="布林位置 (close - mid) / (up - mid) ∈ [-1, +1]",
+)
 class BollPositionFactor(Factor):
-    """Bollinger position in [-1, +1]: (close - mid) / (up - mid)."""
-
     def __init__(self, n: int = 20, k: float = 2.0):
         self.n = n
         self.k = k
@@ -160,35 +246,22 @@ class BollPositionFactor(Factor):
     def name(self) -> str:
         return f"boll_position_{self.n}"
 
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        b = add_boll(df, self.n, self.k)
-        width = b["boll_up"] - b["boll_mid"]
-        # Where width is 0 (flat market), factor is undefined → NaN.
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        close = panel["close"]
+        mid = close.rolling(self.n).mean()
+        std = close.rolling(self.n).std(ddof=0)
+        width = self.k * std
         width = width.replace(0.0, np.nan)
-        return (b["close"] - b["boll_mid"]) / width
+        return (close - mid) / width
 
 
-@register("kdj_j")
-class KDJJFactor(Factor):
-    """KDJ J-line centered: J - 50."""
-
-    def __init__(self, n: int = 9, m1: int = 3, m2: int = 3):
-        self.n = n
-        self.m1 = m1
-        self.m2 = m2
-
-    @property
-    def name(self) -> str:
-        return "kdj_j"
-
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        return add_kdj(df, self.n, self.m1, self.m2)["kdj_j"] - 50.0
-
-
-@register("hl_range")
+@register(
+    "hl_range",
+    sources=("builtin",),
+    types=("volatility", "time_series"),
+    description="N 日 (高-低) / close,波动率代理",
+)
 class HLRangeFactor(Factor):
-    """N-bar high-low range / close — volatility proxy."""
-
     def __init__(self, n: int = 20):
         if n <= 0:
             raise ValueError(f"hl window must be > 0, got {n}")
@@ -198,7 +271,7 @@ class HLRangeFactor(Factor):
     def name(self) -> str:
         return f"hl_range_{self.n}"
 
-    def compute(self, df: pd.DataFrame) -> pd.Series:
-        high = df["high"].rolling(self.n).max()
-        low = df["low"].rolling(self.n).min()
-        return (high - low) / df["close"]
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        high = panel["high"].rolling(self.n).max()
+        low = panel["low"].rolling(self.n).min()
+        return (high - low) / panel["close"]

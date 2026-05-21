@@ -1,13 +1,20 @@
-"""AKShare 数据获取 + Parquet 本地缓存."""
+"""数据获取 + Parquet 本地缓存。
+
+后端可选: mootdx(默认, 通达信 TCP) / baostock / akshare。
+板块(行业)K 线仅 akshare 直接提供,因此 fetch_sector_daily 始终走 akshare。
+"""
 from __future__ import annotations
 
 import contextlib
 import logging
 import time
 from pathlib import Path
+from typing import Literal
 
 import akshare as ak
 import pandas as pd
+
+Source = Literal["mootdx", "baostock", "akshare"]
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +28,6 @@ _AKSHARE_COLUMN_MAP = {
 }
 
 _RETRY_DELAYS = [2, 4, 8]
-_STALE_CALENDAR_DAYS = 5  # trigger incremental fetch if cache is this many days old
 
 
 @contextlib.contextmanager
@@ -46,9 +52,16 @@ def _today() -> pd.Timestamp:
     return pd.Timestamp.today().normalize()
 
 
+def _last_business_day(today: pd.Timestamp) -> pd.Timestamp:
+    """今天本身若是工作日则返回今天,否则回退到上一个工作日(周末近似,不查节假日)。"""
+    if today.weekday() < 5:
+        return today
+    return (today - pd.offsets.BDay(1)).normalize()
+
+
 def _is_stale(cached: pd.DataFrame) -> bool:
-    last = pd.Timestamp(cached["date"].max())
-    return (_today() - last).days > _STALE_CALENDAR_DAYS
+    last = pd.Timestamp(cached["date"].max()).normalize()
+    return last < _last_business_day(_today())
 
 
 def _cache_path(cache_dir: str | Path, code: str) -> Path:
@@ -113,11 +126,36 @@ def _fetch_from_akshare(code: str, start: str | None = None) -> pd.DataFrame:
     raise last_err
 
 
+def _dispatch_stock(source: Source, code: str, start: str | None) -> pd.DataFrame:
+    if source == "akshare":
+        return _fetch_from_akshare(code, start=start)
+    if source == "mootdx":
+        from stockpool.data_sources import mootdx_backend
+        return mootdx_backend.fetch_stock(code, start=start)
+    if source == "baostock":
+        from stockpool.data_sources import baostock_backend
+        return baostock_backend.fetch_stock(code, start=start)
+    raise ValueError(f"unknown data source: {source}")
+
+
+def _dispatch_index(source: Source, symbol: str) -> pd.DataFrame:
+    if source == "akshare":
+        return _fetch_index_from_akshare(symbol)
+    if source == "mootdx":
+        from stockpool.data_sources import mootdx_backend
+        return mootdx_backend.fetch_index(symbol)
+    if source == "baostock":
+        from stockpool.data_sources import baostock_backend
+        return baostock_backend.fetch_index(symbol)
+    raise ValueError(f"unknown data source: {source}")
+
+
 def fetch_daily(
     code: str,
     history_days: int,
     cache_dir: str | Path,
     force_refresh: bool = False,
+    source: Source = "akshare",
 ) -> pd.DataFrame:
     """Return latest `history_days` daily K bars (English column names).
 
@@ -147,7 +185,7 @@ def fetch_daily(
         if cached is not None and not force_refresh:
             last = cached["date"].max()
             start = (last + pd.Timedelta(days=1)).strftime("%Y%m%d")
-        fresh = _fetch_from_akshare(code, start=start)
+        fresh = _dispatch_stock(source, code, start=start)
         if cached is not None and not force_refresh:
             combined = pd.concat([cached, fresh]).drop_duplicates("date").sort_values("date")
         else:
@@ -191,6 +229,7 @@ def fetch_index_daily(
     history_days: int,
     cache_dir: str | Path,
     force_refresh: bool = False,
+    source: Source = "akshare",
 ) -> pd.DataFrame:
     """Return latest `history_days` daily bars for a market index.
 
@@ -216,7 +255,10 @@ def fetch_index_daily(
     )
 
     if need_fetch:
-        fresh = _fetch_index_from_akshare(symbol)
+        fresh = _dispatch_index(source, symbol)
+        # 增量合并(mootdx/baostock 都能拿到全量或长尾,直接覆盖也安全)
+        if cached is not None and not force_refresh:
+            fresh = pd.concat([cached, fresh]).drop_duplicates("date").sort_values("date").reset_index(drop=True)
         fresh.to_parquet(cache_file, index=False)
         cached = fresh
 
@@ -251,11 +293,24 @@ def _fetch_sector_from_akshare(sector_name: str, start: str | None = None) -> pd
     raise last_err
 
 
+def _dispatch_sector(source: Source, sector_name: str, start: str | None) -> pd.DataFrame:
+    # akshare 走旧路径(stock_board_industry_hist_em);mootdx/baostock 都走 mootdx
+    # 的通达信行业指数 (88xxxx),后者通过 client.index 拉取,非常稳定。
+    if source == "akshare":
+        return _fetch_sector_from_akshare(sector_name, start=start)
+    from stockpool.data_sources import mootdx_backend
+    out = mootdx_backend.fetch_sector(sector_name)
+    if start is not None:
+        out = out[out["date"] >= pd.to_datetime(start)].reset_index(drop=True)
+    return out
+
+
 def fetch_sector_daily(
     sector_name: str,
     history_days: int,
     cache_dir: str | Path,
     force_refresh: bool = False,
+    source: Source = "akshare",
 ) -> pd.DataFrame:
     """Return latest `history_days` daily bars for an industry sector board."""
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
@@ -282,7 +337,7 @@ def fetch_sector_daily(
         if cached is not None and not force_refresh:
             last = cached["date"].max()
             start = (last + pd.Timedelta(days=1)).strftime("%Y%m%d")
-        fresh = _fetch_sector_from_akshare(sector_name, start=start)
+        fresh = _dispatch_sector(source, sector_name, start=start)
         if cached is not None and not force_refresh:
             combined = pd.concat([cached, fresh]).drop_duplicates("date").sort_values("date")
         else:
@@ -293,6 +348,98 @@ def fetch_sector_daily(
 
     assert cached is not None
     return cached.tail(history_days).reset_index(drop=True)
+
+
+def list_universe(source: Source = "mootdx") -> pd.DataFrame:
+    """List all A-share stocks for the training universe.
+
+    Currently only mootdx is supported (TCP, ~50ms per call, no extra deps).
+    Returns DataFrame with columns: code, name, market.
+    """
+    if source != "mootdx":
+        raise NotImplementedError(
+            f"list_universe currently only supports mootdx (got {source!r})"
+        )
+    from stockpool.data_sources import mootdx_backend
+    return mootdx_backend.list_a_shares()
+
+
+def fetch_universe(
+    codes: list[str],
+    history_days: int,
+    cache_dir: str | Path,
+    source: Source = "mootdx",
+    force_refresh: bool = False,
+    max_workers: int = 8,
+    progress_every: int = 200,
+) -> dict[str, pd.DataFrame]:
+    """Bulk-fetch daily bars for many stocks in parallel, with per-stock caching.
+
+    Each stock reuses the same parquet cache as `fetch_daily`, so subsequent
+    calls only do incremental updates. Errors on individual stocks are logged
+    and skipped — the returned dict contains only successful pulls.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    out: dict[str, pd.DataFrame] = {}
+    failures: list[tuple[str, str]] = []
+
+    def _one(code: str) -> tuple[str, pd.DataFrame | None, str | None]:
+        try:
+            df = fetch_daily(
+                code, history_days, cache_dir,
+                force_refresh=force_refresh, source=source,
+            )
+            return code, df, None
+        except Exception as e:  # noqa: BLE001
+            return code, None, str(e)
+
+    total = len(codes)
+    done = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(_one, c): c for c in codes}
+        for fut in as_completed(futures):
+            code, df, err = fut.result()
+            done += 1
+            if err is not None or df is None:
+                failures.append((code, err or "empty"))
+            else:
+                out[code] = df
+            if done % progress_every == 0 or done == total:
+                log.info("fetch_universe progress: %d/%d (ok=%d fail=%d)",
+                         done, total, len(out), len(failures))
+
+    if failures:
+        log.warning("fetch_universe: %d failures (first 5): %s",
+                    len(failures), failures[:5])
+    return out
+
+
+def load_universe_cache(
+    cache_dir: str | Path,
+    history_days: int | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Load every cached ``<code>_daily.parquet`` under ``cache_dir`` into memory.
+
+    Skips files that fail to read. Used by ML strategies when
+    ``training_universe='all'`` so the training pool comes from the previously-
+    fetched full A-share cache, decoupled from the application stock pool.
+    """
+    cache = Path(cache_dir)
+    if not cache.exists():
+        return {}
+    out: dict[str, pd.DataFrame] = {}
+    for path in cache.glob("*_daily.parquet"):
+        code = path.stem.replace("_daily", "")
+        try:
+            df = pd.read_parquet(path)
+            if history_days is not None and len(df) > history_days:
+                df = df.tail(history_days).reset_index(drop=True)
+            out[code] = df
+        except Exception as e:
+            log.warning("Universe cache: failed to read %s (%s)", path, e)
+    return out
 
 
 def resample_to_weekly(daily: pd.DataFrame) -> pd.DataFrame:

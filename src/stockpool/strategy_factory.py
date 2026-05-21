@@ -31,6 +31,7 @@ def build_strategy(
     cfg: AppConfig,
     pool_data: Mapping[str, pd.DataFrame] | None = None,
     current_stock_code: str | None = None,
+    factor_panel: Mapping[str, pd.DataFrame] | None = None,
 ) -> Strategy:
     """Construct the strategy referenced by ``cfg.strategy.name``.
 
@@ -41,6 +42,10 @@ def build_strategy(
             look-ahead-safe truncation internally.
         current_stock_code: which stock in ``pool_data`` is the one being
             backtested — excluded from pool truncation to avoid double-counting.
+        factor_panel: precomputed ``{factor_name: T×N DataFrame}``. Pass this
+            when iterating many stocks against the same pool, so the (potentially
+            expensive) panel-wide factor computation runs once. If omitted and
+            ``pool_data`` is provided in pooled mode, the panel is built here.
     """
     name = cfg.strategy.name
     if name == "composite_verdict":
@@ -51,12 +56,53 @@ def build_strategy(
             indicators_cfg=cfg.indicators,
         )
     if name == "ml_factor":
+        # 在 pooled 模式 + 有 pool_data 时,预算因子面板,让 WQ101 cross-sec
+        # 因子在 predict 阶段拿到真实横截面值(否则会退化为 1-stock 常数)。
+        if (
+            factor_panel is None
+            and cfg.strategy.ml_factor.panel_mode == "pooled"
+            and pool_data
+        ):
+            factor_panel = build_factor_panel(cfg.strategy.ml_factor.factors, pool_data)
         return MLFactorStrategy(
             cfg=cfg.strategy.ml_factor,
             pool_data=pool_data,
             current_stock_code=current_stock_code,
+            factor_panel=factor_panel,
+            cache_dir=cfg.data.cache_dir,
         )
     raise ValueError(f"unknown strategy: {name!r}")
+
+
+def build_factor_panel(
+    factor_names: list[str],
+    pool_data: Mapping[str, pd.DataFrame],
+) -> dict[str, pd.DataFrame]:
+    """从 ``{code: daily_df}`` 装一个 OHLCV Panel,在 Panel 上算所有因子,
+    返回 ``{factor_name: T×N DataFrame}``。
+
+    Look-ahead 安全:因子在第 i 行只用 ``[:i+1]`` 数据(由 Factor 契约保证),
+    所以一次性预算整段历史不会泄露未来。
+    """
+    from stockpool.ml.dataset import compute_factor_panel
+
+    # 1) 把每股 daily_df → date-indexed,按列拼成宽表
+    per_stock: dict[str, pd.DataFrame] = {}
+    for code, df in pool_data.items():
+        d = df.copy()
+        d["date"] = pd.to_datetime(d["date"])
+        per_stock[code] = d.set_index("date").sort_index()
+    if not per_stock:
+        return {}
+    all_dates = sorted(set().union(*(d.index for d in per_stock.values())))
+    idx = pd.DatetimeIndex(all_dates, name="date")
+    panel: dict[str, pd.DataFrame] = {}
+    for field in ("open", "high", "low", "close", "volume"):
+        panel[field] = pd.DataFrame(
+            {code: d[field].reindex(idx) for code, d in per_stock.items()},
+            index=idx,
+        )
+    return compute_factor_panel(panel, factor_names)
 
 
 def simulate_strategy_equity_curve(
