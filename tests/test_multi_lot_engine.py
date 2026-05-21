@@ -89,9 +89,10 @@ def test_per_lot_timeout_independent():
                     [100, 100, 100, 100, 100, 100, 100])
     r = _engine(position_size=0.1).run_on_signals(sigs, max_holding_days=3)
     assert r.metrics["trade_count"] == 2
-    # First exit at bar 4 (lot A), second at bar 5 (lot B).
+    # exit_idx records the execution bar. Lot A's signal lands at bar 3 →
+    # exit at open[4]; lot B's signal at bar 4 → exit at open[5].
     exits = sorted(t.exit_idx for t in r.trades)
-    assert exits == [3, 4]  # exit_idx records the decision day (t-1)
+    assert exits == [4, 5]
 
 
 # -------- sell signal closes everything still open ----------
@@ -103,10 +104,11 @@ def test_sell_signal_closes_all_open_lots():
         [100, 100, 100, 100, 100, 100],
     )
     r = _engine(position_size=0.1).run_on_signals(sigs, max_holding_days=20)
-    # 3 lots opened on bars 1,2,3 (signals at 0,1,2). Sell signal at bar 3 → all exit at bar 4.
+    # 3 lots opened on bars 1,2,3 (signals at 0,1,2). Sell signal at bar 3 →
+    # all exit at open[4]; exit_idx now records the execution bar (4).
     assert r.metrics["trade_count"] == 3
     exit_indices = set(t.exit_idx for t in r.trades)
-    assert exit_indices == {3}
+    assert exit_indices == {4}
     # After all exits, position count back to 0.
     assert r.curve["position"].iloc[-1] == 0
 

@@ -37,8 +37,9 @@ def test_strong_buy_resets_timer_extends_hold_past_N():
     engine = BacktestEngine(VerdictExecution())
     r = engine.run_on_signals(sigs, max_holding_days=3)
     assert r.metrics["trade_count"] == 1
-    # Exit must be on bar 7 (signal day = bar 6), not bar 4.
-    assert r.trades[0].exit_idx == 6
+    # Signal day = bar 6 → executes at open[7]; exit_idx records the
+    # execution bar, so it's 7 (was 6 under the old close-fill semantics).
+    assert r.trades[0].exit_idx == 7
 
 
 def test_plain_buy_while_long_still_ignored_by_default():
@@ -76,9 +77,9 @@ def test_refresh_verdicts_empty_disables_reset():
     )
     engine = BacktestEngine(VerdictExecution(refresh_verdicts=()))
     r = engine.run_on_signals(sigs, max_holding_days=3)
-    # No reset → exit at bar 4 (held=3).
+    # No reset → signal at bar 3 (held=3) → executes at open[4]; exit_idx=4.
     assert r.metrics["trade_count"] == 1
-    assert r.trades[0].exit_idx == 3
+    assert r.trades[0].exit_idx == 4
 
 
 def test_reset_wins_over_time_exit_at_N():
@@ -144,8 +145,9 @@ def test_multi_lot_strong_buy_resets_existing_lots():
     # B opens at bar 3 → bar 4: held=1, bar 5: held=2, bar 6: held=3 → exit.
     # Both exit at bar 6.
     assert r.metrics["trade_count"] == 2
+    # Both lots' time_exit signals land at bar 5 → execute at open[6].
     exit_indices = sorted(t.exit_idx for t in r.trades)
-    assert exit_indices == [5, 5]
+    assert exit_indices == [6, 6]
 
 
 def test_multi_lot_reset_not_triggered_by_plain_buy():
@@ -159,8 +161,9 @@ def test_multi_lot_reset_not_triggered_by_plain_buy():
     # Lot A opens bar 1 (entry close[0]). Timer ticks each bar; not refreshed by plain buy.
     # Lot B opens bar 3 (signal=buy at bar 2).
     # Lot A exits at bar 4 (held=3). Lot B exits at bar 6 (held=3).
+    # Execution bars are decision_bar + 1.
     exit_indices = sorted(t.exit_idx for t in r.trades)
-    assert exit_indices == [3, 5]
+    assert exit_indices == [4, 6]
 
 
 # -------- default strategy ABC behavior ----------
@@ -184,6 +187,6 @@ def test_should_reset_timer_default_returns_false():
     # doesn't override should_reset_timer → engine takes default (no reset).
     sigs = _signals(["buy", "hold", "hold", "hold"], [100] * 4)
     r = BacktestEngine(_Minimal()).run_on_signals(sigs, max_holding_days=2)
-    # Entered bar 1, time_exit at bar 3 (held=2).
+    # Entered bar 1, time_exit signal at bar 2 (held=2) → execute open[3].
     assert r.metrics["trade_count"] == 1
-    assert r.trades[0].exit_idx == 2
+    assert r.trades[0].exit_idx == 3

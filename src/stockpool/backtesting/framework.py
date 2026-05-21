@@ -89,8 +89,13 @@ class Strategy(ABC):
 
     Look-ahead safety contract: signal row ``i`` may only depend on data
     available at bar ``i`` (i.e. ``daily_df.iloc[:i+1]``). The engine separately
-    delays use of signal[t-1] until bar ``t``, so a correct walk-forward
-    generator paired with the engine is fully T+1-compliant.
+    delays use of signal[t-1] until bar ``t`` (filling at ``open[t]``), so a
+    correct walk-forward generator paired with the engine is fully T+1-compliant.
+
+    Output schema: ``generate_signals`` must return a DataFrame with at least
+    ``date``, ``open``, ``close``, ``signal``. The ``open`` column is read by
+    the engine as the next-bar fill price; pass it through from the source
+    OHLCV (or omit it to fall back to ``open[t] = close[t-1]``).
     """
 
     @property
@@ -114,6 +119,23 @@ class Strategy(ABC):
         """
         return False
 
+    def predict_latest(self, daily_df: pd.DataFrame) -> dict:
+        """Return the signal (+ extras) for the most recent bar only.
+
+        Used by the daily-report path, which needs today's verdict without
+        the cost of a full walk-forward. Default: run ``generate_signals``
+        and take the last row. Subclasses may override for efficiency or to
+        add caching (e.g. monthly model refit for ML strategies).
+
+        Returns a dict containing at least ``'signal'``; may include
+        ``'final_score'``, ``'score'``, etc. Returns ``{'signal': 'neutral'}``
+        when no signal can be produced.
+        """
+        sig = self.generate_signals(daily_df)
+        if len(sig) == 0:
+            return {"signal": "neutral"}
+        return dict(sig.iloc[-1])
+
 
 @dataclass
 class BacktestResult:
@@ -130,13 +152,24 @@ class BacktestEngine:
     """Strategy-agnostic, long-only, single-position equity simulator.
 
     Conventions:
-      * Decisions are made on signal at end-of-bar ``t-1`` and realised at
-        ``close[t]`` (T+1 compliant; ``close[t]`` is never consulted at ``t``).
+      * Decisions are made on the signal at end-of-bar ``t-1`` and realised at
+        ``open[t]`` — the next trading day's open price (T+1 compliant). On
+        Chinese A-shares the open is the call-auction price, which models a
+        realistic next-bar fill; the only fills you'd miss in practice are
+        signals followed by a limit-up open.
+      * Entry-bar exposure: equity rides ``open[t] → close[t]`` after buy_cost
+        is deducted. Subsequent in-position bars use ``close[t-1] → close[t]``.
+      * Exit-bar exposure: equity rides ``close[t-1] → open[t]``, sell_cost is
+        applied, then the position is flat for the rest of the day.
+      * ``Trade.entry_idx`` / ``exit_idx`` point at the *execution* bar (``t``),
+        not the decision bar (``t-1``). ``Trade.entry_price`` / ``exit_price``
+        are the ``open[t]`` values used as fills.
+      * The engine reads ``open`` from the signal frame. If the frame omits
+        the column, the engine falls back to ``open[t] = close[t-1]`` — which
+        reproduces the legacy close-to-close arithmetic.
       * No pyramiding: a fresh enter signal while already long is ignored.
-      * Entry cost is deducted from equity *before* the day's price return.
-      * Exit cost is deducted on exit day; no new price exposure that day.
-      * Buy-and-hold baseline (``buy_and_hold_baseline``) applies no costs —
-        it is the un-friction-ed reference.
+      * Buy-and-hold baseline (``buy_and_hold_baseline``) applies no costs and
+        anchors on ``open[0]`` — it is the un-friction-ed reference.
     """
 
     def __init__(
@@ -181,6 +214,25 @@ class BacktestEngine:
         return {N: self.run_on_signals(signals, N) for N in holding_days_list}
 
 
+def _opens_with_fallback(signals: pd.DataFrame) -> pd.Series:
+    """Return the ``open`` column, or synthesize one as ``close.shift(1)``.
+
+    The engine fills at next-day open. When a caller's signal frame lacks an
+    ``open`` column (typical for hand-built test fixtures), we fall back to
+    "no overnight gap": ``open[t] = close[t-1]``, with ``open[0] = close[0]``.
+    Under this fallback the new open-based math reproduces the legacy
+    close-to-close behaviour exactly.
+    """
+    closes = signals["close"]
+    if "open" in signals.columns:
+        opens = signals["open"].astype(float)
+    else:
+        opens = closes.shift(1)
+        if len(opens) > 0:
+            opens.iloc[0] = closes.iloc[0]
+    return opens.reset_index(drop=True).values
+
+
 def _simulate(
     signals: pd.DataFrame,
     *,
@@ -203,6 +255,7 @@ def _simulate(
 
     dates = signals["date"].values
     closes = signals["close"].values
+    opens = _opens_with_fallback(signals)
     sig_values = signals["signal"].values
 
     position = [0] * n
@@ -218,7 +271,9 @@ def _simulate(
         prev_signal = sig_values[t - 1]
         prev_close = float(closes[t - 1])
         prev_date = pd.Timestamp(dates[t - 1])
-        daily_ret = closes[t] / closes[t - 1] - 1
+        open_t = float(opens[t])
+        close_t = float(closes[t])
+        hold_ret = close_t / prev_close - 1  # close-to-close, for in-position bars
 
         if position[t - 1] == 0:
             ctx = BarContext(
@@ -226,12 +281,13 @@ def _simulate(
                 close=prev_close, signal=prev_signal,
             )
             if strategy.should_enter(ctx):
+                # Fill at open[t]; exposure runs open[t] → close[t] this bar.
                 position[t] = 1
-                entry_idx = t - 1
-                entry_price = prev_close
+                entry_idx = t
+                entry_price = open_t
                 days_held = 0
                 entry_equity = equity[t - 1] * (1 - costs.buy_cost)
-                equity[t] = entry_equity * (1 + daily_ret)
+                equity[t] = entry_equity * (close_t / open_t)
             else:
                 equity[t] = equity[t - 1]
         else:
@@ -247,18 +303,21 @@ def _simulate(
                 # Refresh the N-day clock; skip exit checks this bar.
                 position[t] = 1
                 days_held = 0
-                equity[t] = equity[t - 1] * (1 + daily_ret)
+                equity[t] = equity[t - 1] * (1 + hold_ret)
                 continue
             time_exit = held_now >= max_holding_days
             if time_exit or strategy.should_exit(pctx):
+                # Realize at open[t]: ride close[t-1] → open[t], pay sell_cost,
+                # then flat for the rest of the day.
                 position[t] = 0
-                exit_equity = equity[t - 1] * (1 - costs.sell_cost)
+                equity_at_open = equity[t - 1] * (open_t / prev_close)
+                exit_equity = equity_at_open * (1 - costs.sell_cost)
                 equity[t] = exit_equity
                 trades.append(Trade(
                     entry_idx=entry_idx,
-                    exit_idx=t - 1,
+                    exit_idx=t,
                     entry_price=entry_price,
-                    exit_price=prev_close,
+                    exit_price=open_t,
                     ret=float(exit_equity / entry_equity - 1),
                     days_held=held_now,
                 ))
@@ -269,7 +328,7 @@ def _simulate(
             else:
                 position[t] = 1
                 days_held = held_now
-                equity[t] = equity[t - 1] * (1 + daily_ret)
+                equity[t] = equity[t - 1] * (1 + hold_ret)
 
     curve = pd.DataFrame({
         "date": dates,
@@ -391,6 +450,7 @@ def _simulate_multi_lot(
 
     dates = signals["date"].values
     closes = signals["close"].values
+    opens = _opens_with_fallback(signals)
     sig_values = signals["signal"].values
 
     cash = 1.0
@@ -403,14 +463,16 @@ def _simulate_multi_lot(
         prev_signal = sig_values[t - 1]
         prev_close = float(closes[t - 1])
         prev_date = pd.Timestamp(dates[t - 1])
-        ret_t = closes[t] / closes[t - 1] - 1
+        open_t = float(opens[t])
+        close_t = float(closes[t])
+        hold_ret = close_t / prev_close - 1  # close-to-close for surviving lots
 
-        # 1. Age all open lots (do NOT mark-to-market yet — exits price at
-        #    yesterday's close, same as the single-position engine).
+        # 1. Age all open lots.
         for lot in open_lots:
             lot.days_held += 1
 
-        # 2. Per-lot exit / reset decisions. current_value still reflects close[t-1].
+        # 2. Per-lot exit / reset decisions. current_value reflects close[t-1];
+        #    exits realize at open[t], which is close[t-1] * (open_t/prev_close).
         still_open: list[_OpenLot] = []
         for lot in open_lots:
             pctx = PositionContext(
@@ -425,13 +487,14 @@ def _simulate_multi_lot(
                 continue
             time_exit = lot.days_held >= max_holding_days
             if time_exit or strategy.should_exit(pctx):
-                exit_value = lot.current_value * (1 - costs.sell_cost)
+                value_at_open = lot.current_value * (open_t / prev_close)
+                exit_value = value_at_open * (1 - costs.sell_cost)
                 cash += exit_value
                 trades.append(Trade(
                     entry_idx=lot.entry_idx,
-                    exit_idx=t - 1,
+                    exit_idx=t,
                     entry_price=lot.entry_price,
-                    exit_price=prev_close,
+                    exit_price=open_t,
                     ret=float(exit_value / lot.committed_cash - 1),
                     days_held=lot.days_held,
                 ))
@@ -439,11 +502,12 @@ def _simulate_multi_lot(
                 still_open.append(lot)
         open_lots = still_open
 
-        # 3. Mark surviving lots with today's price return.
+        # 3. Mark surviving lots with today's close-to-close return.
         for lot in open_lots:
-            lot.current_value *= (1 + ret_t)
+            lot.current_value *= (1 + hold_ret)
 
-        # 4. Maybe open a new lot.
+        # 4. Maybe open a new lot — fills at open[t]; first-day exposure is
+        #    open[t] → close[t].
         bctx = BarContext(
             bar_idx=t - 1, date=prev_date,
             close=prev_close, signal=prev_signal,
@@ -456,10 +520,10 @@ def _simulate_multi_lot(
             cash -= position_size
             committed = position_size * (1 - costs.buy_cost)
             open_lots.append(_OpenLot(
-                entry_idx=t - 1,
-                entry_price=prev_close,
+                entry_idx=t,
+                entry_price=open_t,
                 committed_cash=committed,
-                current_value=committed * (1 + ret_t),
+                current_value=committed * (close_t / open_t),
                 days_held=0,
             ))
 
@@ -507,7 +571,13 @@ def buy_and_hold_baseline(
         )
 
     closes = daily_df["close"].values
-    eq = closes / closes[0]
+    # Anchor on open[0] to match the engine's next-open fill convention.
+    # Bar 0 itself is the entry day: equity[0] = close[0] / open[0].
+    if "open" in daily_df.columns and pd.notna(daily_df["open"].iloc[0]):
+        base = float(daily_df["open"].iloc[0])
+    else:
+        base = float(closes[0])
+    eq = closes / base
     curve = pd.DataFrame({
         "date": daily_df["date"].values,
         "equity": eq,

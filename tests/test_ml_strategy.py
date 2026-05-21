@@ -34,7 +34,7 @@ def test_generate_signals_yields_expected_columns():
     cfg = MLFactorConfig(train_window=120, refit_every=20, min_train_samples=60)
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
-    assert list(sigs.columns) == ["date", "close", "signal", "score"]
+    assert list(sigs.columns) == ["date", "open", "close", "signal", "score"]
     assert len(sigs) == len(df)
 
 

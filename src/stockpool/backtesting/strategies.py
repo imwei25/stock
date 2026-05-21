@@ -7,6 +7,9 @@ Adding a new strategy:
 """
 from __future__ import annotations
 
+import hashlib
+import pickle
+from pathlib import Path
 from typing import Mapping
 
 import pandas as pd
@@ -22,6 +25,7 @@ from stockpool.fetcher import resample_to_weekly
 from stockpool.indicators import add_all
 from stockpool.ml.dataset import (
     align_xy, build_factor_matrix, build_panel, forward_return,
+    slice_stock_factor_matrix,
 )
 from stockpool.ml.pipeline import TwoStepPipeline
 from stockpool.ml.selectors import LassoSelector
@@ -29,7 +33,7 @@ from stockpool.ml.weighters import (
     EqualWeighter, FactorWeighter, ICWeighter, IRWeighter,
 )
 from stockpool.signals import (
-    combine_daily_weekly, detect_signals, score_triggers, verdict_of,
+    Trigger, combine_daily_weekly, detect_signals, score_triggers, verdict_of,
 )
 
 
@@ -77,7 +81,7 @@ class CompositeVerdictStrategy(Strategy):
         return "composite_verdict"
 
     def generate_signals(self, daily_df: pd.DataFrame) -> pd.DataFrame:
-        empty_cols = ["date", "close", "signal", "daily_score", "weekly_score", "final_score"]
+        empty_cols = ["date", "open", "close", "signal", "daily_score", "weekly_score", "final_score"]
         if len(daily_df) < DAILY_WARMUP:
             return pd.DataFrame(columns=empty_cols)
 
@@ -100,6 +104,7 @@ class CompositeVerdictStrategy(Strategy):
 
             rows.append({
                 "date": daily_df["date"].iloc[i],
+                "open": float(daily_df["open"].iloc[i]),
                 "close": float(daily_df["close"].iloc[i]),
                 "signal": verdict,
                 "daily_score": int(daily_score),
@@ -117,6 +122,31 @@ class CompositeVerdictStrategy(Strategy):
 
     def should_reset_timer(self, ctx: PositionContext) -> bool:
         return ctx.signal in self.refresh_verdicts
+
+    def predict_latest(self, daily_df: pd.DataFrame) -> dict:
+        """Single-bar verdict for the daily report (skips the walk-forward)."""
+        if len(daily_df) < DAILY_WARMUP:
+            return {
+                "signal": "neutral",
+                "daily_score": 0, "weekly_score": 0, "final_score": 0.0,
+            }
+        enriched = add_all(daily_df, self.indicators_cfg)
+        d_score = score_triggers(detect_signals(enriched, self.weights))
+        weekly = resample_to_weekly(daily_df)
+        if len(weekly) >= WEEKLY_WARMUP:
+            w_score = score_triggers(
+                detect_signals(add_all(weekly, self.indicators_cfg), self.weights)
+            )
+        else:
+            w_score = 0
+        final = combine_daily_weekly(d_score, w_score, self.scoring)
+        verdict = verdict_of(final, self.verdicts_cfg)
+        return {
+            "signal": verdict,
+            "daily_score": int(d_score),
+            "weekly_score": int(w_score),
+            "final_score": float(final),
+        }
 
 
 class VerdictExecution(Strategy):
@@ -180,7 +210,7 @@ class SMACrossStrategy(Strategy):
         return f"sma_cross_{self.fast}_{self.slow}"
 
     def generate_signals(self, daily_df: pd.DataFrame) -> pd.DataFrame:
-        cols = ["date", "close", "signal", "sma_fast", "sma_slow"]
+        cols = ["date", "open", "close", "signal", "sma_fast", "sma_slow"]
         if len(daily_df) < self.slow:
             return pd.DataFrame(columns=cols)
 
@@ -261,13 +291,23 @@ class MLFactorStrategy(Strategy):
         cfg: MLFactorConfig,
         pool_data: Mapping[str, pd.DataFrame] | None = None,
         current_stock_code: str | None = None,
+        factor_panel: Mapping[str, pd.DataFrame] | None = None,
+        cache_dir: str | Path | None = None,
     ):
         self.cfg = cfg
         self.pool_data: dict[str, pd.DataFrame] = dict(pool_data or {})
         self._current_stock_code = current_stock_code
+        # 可选: 跨股票预算好的因子面板 (name -> T×N wide frame)。
+        # 提供时,WQ101 cross-sec 因子在 predict 阶段也走真实横截面值;
+        # 不提供时,fall back 到 build_factor_matrix 单股退化 (cross-sec → 常数)。
+        self._factor_panel: dict[str, pd.DataFrame] | None = (
+            dict(factor_panel) if factor_panel is not None else None
+        )
         self.buy_verdicts = set(cfg.buy_verdicts)
         self.sell_verdicts = set(cfg.sell_verdicts)
         self.refresh_verdicts = set(cfg.refresh_verdicts)
+        # 缓存目录: 启用月度训练复用 (daily-report path)。None 表示不缓存。
+        self._cache_dir = Path(cache_dir) if cache_dir is not None else None
 
     @property
     def name(self) -> str:
@@ -277,11 +317,102 @@ class MLFactorStrategy(Strategy):
         """Return a copy bound to a specific stock (used in pooled mode)."""
         return MLFactorStrategy(
             cfg=self.cfg, pool_data=self.pool_data, current_stock_code=code,
+            factor_panel=self._factor_panel, cache_dir=self._cache_dir,
         )
+
+    def _strategy_signature(self) -> str:
+        """8-char hash of MLFactorConfig — used to invalidate stale caches
+        when factors/horizon/selector/weighter/etc. change."""
+        blob = repr(self.cfg.model_dump()).encode("utf-8")
+        return hashlib.sha256(blob).hexdigest()[:8]
+
+    def _cache_path(self) -> Path | None:
+        if self._cache_dir is None or self._current_stock_code is None:
+            return None
+        return self._cache_dir / "ml_models" / (
+            f"{self._strategy_signature()}_{self._current_stock_code}.pkl"
+        )
+
+    def _load_cached_pipeline(self):
+        p = self._cache_path()
+        if p is None or not p.exists():
+            return None
+        try:
+            with open(p, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return None
+
+    def _save_cached_pipeline(self, pipeline, quantiles, fit_date) -> None:
+        p = self._cache_path()
+        if p is None:
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "wb") as f:
+            pickle.dump(
+                {"pipeline": pipeline, "quantiles": quantiles,
+                 "fit_date": pd.Timestamp(fit_date)},
+                f,
+            )
+
+    def predict_latest(self, daily_df: pd.DataFrame) -> dict:
+        """Today's verdict with monthly model refit.
+
+        Loads a pickled ``(pipeline, quantiles, fit_date)`` from
+        ``<cache_dir>/ml_models/<sig>_<code>.pkl``. Refits only if the cache
+        is missing OR the cached ``fit_date`` falls in a different calendar
+        month from ``daily_df``'s last bar; otherwise predict-only.
+        """
+        if len(daily_df) == 0:
+            return {"signal": "neutral", "score": float("nan")}
+        X_full = self._build_x_full(daily_df)
+        y_full = forward_return(daily_df, self.cfg.horizon)
+        current_bar = len(daily_df) - 1
+        today = pd.to_datetime(daily_df["date"].iloc[-1])
+
+        cached = self._load_cached_pipeline()
+        same_month = (
+            cached is not None
+            and (cached["fit_date"].year, cached["fit_date"].month)
+            == (today.year, today.month)
+        )
+
+        if same_month:
+            pipeline = cached["pipeline"]
+            quantiles = cached["quantiles"]
+        else:
+            fitted = self._try_fit(daily_df, X_full, y_full, current_bar)
+            if fitted is None:
+                return {"signal": "neutral", "score": float("nan")}
+            pipeline, quantiles = fitted
+            self._save_cached_pipeline(pipeline, quantiles, today)
+
+        xi_row = X_full.iloc[[-1]]
+        if not bool(xi_row.notna().all(axis=1).iloc[0]):
+            return {"signal": "neutral", "score": float("nan")}
+        pred = float(pipeline.predict(xi_row).iloc[0])
+        signal = _classify_by_quantile(pred, quantiles)
+        triggers = _ml_factor_triggers(pipeline, xi_row, top_n=8)
+        return {
+            "signal": signal, "score": pred, "final_score": pred,
+            "triggers_daily": triggers, "triggers_weekly": [],
+        }
+
+    def _build_x_full(self, daily_df: pd.DataFrame) -> pd.DataFrame:
+        """从 factor_panel(若有)切出本股 X;否则单股退化算。"""
+        if self._factor_panel is not None and self._current_stock_code is not None:
+            wide = slice_stock_factor_matrix(
+                self._factor_panel, self._current_stock_code,
+            )
+            dates = pd.DatetimeIndex(pd.to_datetime(daily_df["date"]).values)
+            X = wide.reindex(dates)
+            X.index = pd.Index(daily_df["date"].reset_index(drop=True), name="date")
+            return X
+        return build_factor_matrix(daily_df, self.cfg.factors)
 
     def generate_signals(self, daily_df: pd.DataFrame) -> pd.DataFrame:
         cfg = self.cfg
-        cols = ["date", "close", "signal", "score"]
+        cols = ["date", "open", "close", "signal", "score"]
         n = len(daily_df)
         if n == 0:
             return pd.DataFrame(columns=cols)
@@ -289,7 +420,7 @@ class MLFactorStrategy(Strategy):
         # Factor matrix and labels are computed once on the full history.
         # The walk-forward training slices use `.iloc` cuts that never look
         # past the current bar, so this is still look-ahead-safe.
-        X_full = build_factor_matrix(daily_df, cfg.factors)
+        X_full = self._build_x_full(daily_df)
         y_full = forward_return(daily_df, cfg.horizon)
 
         pipeline: TwoStepPipeline | None = None
@@ -299,6 +430,7 @@ class MLFactorStrategy(Strategy):
         rows: list[dict] = []
         for i in range(n):
             date_i = daily_df["date"].iloc[i]
+            open_i = float(daily_df["open"].iloc[i])
             close_i = float(daily_df["close"].iloc[i])
 
             if (
@@ -320,7 +452,7 @@ class MLFactorStrategy(Strategy):
                     signal = _classify_by_quantile(pred, quantiles)
 
             rows.append({
-                "date": date_i, "close": close_i,
+                "date": date_i, "open": open_i, "close": close_i,
                 "signal": signal, "score": score_value,
             })
 
@@ -406,6 +538,37 @@ class MLFactorStrategy(Strategy):
 
     def should_reset_timer(self, ctx: PositionContext) -> bool:
         return ctx.signal in self.refresh_verdicts
+
+
+def _ml_factor_triggers(pipeline, xi_row: pd.DataFrame, top_n: int = 8) -> list[Trigger]:
+    """Top-|contribution| factors at the latest bar, packaged as Trigger.
+
+    Each Trigger represents one selected factor's signed contribution
+    ``z_i * w_i`` to today's predicted score. ``weight`` is ``contribution × 100``
+    rounded to int so the existing report renderer's ``(±N)`` badge stays
+    consistent with the composite path.
+    """
+    try:
+        contrib_row = pipeline.contributions(xi_row).iloc[0]
+    except Exception:
+        return []
+    ranked = contrib_row.reindex(
+        contrib_row.abs().sort_values(ascending=False).index
+    )
+    out: list[Trigger] = []
+    for name, contrib in ranked.head(top_n).items():
+        if not pd.notna(contrib) or contrib == 0.0:
+            continue
+        weight_int = int(round(float(contrib) * 100))
+        if weight_int == 0:
+            continue
+        out.append(Trigger(
+            signal_type=str(name),
+            direction=1 if contrib > 0 else -1,
+            weight=weight_int,
+            description=f"因子 {name} 贡献 {float(contrib):+.3f}",
+        ))
+    return out
 
 
 def _classify_by_quantile(pred: float, q: dict[str, float]) -> str:

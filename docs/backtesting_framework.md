@@ -162,10 +162,10 @@ class TradeCosts:
 ```python
 @dataclass(frozen=True)
 class Trade:
-    entry_idx: int        # 进场 bar 在 signals 中的下标
-    exit_idx: int         # 出场决策日(信号日,非成交日)
-    entry_price: float
-    exit_price: float
+    entry_idx: int        # 进场执行 bar 下标(= 信号 bar + 1)
+    exit_idx: int         # 出场执行 bar 下标(= 信号 bar + 1)
+    entry_price: float    # = open[entry_idx]
+    exit_price: float     # = open[exit_idx]
     ret: float            # 净收益率(已扣除两端成本)
     days_held: int        # 持有 bar 数
 ```
@@ -188,8 +188,8 @@ class PositionContext:      # → should_exit
     date: pd.Timestamp
     close: float
     signal: Any
-    entry_idx: int          # 进场 bar 下标
-    entry_price: float      # 进场收盘价
+    entry_idx: int          # 进场执行 bar 下标
+    entry_price: float      # 进场成交价 = open[entry_idx]
     days_held: int          # 已持有 bar 数(含今天)
     max_holding_days: int   # 引擎配置的 N(可读但不可改)
 ```
@@ -233,10 +233,11 @@ compute_metrics(equity_series, trades, risk_free_rate=0.02) -> dict
 
 | 约定 | 说明 |
 |---|---|
-| **T+1 决策** | 决策只读 `signal[t-1]`,成交价用 `close[t]`。`close[t]` 永远不会被 bar `t` 决策时看到。 |
+| **T+1 + 次日开盘成交** | 决策只读 `signal[t-1]`,**成交价用 `open[t]`**(A 股集合竞价价)。除非次日开盘直接涨停否则视为可成交。signal 帧缺 `open` 时回退到 `close.shift(1)`,即旧的 close-to-close 行为。 |
 | **多头单仓** | 不开空,不加仓。持仓时收到 enter 信号默认会被忽略,**除非**策略的 `should_reset_timer` 对该信号返回 True(见下"计时刷新"行)。 |
-| **进场成本** | `entry_equity = equity[t-1] * (1 - buy_cost)`,然后承接当日收益。 |
-| **出场成本** | `exit_equity = equity[t-1] * (1 - sell_cost)`,出场日不再承接价格变动。 |
+| **进场当日敞口** | `entry_equity = equity[t-1] * (1 - buy_cost)`,然后 `equity[t] = entry_equity * close[t]/open[t]`(open 到 close 的日内涨跌)。后续持仓日仍按 close-to-close 累计。 |
+| **出场当日敞口** | `equity[t] = equity[t-1] * (open[t]/close[t-1]) * (1 - sell_cost)`,出场后当日剩余时间空仓。 |
+| **Trade 下标** | `entry_idx` / `exit_idx` 指向**执行 bar `t`**,= 信号 bar + 1。`entry_price` / `exit_price` 即 `open[t]`。 |
 | **持仓上限** | `days_held >= max_holding_days` 强制出场,优先于 `should_exit`。 |
 | **末根 bar** | 末根 bar 的信号没有下一根可执行,等同于无操作。 |
 | **未平仓** | 若最后仍持仓,该笔不计入 `trades`(`trade_count` 只统计已平仓)。 |

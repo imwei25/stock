@@ -307,7 +307,8 @@ def test_stop_loss_strategy_triggers_on_drawdown():
     daily = _daily(closes)
     engine = BacktestEngine(_StopLossStrategy(stop_pct=0.05))
     r = engine.run(daily, max_holding_days=100)
-    # Should exit on bar 4 (signal at bar 3 close=92 → drop 8% → exit at close[4])
+    # Signal at bar 3 (close=92 → drop 8%) executes at open[4] → exit_idx == 4
+    # (the execution bar; previously this was the decision bar t-1).
     assert r.metrics["trade_count"] == 1
     exit_idx = r.trades[0].exit_idx
-    assert exit_idx == 3
+    assert exit_idx == 4

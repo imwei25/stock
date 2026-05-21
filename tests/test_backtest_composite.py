@@ -127,7 +127,7 @@ def test_walk_forward_handles_short_history(weights, scoring, verdicts_cfg, indi
     wf = walk_forward_verdicts(daily, weights, scoring, verdicts_cfg, indicators_cfg)
     assert len(wf) == 0
     assert list(wf.columns) == [
-        "date", "close", "daily_score", "weekly_score", "final_score", "verdict",
+        "date", "open", "close", "daily_score", "weekly_score", "final_score", "verdict",
     ]
 
 

@@ -31,7 +31,7 @@ from stockpool.config import (
 )
 
 
-_WF_COLUMNS = ["date", "close", "daily_score", "weekly_score", "final_score", "verdict"]
+_WF_COLUMNS = ["date", "open", "close", "daily_score", "weekly_score", "final_score", "verdict"]
 
 
 def walk_forward_verdicts(
