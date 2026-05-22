@@ -58,5 +58,8 @@ def test_backtest_cli_produces_html(tmp_path, isolated_cache, monkeypatch):
     assert latest.exists()
     assert latest.stat().st_size > 1024
     html = latest.read_text(encoding="utf-8")
-    assert "N=5" in html and "N=10" in html and "N=20" in html
+    # Assert against the actual configured holding-day caps rather than
+    # hard-coded values, so config tuning doesn't break this smoke test.
+    for N in raw["backtest"]["equity_curve_holding_days"]:
+        assert f"N={N}" in html
     assert "605589" in html

@@ -144,6 +144,7 @@ def _analyze_one(
     market_context: list[ContextSignal] | None = None,
     pool_data: dict[str, pd.DataFrame] | None = None,
     factor_panel: dict | None = None,
+    shared_cache: dict | None = None,
 ) -> StockAnalysis:
     """Full per-stock pipeline. Single failures are caught → verdict=neutral + warnings."""
     warnings: list[str] = []
@@ -193,7 +194,7 @@ def _analyze_one(
     try:
         strategy = build_strategy(
             cfg, pool_data=pool_data, current_stock_code=stock.code,
-            factor_panel=factor_panel,
+            factor_panel=factor_panel, shared_cache=shared_cache,
         )
         latest = strategy.predict_latest(daily)
         verdict = latest.get("signal", "neutral")
@@ -280,6 +281,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     # decided by ``training_universe``.
     pool_data, factor_panel = _prepare_ml_pool(cfg, stocks, args.refresh)
     needs_pool = pool_data is not None
+    # One shared cache for the whole backtest run — lets MLFactorStrategy
+    # reuse the stacked (X, y) panel across stocks and share monthly fits.
+    shared_cache: dict = {}
 
     per_stock: list = []
     for s in stocks:
@@ -315,6 +319,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
                     pool_data=pool_data if needs_pool else None,
                     current_stock_code=s.code,
                     factor_panel=factor_panel,
+                    shared_cache=shared_cache,
                 )
                 result = simulate_strategy_equity_curve(
                     daily, strategy,
@@ -430,6 +435,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # to build cross-sectional factors at predict time. Pool composition is
     # decided by ``training_universe`` (pool vs full A-share cache).
     pool_data, factor_panel = _prepare_ml_pool(cfg, stocks, args.refresh)
+    shared_cache: dict = {}
 
     analyses: list[StockAnalysis] = []
     for s in stocks:
@@ -440,6 +446,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 market_context=market_context,
                 pool_data=pool_data,
                 factor_panel=factor_panel,
+                shared_cache=shared_cache,
             ))
         except Exception as e:
             log.error("Unexpected failure on %s: %s\n%s", s.code, e, traceback.format_exc())

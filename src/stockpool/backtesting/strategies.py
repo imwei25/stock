@@ -293,6 +293,7 @@ class MLFactorStrategy(Strategy):
         current_stock_code: str | None = None,
         factor_panel: Mapping[str, pd.DataFrame] | None = None,
         cache_dir: str | Path | None = None,
+        shared_cache: dict | None = None,
     ):
         self.cfg = cfg
         self.pool_data: dict[str, pd.DataFrame] = dict(pool_data or {})
@@ -308,6 +309,9 @@ class MLFactorStrategy(Strategy):
         self.refresh_verdicts = set(cfg.refresh_verdicts)
         # 缓存目录: 启用月度训练复用 (daily-report path)。None 表示不缓存。
         self._cache_dir = Path(cache_dir) if cache_dir is not None else None
+        # CLI 跨股票共享的进程内缓存(由调用方传入空 dict 并复用)。
+        # 当前用于 pooled 模式下复用同一 refit-bar 的 (pipeline, quantiles)。
+        self._shared_cache: dict | None = shared_cache
 
     @property
     def name(self) -> str:
@@ -318,6 +322,7 @@ class MLFactorStrategy(Strategy):
         return MLFactorStrategy(
             cfg=self.cfg, pool_data=self.pool_data, current_stock_code=code,
             factor_panel=self._factor_panel, cache_dir=self._cache_dir,
+            shared_cache=self._shared_cache,
         )
 
     def _strategy_signature(self) -> str:
@@ -326,12 +331,23 @@ class MLFactorStrategy(Strategy):
         blob = repr(self.cfg.model_dump()).encode("utf-8")
         return hashlib.sha256(blob).hexdigest()[:8]
 
-    def _cache_path(self) -> Path | None:
-        if self._cache_dir is None or self._current_stock_code is None:
-            return None
-        return self._cache_dir / "ml_models" / (
-            f"{self._strategy_signature()}_{self._current_stock_code}.pkl"
+    def _is_sharing(self) -> bool:
+        """是否走跨股共享 fit:pooled + 配置开关 + 拿到了 pool_data。"""
+        return (
+            self.cfg.panel_mode == "pooled"
+            and getattr(self.cfg, "share_pool_fit", False)
+            and bool(self.pool_data)
         )
+
+    def _cache_path(self) -> Path | None:
+        if self._cache_dir is None:
+            return None
+        sig = self._strategy_signature()
+        if self._is_sharing():
+            return self._cache_dir / "ml_models" / f"{sig}_shared.pkl"
+        if self._current_stock_code is None:
+            return None
+        return self._cache_dir / "ml_models" / f"{sig}_{self._current_stock_code}.pkl"
 
     def _load_cached_pipeline(self):
         p = self._cache_path()
@@ -370,22 +386,33 @@ class MLFactorStrategy(Strategy):
         current_bar = len(daily_df) - 1
         today = pd.to_datetime(daily_df["date"].iloc[-1])
 
-        cached = self._load_cached_pipeline()
-        same_month = (
-            cached is not None
-            and (cached["fit_date"].year, cached["fit_date"].month)
-            == (today.year, today.month)
-        )
+        # Try shared in-memory cache first (so all 8 stocks in one CLI run
+        # share the same month's fit without even touching disk).
+        shared_key = self._shared_key(today)
+        hit = None
+        if shared_key is not None and self._shared_cache is not None:
+            hit = self._shared_cache.get(shared_key)
 
-        if same_month:
-            pipeline = cached["pipeline"]
-            quantiles = cached["quantiles"]
+        if hit is not None:
+            pipeline, quantiles = hit
         else:
-            fitted = self._try_fit(daily_df, X_full, y_full, current_bar)
-            if fitted is None:
-                return {"signal": "neutral", "score": float("nan")}
-            pipeline, quantiles = fitted
-            self._save_cached_pipeline(pipeline, quantiles, today)
+            cached = self._load_cached_pipeline()
+            same_month = (
+                cached is not None
+                and (cached["fit_date"].year, cached["fit_date"].month)
+                == (today.year, today.month)
+            )
+            if same_month:
+                pipeline = cached["pipeline"]
+                quantiles = cached["quantiles"]
+                if shared_key is not None and self._shared_cache is not None:
+                    self._shared_cache[shared_key] = (pipeline, quantiles)
+            else:
+                fitted = self._try_fit(daily_df, X_full, y_full, current_bar)
+                if fitted is None:
+                    return {"signal": "neutral", "score": float("nan")}
+                pipeline, quantiles = fitted
+                self._save_cached_pipeline(pipeline, quantiles, today)
 
         xi_row = X_full.iloc[[-1]]
         if not bool(xi_row.notna().all(axis=1).iloc[0]):
@@ -433,8 +460,16 @@ class MLFactorStrategy(Strategy):
             open_i = float(daily_df["open"].iloc[i])
             close_i = float(daily_df["close"].iloc[i])
 
+            # Refit triggers: (a) no model yet, (b) bar-cadence reached, or
+            # (c) sharing mode and this month not in shared_cache yet.
+            shared_key_i = self._shared_key(date_i)
+            need_month_fit = (
+                shared_key_i is not None
+                and self._shared_cache is not None
+                and shared_key_i not in self._shared_cache
+            )
             if (
-                (pipeline is None or (i - last_fit_bar) >= cfg.refit_every)
+                (pipeline is None or (i - last_fit_bar) >= cfg.refit_every or need_month_fit)
                 and i - cfg.horizon >= cfg.min_train_samples
             ):
                 fitted = self._try_fit(daily_df, X_full, y_full, i)
@@ -458,6 +493,13 @@ class MLFactorStrategy(Strategy):
 
         return pd.DataFrame(rows, columns=cols)
 
+    def _shared_key(self, current_date) -> tuple | None:
+        """Month-granularity key for the cross-stock fit cache."""
+        if not self._is_sharing() or self._shared_cache is None:
+            return None
+        ts = pd.Timestamp(current_date)
+        return (self._strategy_signature(), int(ts.year), int(ts.month))
+
     def _try_fit(
         self,
         daily_df: pd.DataFrame,
@@ -472,6 +514,16 @@ class MLFactorStrategy(Strategy):
         if label_end <= 0:
             return None
 
+        # Shared in-memory cache: one fit per (sig, year, month) shared by
+        # all stocks in the CLI run. Skip both pool build and Lasso refit
+        # if the current bar's month already has a hit.
+        current_date = daily_df["date"].iloc[current_bar]
+        shared_key = self._shared_key(current_date)
+        if shared_key is not None:
+            hit = self._shared_cache.get(shared_key)  # type: ignore[union-attr]
+            if hit is not None:
+                return hit
+
         if cfg.panel_mode == "per_stock":
             train_start = max(0, label_end - cfg.train_window)
             X_train_raw = X_full.iloc[train_start:label_end]
@@ -482,7 +534,6 @@ class MLFactorStrategy(Strategy):
             # each pool stock contributes at most its last `train_window`
             # post-warmup rows, then we concatenate. Total training rows
             # ≈ train_window × (# stocks with usable history at current_date).
-            current_date = daily_df["date"].iloc[current_bar]
             pool = self._build_truncated_pool(daily_df, current_date, current_bar)
             X_pool, y_pool = build_panel(pool, cfg.factors, cfg.horizon)
             if len(X_pool) > 0 and cfg.train_window > 0:
@@ -511,23 +562,32 @@ class MLFactorStrategy(Strategy):
             "sell":        float(train_preds.quantile(cfg.thresholds.sell)),
             "strong_sell": float(train_preds.quantile(cfg.thresholds.strong_sell)),
         }
-        return pipeline, q
+        result = (pipeline, q)
+        if shared_key is not None:
+            self._shared_cache[shared_key] = result  # type: ignore[index]
+        return result
 
     def _build_truncated_pool(
         self, daily_df: pd.DataFrame, current_date, current_bar: int,
     ) -> dict[str, pd.DataFrame]:
         """All pool stocks truncated to ``date < current_date``; the host
-        stock's truncation is via row index (``iloc[:current_bar]``)."""
+        stock's truncation is via row index (``iloc[:current_bar]``).
+
+        When ``share_pool_fit`` 开启,host 不再被排除——训练集对所有 host 一致,
+        换得跨股 fit 复用。host 自己贡献 ~1/N 权重,IC 加权下偏差可忽略。
+        """
+        sharing = self._is_sharing()
         out: dict[str, pd.DataFrame] = {}
         for code, df in self.pool_data.items():
-            if code == self._current_stock_code:
+            if not sharing and code == self._current_stock_code:
                 continue
             mask = df["date"] < current_date
             sub = df.loc[mask].reset_index(drop=True)
             if len(sub) > 0:
                 out[code] = sub
-        host_key = self._current_stock_code or "_self_"
-        out[host_key] = daily_df.iloc[:current_bar].reset_index(drop=True)
+        if not sharing:
+            host_key = self._current_stock_code or "_self_"
+            out[host_key] = daily_df.iloc[:current_bar].reset_index(drop=True)
         return out
 
     def should_enter(self, ctx: BarContext) -> bool:

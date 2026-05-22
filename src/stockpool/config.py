@@ -225,6 +225,11 @@ class MLFactorConfig(BaseModel):
     # 仅在 panel_mode=pooled 时生效;per_stock 永远是单股训练,该选项被忽略。
     # 注意:all 需先跑 `python -m stockpool fetch-universe` 准备全市场缓存。
     training_universe: Literal["pool", "all"] = "pool"
+    # pooled 模式下:训练池跨股票共享一次 fit/月,而非每股每 refit_bar 重训。
+    # 启用后 `_build_truncated_pool` 不再剔除 host,训练集对所有 host 一致 →
+    # 缓存键 (sig, year, month),同月内所有股、所有 refit_bar 复用同一 pipeline。
+    # 代价:host 自身历史以 ~1/N 权重进入自己的训练(N=pool 大小),IC 加权下可忽略。
+    share_pool_fit: bool = True
     selector: SelectorConfig = Field(default_factory=SelectorConfig)
     weighter: WeighterConfig = Field(default_factory=WeighterConfig)
     thresholds: QuantileThresholds = Field(default_factory=QuantileThresholds)

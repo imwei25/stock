@@ -32,6 +32,7 @@ def build_strategy(
     pool_data: Mapping[str, pd.DataFrame] | None = None,
     current_stock_code: str | None = None,
     factor_panel: Mapping[str, pd.DataFrame] | None = None,
+    shared_cache: dict | None = None,
 ) -> Strategy:
     """Construct the strategy referenced by ``cfg.strategy.name``.
 
@@ -70,6 +71,7 @@ def build_strategy(
             current_stock_code=current_stock_code,
             factor_panel=factor_panel,
             cache_dir=cfg.data.cache_dir,
+            shared_cache=shared_cache,
         )
     raise ValueError(f"unknown strategy: {name!r}")
 
