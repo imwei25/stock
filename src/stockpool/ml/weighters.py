@@ -26,6 +26,15 @@ class FactorWeighter(ABC):
     @abstractmethod
     def predict(self, X: pd.DataFrame) -> pd.Series: ...
 
+    @abstractmethod
+    def contributions(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Per-bar per-factor contribution to ``predict(X)``.
+
+        Linear weighters return ``standardised(X) * weights`` (row sums equal
+        ``predict(X)`` by construction). Non-linear weighters (e.g. LightGBM)
+        return their model-specific decomposition, e.g. SHAP values.
+        """
+
 
 def _spearman_corr(a: np.ndarray, b: np.ndarray) -> float:
     """Spearman rank correlation. Returns 0 if either side is constant."""
@@ -72,7 +81,27 @@ class _StandardisingMixin:
         return standardize_apply(Xn, self._x_mean, self._x_std)
 
 
-class EqualWeighter(FactorWeighter, _StandardisingMixin):
+class _LinearWeighterContributionsMixin:
+    """Shared ``contributions()`` impl for linear-combination weighters
+    (IC / IR / Equal). Returns ``standardised(X) * weights`` per cell.
+
+    Depends on the class to provide:
+      * ``self._weights`` — pd.Series of per-factor weights
+      * ``self._feature_names`` — list[str] of fit-time feature names
+      * ``self._apply_standardiser(X)`` — z-score apply (from _StandardisingMixin)
+    """
+
+    def contributions(self, X: pd.DataFrame) -> pd.DataFrame:
+        if self._weights is None or self._weights.empty:
+            return pd.DataFrame(index=X.index)
+        Xs = self._apply_standardiser(X)
+        w = self._weights.to_numpy()
+        return pd.DataFrame(
+            Xs * w, index=X.index, columns=self._feature_names,
+        )
+
+
+class EqualWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _StandardisingMixin):
     """Equal weight (1/k) on standardised factors. Useful as a baseline."""
 
     def __init__(self):
@@ -103,7 +132,7 @@ class EqualWeighter(FactorWeighter, _StandardisingMixin):
         return pd.Series(scores, index=X.index, name="score")
 
 
-class ICWeighter(FactorWeighter, _StandardisingMixin):
+class ICWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _StandardisingMixin):
     """Weight each factor by its IC with the target.
 
     By default uses Spearman rank IC (more robust to outliers in returns).
@@ -166,7 +195,7 @@ class ICWeighter(FactorWeighter, _StandardisingMixin):
         return pd.Series(scores, index=X.index, name="score")
 
 
-class IRWeighter(FactorWeighter, _StandardisingMixin):
+class IRWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _StandardisingMixin):
     """Weight each factor by its information ratio over rolling sub-windows.
 
     IR_i = mean(IC_i) / std(IC_i) computed over equal-sized chunks of the

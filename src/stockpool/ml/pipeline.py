@@ -81,17 +81,17 @@ class TwoStepPipeline:
         return self.weighter.predict(X[selected])
 
     def contributions(self, X: pd.DataFrame) -> pd.DataFrame:
-        """Per-bar per-factor contribution to the predicted score.
+        """Per-bar per-factor contribution. Delegates to ``weighter.contributions``.
 
-        Returns a DataFrame indexed like ``X``, columns = selected factors,
-        values = ``z_{ij} * w_j`` (standardised factor × weighter weight).
-        Row sums equal ``predict(X)`` by construction.
+        Row sums equal ``self.predict(X)`` for linear weighters; for non-linear
+        weighters the convention is weighter-specific (see weighter docstring).
         """
         if self.fit_info_ is None:
             raise RuntimeError("Pipeline not fitted yet")
         selected = self.fit_info_.selected_factors
         if not selected:
             return pd.DataFrame(index=X.index)
-        Xs = self.weighter._apply_standardiser(X[selected])
-        w = self.weighter.weights().reindex(selected).to_numpy()
-        return pd.DataFrame(Xs * w, index=X.index, columns=selected)
+        missing = [c for c in selected if c not in X.columns]
+        if missing:
+            raise KeyError(f"contributions() missing columns: {missing}")
+        return self.weighter.contributions(X[selected])
