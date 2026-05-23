@@ -74,3 +74,38 @@ def test_factors_analyze_cli_writes_outputs(tmp_path, isolated_cache):
     assert payload["factor_names"] == ["momentum_20", "rsi_centered_14", "vol_ratio_5"]
     assert payload["n_stocks"] == 3
     assert payload["horizon"] == 3
+
+
+def test_factors_pick_by_ic_writes_selection(tmp_path, isolated_cache):
+    cfg_file = _make_config(tmp_path, isolated_cache)
+    analyze_dir = tmp_path / "factor_analysis"
+    rc = main([
+        "factors", "analyze",
+        "--config", str(cfg_file),
+        "--universe", "pool",
+        "--factors", "momentum_20", "rsi_centered_14", "vol_ratio_5",
+        "--horizon", "3",
+        "--output", str(analyze_dir),
+    ])
+    assert rc == 0
+    json_files = list(analyze_dir.glob("[0-9]*.json"))
+    assert len(json_files) == 1
+    input_json = json_files[0]
+
+    selection_path = tmp_path / "selection.json"
+    rc = main([
+        "factors", "pick-by-ic",
+        "--input", str(input_json),
+        "--output", str(selection_path),
+        "--top-n", "2",
+        "--max-corr", "0.99",
+        "--min-ir", "0.0",
+    ])
+    assert rc == 0
+    assert selection_path.exists()
+    payload = json.loads(selection_path.read_text(encoding="utf-8"))
+    assert "factors" in payload
+    assert isinstance(payload["factors"], list)
+    assert 0 < len(payload["factors"]) <= 2
+    for n in payload["factors"]:
+        assert n in {"momentum_20", "rsi_centered_14", "vol_ratio_5"}

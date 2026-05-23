@@ -458,6 +458,35 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_factors_pick_by_ic(args: argparse.Namespace) -> int:
+    """Pick a de-correlated top-N from a FactorAnalysisResult JSON."""
+    import json
+    from stockpool.factors_analysis import FactorAnalysisResult, pick_top_factors
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        log.error("input JSON not found: %s", input_path)
+        return 1
+
+    result = FactorAnalysisResult.from_json(input_path)
+    picked = pick_top_factors(
+        result,
+        top_n=args.top_n,
+        max_correlation=args.max_corr,
+        min_ir=args.min_ir,
+        score_by=args.score_by,
+    )
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps({"factors": picked}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    log.info("Picked %d factors → %s", len(picked), output_path)
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
 
@@ -636,6 +665,26 @@ def main(argv: list[str] | None = None) -> int:
         help="Output directory (HTML + JSON written here)",
     )
     p_analyze.set_defaults(func=cmd_factors_analyze)
+
+    p_pick_ic = fsub.add_parser(
+        "pick-by-ic",
+        help="From a factors-analyze JSON, pick a top-N de-correlated selection.json",
+    )
+    p_pick_ic.add_argument(
+        "--input", required=True,
+        help="Path to a factors-analyze JSON (e.g. reports/factor_analysis/2026-05-23.json)",
+    )
+    p_pick_ic.add_argument(
+        "--output", default="reports/selection.json",
+        help="Output selection.json (consumed by MLFactorConfig.factors_file)",
+    )
+    p_pick_ic.add_argument("--top-n", type=int, default=20)
+    p_pick_ic.add_argument("--max-corr", type=float, default=0.6)
+    p_pick_ic.add_argument("--min-ir", type=float, default=0.05)
+    p_pick_ic.add_argument(
+        "--score-by", choices=["ir", "mean_ic", "abs_ic"], default="ir",
+    )
+    p_pick_ic.set_defaults(func=cmd_factors_pick_by_ic)
 
     args = parser.parse_args(argv)
     return args.func(args)
