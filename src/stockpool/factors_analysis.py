@@ -15,6 +15,8 @@ from typing import Literal, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from stockpool.ml.dataset import compute_factor_panel, forward_return_panel
+
 
 def _scrub_float(v):
     """Map NaN/inf to None so json.dumps produces RFC-8259-compliant output."""
@@ -231,8 +233,103 @@ def _half_life_from_acf(series: pd.Series, max_half_life: float = 252.0) -> floa
     return min(hl, max_half_life)
 
 
-def analyze_factors(*args, **kwargs):  # noqa: D401
-    raise NotImplementedError("implemented in Task 5")
+def analyze_factors(
+    panel: Mapping[str, pd.DataFrame],
+    factor_names: Sequence[str],
+    horizon: int = 3,
+    ic_window: int = 252,
+    regime_index_close: pd.Series | None = None,
+    method: Literal["spearman", "pearson"] = "spearman",
+) -> FactorAnalysisResult:
+    """End-to-end factor analysis on a panel.
+
+    Args:
+        panel:       OHLCV wide-frame panel (output of ``build_panel_from_cache``).
+        factor_names: registered factor names (e.g. ``["momentum_20", "alpha_001"]``).
+        horizon:     forward-return horizon (bars).
+        ic_window:   reserved for future rolling-IC variants. Currently only
+                     affects the metadata stored on the result; daily IC is
+                     computed across the full available window.
+        regime_index_close: optional pd.Series of an index close (e.g. sh000001)
+                     to split daily IC into bull/bear/sideways regimes.
+        method:      "spearman" (rank IC, default) or "pearson".
+
+    Returns:
+        ``FactorAnalysisResult`` with per-factor metrics and pairwise IC correlation.
+    """
+    if horizon <= 0:
+        raise ValueError(f"horizon must be > 0, got {horizon}")
+    factor_names = list(factor_names)
+    if not factor_names:
+        raise ValueError("factor_names must be non-empty")
+
+    fp = compute_factor_panel(panel, factor_names)
+    fwd = forward_return_panel(panel["close"], horizon)
+
+    daily_ic: dict[str, pd.Series] = {}
+    for name in factor_names:
+        daily_ic[name] = compute_daily_ic(fp[name], fwd, method=method)
+
+    mean_ic = pd.Series(
+        {n: daily_ic[n].mean(skipna=True) for n in factor_names}, name="mean_ic",
+    )
+    std_ic = pd.Series(
+        {n: daily_ic[n].std(skipna=True, ddof=0) for n in factor_names}, name="std_ic",
+    )
+    ic_ir = pd.Series(
+        {
+            n: (mean_ic[n] / std_ic[n]) if std_ic[n] > 1e-12 else float("nan")
+            for n in factor_names
+        },
+        name="ic_ir",
+    )
+    abs_ic_mean = pd.Series(
+        {n: daily_ic[n].abs().mean(skipna=True) for n in factor_names},
+        name="abs_ic_mean",
+    )
+    half_life = pd.Series(
+        {n: _half_life_from_acf(daily_ic[n]) for n in factor_names},
+        name="half_life",
+    )
+
+    ic_corr_df = pd.DataFrame(daily_ic)[factor_names]
+    ic_correlation = ic_corr_df.corr(method="pearson").fillna(0.0)
+    # Force diagonal to exactly 1 (NaN columns get filled with 0; fix that).
+    for i, n in enumerate(factor_names):
+        ic_correlation.iloc[i, i] = 1.0
+
+    regime_ic: dict[str, pd.Series] = {}
+    if regime_index_close is not None:
+        regimes = classify_regimes(regime_index_close).reindex(
+            ic_corr_df.index
+        )
+        for regime in ("bull", "bear", "sideways"):
+            mask = regimes == regime
+            if mask.sum() < 5:
+                continue
+            sliced = ic_corr_df.loc[mask]
+            regime_ic[regime] = pd.Series(
+                {n: sliced[n].mean(skipna=True) for n in factor_names},
+                name=f"ic_{regime}",
+            )
+
+    valid_dates = ic_corr_df.dropna(how="all").index
+    return FactorAnalysisResult(
+        factor_names=factor_names,
+        daily_ic=daily_ic,
+        mean_ic=mean_ic,
+        ic_ir=ic_ir,
+        abs_ic_mean=abs_ic_mean,
+        half_life=half_life,
+        ic_correlation=ic_correlation,
+        regime_ic=regime_ic,
+        horizon=horizon,
+        ic_window=ic_window,
+        n_stocks=panel["close"].shape[1],
+        n_days=panel["close"].shape[0],
+        start_date=valid_dates.min() if len(valid_dates) else panel["close"].index.min(),
+        end_date=valid_dates.max() if len(valid_dates) else panel["close"].index.max(),
+    )
 
 
 def pick_top_factors(*args, **kwargs):  # noqa: D401

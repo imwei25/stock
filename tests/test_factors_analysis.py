@@ -237,3 +237,60 @@ def test_half_life_handles_nan_input():
     series = pd.Series([np.nan] * 10)
     hl = _half_life_from_acf(series)
     assert pd.isna(hl)
+
+
+def test_analyze_factors_end_to_end_synthetic():
+    """One strong factor + one anti-factor + one noise factor on a synthetic panel."""
+    panel = _synth_panel(n_days=120, n_stocks=15, seed=42)
+    factor_names = ["momentum_20", "rsi_centered_14", "vol_ratio_5"]
+    result = analyze_factors(
+        panel=panel,
+        factor_names=factor_names,
+        horizon=3,
+        ic_window=60,
+    )
+    assert result.factor_names == factor_names
+    assert set(result.daily_ic.keys()) == set(factor_names)
+    assert len(result.mean_ic) == 3
+    assert len(result.ic_ir) == 3
+    assert result.ic_correlation.shape == (3, 3)
+    assert result.horizon == 3
+    assert result.n_stocks == 15
+    # No regime data when no index series given.
+    assert result.regime_ic == {}
+
+
+def test_analyze_factors_with_regime_index():
+    panel = _synth_panel(n_days=200, n_stocks=10, seed=5)
+    # Build a 200-day uptrending "index" so all post-warmup days are "bull".
+    idx_close = pd.Series(
+        np.linspace(100, 300, 200), index=panel["close"].index, name="sh000001",
+    )
+    result = analyze_factors(
+        panel=panel,
+        factor_names=["momentum_20", "rsi_centered_14"],
+        horizon=3,
+        ic_window=60,
+        regime_index_close=idx_close,
+    )
+    # Should have at least the "bull" regime (and possibly only bull).
+    assert "bull" in result.regime_ic
+    assert len(result.regime_ic["bull"]) == 2
+
+
+def test_analyze_factors_rejects_unknown_factor():
+    panel = _synth_panel(n_days=60, n_stocks=5, seed=0)
+    with pytest.raises(KeyError):
+        analyze_factors(
+            panel=panel, factor_names=["this_factor_does_not_exist"], horizon=3,
+        )
+
+
+def test_analyze_factors_ic_correlation_diagonal_is_one():
+    panel = _synth_panel(n_days=120, n_stocks=10, seed=8)
+    result = analyze_factors(
+        panel=panel, factor_names=["momentum_20", "rsi_centered_14"],
+        horizon=3, ic_window=60,
+    )
+    diag = np.diag(result.ic_correlation.values)
+    assert np.allclose(diag, 1.0, atol=1e-9)
