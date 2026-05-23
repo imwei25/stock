@@ -281,3 +281,117 @@ class IRWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _Standardisi
         Xs = self._apply_standardiser(X)
         scores = Xs @ self._weights.to_numpy()
         return pd.Series(scores, index=X.index, name="score")
+
+
+class LightGBMWeighter(FactorWeighter):
+    """Tree-based weighter using LightGBM.
+
+    ``fit(X, y)`` trains a regression LGB and caches mean|SHAP| as ``_weights``
+    (computed once on training data, returned by ``weights()``).
+    ``predict(X)`` runs ``booster.predict(X.values)``.
+    ``contributions(X)`` runs ``booster.predict(X.values, pred_contrib=True)``
+    and returns per-feature SHAP values (drops the trailing base-value column).
+
+    Unlike linear weighters, this class does NOT inherit
+    ``_StandardisingMixin`` — LightGBM is scale-invariant. Look-ahead safety
+    rests on the same ABC contract: predict only consumes X, never y.
+
+    Lazy import: ``import lightgbm`` happens inside ``fit()`` so the module
+    can be imported without lightgbm installed.
+    """
+
+    def __init__(
+        self,
+        num_leaves: int = 15,
+        min_data_in_leaf: int = 20,
+        learning_rate: float = 0.05,
+        num_iterations: int = 200,
+        max_depth: int = 4,
+        random_state: int = 42,
+        verbose: int = -1,
+    ):
+        if num_leaves <= 1:
+            raise ValueError(f"num_leaves must be > 1, got {num_leaves}")
+        if min_data_in_leaf <= 0:
+            raise ValueError(f"min_data_in_leaf must be > 0, got {min_data_in_leaf}")
+        if learning_rate <= 0:
+            raise ValueError(f"learning_rate must be > 0, got {learning_rate}")
+        if num_iterations <= 0:
+            raise ValueError(f"num_iterations must be > 0, got {num_iterations}")
+        if max_depth <= 0:
+            raise ValueError(f"max_depth must be > 0, got {max_depth}")
+
+        self.num_leaves = num_leaves
+        self.min_data_in_leaf = min_data_in_leaf
+        self.learning_rate = learning_rate
+        self.num_iterations = num_iterations
+        self.max_depth = max_depth
+        self.random_state = random_state
+        self.verbose = verbose
+
+        self._booster = None
+        self._feature_names: list[str] | None = None
+        self._weights: pd.Series | None = None  # cached mean|SHAP|
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        import lightgbm as lgb  # lazy import
+
+        if X.empty or len(y) == 0:
+            self._feature_names = list(X.columns)
+            self._weights = pd.Series(dtype=float)
+            self._booster = None
+            return
+
+        self._feature_names = list(X.columns)
+        dataset = lgb.Dataset(
+            X.values, label=y.values, feature_name=self._feature_names,
+        )
+        params = {
+            "objective": "regression",
+            "metric": "rmse",
+            "num_leaves": self.num_leaves,
+            "min_data_in_leaf": self.min_data_in_leaf,
+            "learning_rate": self.learning_rate,
+            "max_depth": self.max_depth,
+            "seed": self.random_state,
+            "verbose": self.verbose,
+        }
+        self._booster = lgb.train(
+            params, dataset, num_boost_round=self.num_iterations,
+        )
+
+        # Cache mean|SHAP| as weights (per Q1+Q5 design decisions).
+        # pred_contrib returns shape (n, n_features + 1); last col is base value.
+        contribs = self._booster.predict(X.values, pred_contrib=True)
+        feature_contribs = contribs[:, :-1]
+        mean_abs = np.abs(feature_contribs).mean(axis=0)
+        self._weights = pd.Series(
+            mean_abs, index=self._feature_names, name="lgb_mean_abs_shap",
+        )
+
+    def weights(self) -> pd.Series:
+        if self._weights is None:
+            raise RuntimeError("Weighter not fitted yet")
+        return self._weights.copy()
+
+    def predict(self, X: pd.DataFrame) -> pd.Series:
+        if self._booster is None:
+            return pd.Series(0.0, index=X.index)
+        missing = [c for c in self._feature_names if c not in X.columns]
+        if missing:
+            raise KeyError(f"predict() missing columns: {missing}")
+        Xn = X[self._feature_names].values
+        preds = self._booster.predict(Xn)
+        return pd.Series(preds, index=X.index, name="score")
+
+    def contributions(self, X: pd.DataFrame) -> pd.DataFrame:
+        if self._booster is None:
+            return pd.DataFrame(index=X.index)
+        missing = [c for c in self._feature_names if c not in X.columns]
+        if missing:
+            raise KeyError(f"contributions() missing columns: {missing}")
+        Xn = X[self._feature_names].values
+        contribs = self._booster.predict(Xn, pred_contrib=True)
+        return pd.DataFrame(
+            contribs[:, :-1], index=X.index, columns=self._feature_names,
+        )
