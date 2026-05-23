@@ -259,6 +259,16 @@ follow-up。日报上 Pool B 段失败不影响 Pool A 段。
 
 检测到问题时在报告中以橙色警告框显示。
 
+### 关于 LightGBM 默认 selector
+
+F2 PR-B1 起,`strategy.ml_factor.selector.type` 默认为 `"lightgbm"`,用 LightGBM 在 walk-forward 训练窗口上选因子。这是非线性选 + IC 线性加的两步法。
+
+**过拟合提示**:每次 refit 训练集只有 ~250 bars × N 股,LGB 在小样本上容易过拟合。当前默认参数(`num_leaves=15`、`min_data_in_leaf=20`、`learning_rate=0.05`、`num_iterations=200`)已为这个规模做了保守化,但仍然 *依赖* "walk-forward 每次重训,单次过拟合无伤大雅" 这个假设。
+
+**观测指标**:跑回测后看 `reports/backtest/latest.html` 里的 trade 分布;如果 IC 跨 refit 不稳、净值曲线锯齿明显,先调小 `num_leaves` 或调大 `min_data_in_leaf`;还不行就 `selector.type: lasso` 回到 PR-A 的线性 baseline 做对照。
+
+**不做** holdout + early stopping(留给 F2 PR-B2 或更后)。
+
 ## ⚠️ 免责声明
 
 本工具产出基于公开行情数据的技术指标计算,信号与打分仅供个人技术分析参考,
