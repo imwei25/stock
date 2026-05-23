@@ -28,7 +28,7 @@ from stockpool.ml.dataset import (
     slice_stock_factor_matrix,
 )
 from stockpool.ml.pipeline import TwoStepPipeline
-from stockpool.ml.selectors import LassoSelector
+from stockpool.ml.selectors import FactorSelector, LassoSelector, LightGBMSelector
 from stockpool.ml.weighters import (
     EqualWeighter, FactorWeighter, ICWeighter, IRWeighter,
 )
@@ -256,6 +256,30 @@ def _build_weighter(cfg) -> FactorWeighter:
     if cfg.type == "equal":
         return EqualWeighter()
     raise ValueError(f"unknown weighter type: {cfg.type!r}")
+
+
+def _build_selector(cfg) -> FactorSelector:
+    """Translate SelectorConfig → concrete FactorSelector."""
+    if cfg.type == "lasso":
+        return LassoSelector(
+            alpha=cfg.lasso.alpha,
+            max_iter=cfg.lasso.max_iter,
+            tol=cfg.lasso.tol,
+        )
+    if cfg.type == "lightgbm":
+        c = cfg.lightgbm
+        return LightGBMSelector(
+            num_leaves=c.num_leaves,
+            min_data_in_leaf=c.min_data_in_leaf,
+            learning_rate=c.learning_rate,
+            num_iterations=c.num_iterations,
+            max_depth=c.max_depth,
+            random_state=c.random_state,
+            top_k_factors=c.top_k_factors,
+            min_importance_ratio=c.min_importance_ratio,
+            verbose=c.verbose,
+        )
+    raise ValueError(f"unknown selector type: {cfg.type!r}")
 
 
 class MLFactorStrategy(Strategy):
@@ -565,11 +589,7 @@ class MLFactorStrategy(Strategy):
             return None
 
         pipeline = TwoStepPipeline(
-            selector=LassoSelector(
-                alpha=cfg.selector.lasso.alpha,
-                max_iter=cfg.selector.lasso.max_iter,
-                tol=cfg.selector.lasso.tol,
-            ),
+            selector=_build_selector(cfg.selector),
             weighter=_build_weighter(cfg.weighter),
         )
         pipeline.fit(X_train, y_train)
