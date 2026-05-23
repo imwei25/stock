@@ -390,6 +390,74 @@ def cmd_fetch_universe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_factors_analyze(args: argparse.Namespace) -> int:
+    """Analyze factors on the pooled panel and write HTML + JSON reports."""
+    from stockpool.factors import list_factors
+    from stockpool.factors_analysis import analyze_factors
+    from stockpool.factors_analysis_report import render_factor_analysis_report
+    from stockpool.panel import build_panel_from_cache
+
+    cfg = load_config(args.config)
+    cache_dir = Path(cfg.data.cache_dir)
+
+    if args.universe == "all":
+        codes = list_universe(cache_dir)
+        if not codes:
+            log.error(
+                "universe=all but data/universe.parquet is empty; "
+                "run `python -m stockpool fetch-universe` first"
+            )
+            return 1
+    else:
+        codes = [s.code for s in cfg.stocks]
+
+    factor_names = list(args.factors) if args.factors else list_factors()
+    log.info(
+        "Analyzing %d factors over %d stocks (universe=%s)",
+        len(factor_names), len(codes), args.universe,
+    )
+
+    panel = build_panel_from_cache(codes, cfg.data.history_days, cache_dir)
+
+    regime_close = None
+    if not args.no_regime:
+        idx_code = cfg.context.indices[0].code if cfg.context.indices else None
+        if idx_code:
+            idx_path = cache_dir / f"idx_{idx_code}.parquet"
+            if idx_path.exists():
+                idx_df = pd.read_parquet(idx_path)
+                idx_df["date"] = pd.to_datetime(idx_df["date"])
+                regime_close = idx_df.set_index("date").sort_index()["close"]
+            else:
+                log.warning(
+                    "regime index cache missing (%s); skipping regime split", idx_path
+                )
+
+    result = analyze_factors(
+        panel=panel,
+        factor_names=factor_names,
+        horizon=args.horizon,
+        ic_window=args.ic_window,
+        regime_index_close=regime_close,
+    )
+
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = date.today().isoformat()
+    json_path = out_dir / f"{stamp}.json"
+    html_path = out_dir / f"{stamp}.html"
+    latest_html = out_dir / "latest.html"
+
+    result.to_json(json_path)
+    render_factor_analysis_report(result, html_path)
+    if latest_html.exists() or latest_html.is_symlink():
+        latest_html.unlink()
+    latest_html.write_bytes(html_path.read_bytes())
+
+    log.info("Wrote %s and %s", json_path, html_path)
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
 
@@ -540,6 +608,34 @@ def main(argv: list[str] | None = None) -> int:
         help="(--static only) HTML file path (default: reports/factors_picker.html)",
     )
     p_pick.set_defaults(func=cli_pick)
+
+    p_analyze = fsub.add_parser(
+        "analyze",
+        help="Compute rolling IC / IR / half-life / correlation across factors",
+    )
+    p_analyze.add_argument("--config", default="config.yaml", help="Path (default: config.yaml)")
+    p_analyze.add_argument(
+        "--universe", choices=["pool", "all"], default="pool",
+        help="pool = cfg.stocks; all = data/universe.parquet (needs fetch-universe first)",
+    )
+    p_analyze.add_argument(
+        "--factors", nargs="*", default=None,
+        help="Factor names (default: all registered factors)",
+    )
+    p_analyze.add_argument("--horizon", type=int, default=3)
+    p_analyze.add_argument(
+        "--ic-window", type=int, default=252,
+        help="Metadata only — daily IC uses the full window",
+    )
+    p_analyze.add_argument(
+        "--no-regime", action="store_true",
+        help="Skip the bull/bear/sideways regime split",
+    )
+    p_analyze.add_argument(
+        "--output", default="reports/factor_analysis",
+        help="Output directory (HTML + JSON written here)",
+    )
+    p_analyze.set_defaults(func=cmd_factors_analyze)
 
     args = parser.parse_args(argv)
     return args.func(args)
