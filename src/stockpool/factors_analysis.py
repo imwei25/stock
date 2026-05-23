@@ -16,6 +16,21 @@ import numpy as np
 import pandas as pd
 
 
+def _scrub_float(v):
+    """Map NaN/inf to None so json.dumps produces RFC-8259-compliant output."""
+    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+        return None
+    return v
+
+
+def _series_to_json_dict(s: pd.Series) -> dict:
+    return {k: _scrub_float(float(v)) for k, v in s.items()}
+
+
+def _series_from_json_dict(d: dict) -> pd.Series:
+    return pd.Series({k: (float("nan") if v is None else float(v)) for k, v in d.items()})
+
+
 @dataclass
 class FactorAnalysisResult:
     """Aggregate output of ``analyze_factors``.
@@ -44,17 +59,18 @@ class FactorAnalysisResult:
             "daily_ic": {
                 k: {
                     "index": [d.isoformat() for d in v.index],
-                    "values": v.tolist(),
+                    "values": [_scrub_float(float(x)) for x in v.tolist()],
                 } for k, v in self.daily_ic.items()
             },
-            "mean_ic": self.mean_ic.to_dict(),
-            "ic_ir": self.ic_ir.to_dict(),
-            "abs_ic_mean": self.abs_ic_mean.to_dict(),
-            "half_life": self.half_life.to_dict(),
+            "mean_ic": _series_to_json_dict(self.mean_ic),
+            "ic_ir": _series_to_json_dict(self.ic_ir),
+            "abs_ic_mean": _series_to_json_dict(self.abs_ic_mean),
+            "half_life": _series_to_json_dict(self.half_life),
             "ic_correlation": {
                 "index": list(self.ic_correlation.index),
                 "columns": list(self.ic_correlation.columns),
-                "values": self.ic_correlation.values.tolist(),
+                "values": [[_scrub_float(float(v)) for v in row]
+                           for row in self.ic_correlation.values],
             },
             "regime_ic": {
                 k: v.to_dict() for k, v in self.regime_ic.items()
@@ -75,21 +91,26 @@ class FactorAnalysisResult:
 
     @classmethod
     def from_dict(cls, d: dict) -> "FactorAnalysisResult":
+        ic_corr_values = [[float("nan") if v is None else float(v) for v in row]
+                          for row in d["ic_correlation"]["values"]]
         ic_corr = pd.DataFrame(
-            d["ic_correlation"]["values"],
+            ic_corr_values,
             index=d["ic_correlation"]["index"],
             columns=d["ic_correlation"]["columns"],
         )
         return cls(
             factor_names=list(d["factor_names"]),
             daily_ic={
-                k: pd.Series(v["values"], index=pd.to_datetime(v["index"]))
+                k: pd.Series(
+                    [float("nan") if x is None else float(x) for x in v["values"]],
+                    index=pd.to_datetime(v["index"]),
+                )
                 for k, v in d["daily_ic"].items()
             },
-            mean_ic=pd.Series(d["mean_ic"]),
-            ic_ir=pd.Series(d["ic_ir"]),
-            abs_ic_mean=pd.Series(d["abs_ic_mean"]),
-            half_life=pd.Series(d["half_life"]),
+            mean_ic=_series_from_json_dict(d["mean_ic"]),
+            ic_ir=_series_from_json_dict(d["ic_ir"]),
+            abs_ic_mean=_series_from_json_dict(d["abs_ic_mean"]),
+            half_life=_series_from_json_dict(d["half_life"]),
             ic_correlation=ic_corr,
             regime_ic={k: pd.Series(v) for k, v in d["regime_ic"].items()},
             horizon=int(d["horizon"]),
