@@ -500,6 +500,24 @@ class MLFactorStrategy(Strategy):
         ts = pd.Timestamp(current_date)
         return (self._strategy_signature(), int(ts.year), int(ts.month))
 
+    def _embargoed_label_end(self, current_bar: int) -> int:
+        """Return the bar index where training labels must stop, accounting for
+        ``cfg.embargo_days``.
+
+        Without embargo, labels are valid up to ``current_bar - horizon``.
+        With embargo ``E``, push another ``E`` bars back so the most recent
+        training label's forward-return window ends at least ``E`` bars before
+        the test bar — eliminating overlap when E ≥ horizon.
+
+        ``embargo_days = None`` means "auto = horizon" (the default).
+        ``embargo_days = 0`` reproduces pre-PR-A behavior.
+        """
+        cfg = self.cfg
+        effective_embargo = (
+            cfg.embargo_days if cfg.embargo_days is not None else cfg.horizon
+        )
+        return current_bar - cfg.horizon - effective_embargo
+
     def _try_fit(
         self,
         daily_df: pd.DataFrame,
@@ -510,7 +528,7 @@ class MLFactorStrategy(Strategy):
         cfg = self.cfg
         # Labels are NaN for the last `horizon` rows of any window; we
         # exclude those from training to avoid using unobserved futures.
-        label_end = current_bar - cfg.horizon
+        label_end = self._embargoed_label_end(current_bar)
         if label_end <= 0:
             return None
 
@@ -577,17 +595,33 @@ class MLFactorStrategy(Strategy):
         换得跨股 fit 复用。host 自己贡献 ~1/N 权重,IC 加权下偏差可忽略。
         """
         sharing = self._is_sharing()
+
+        # Embargo: truncate pool stocks to data older than the host's
+        # label_end date so labels can't reach into the embargo gap.
+        label_end = self._embargoed_label_end(current_bar)
+        # label_end may be <= 0 if there isn't enough history; caller (_try_fit)
+        # already guards by returning None in that case, but be defensive.
+        # host_slice_end is where we cut the host's data: it must include
+        # `horizon` extra bars beyond label_end so the labels at bars
+        # [label_end - horizon, label_end) have observable forward returns.
+        host_slice_end = max(0, label_end + self.cfg.horizon)
+        cutoff_date = (
+            daily_df["date"].iloc[host_slice_end - 1]
+            if host_slice_end > 0 else
+            daily_df["date"].iloc[0]
+        )
+
         out: dict[str, pd.DataFrame] = {}
         for code, df in self.pool_data.items():
             if not sharing and code == self._current_stock_code:
                 continue
-            mask = df["date"] < current_date
+            mask = df["date"] <= cutoff_date
             sub = df.loc[mask].reset_index(drop=True)
             if len(sub) > 0:
                 out[code] = sub
         if not sharing:
             host_key = self._current_stock_code or "_self_"
-            out[host_key] = daily_df.iloc[:current_bar].reset_index(drop=True)
+            out[host_key] = daily_df.iloc[:host_slice_end].reset_index(drop=True)
         return out
 
     def should_enter(self, ctx: BarContext) -> bool:
