@@ -45,11 +45,34 @@ def compute_factor_panel(
     return out
 
 
-def forward_return_panel(close: pd.DataFrame, horizon: int) -> pd.DataFrame:
-    """T×N forward return: ``close[t+h] / close[t] - 1``,末 h 行 NaN。"""
+def forward_return_panel(
+    close: pd.DataFrame,
+    horizon: int,
+    label_type: str = "return",
+) -> pd.DataFrame:
+    """T×N forward-return panel with configurable label transform.
+
+    Args:
+        close: T × N 收盘价宽表 (date index, code columns).
+        horizon: 前瞻天数 h。
+        label_type:
+            "return"          — close[t+h] / close[t] - 1 (legacy, default).
+            "vol_adjusted"    — NotImplementedError (placeholder for future PR).
+            "cross_sec_rank"  — NotImplementedError (placeholder for future PR).
+    """
     if horizon <= 0:
         raise ValueError(f"horizon must be > 0, got {horizon}")
-    return close.shift(-horizon) / close - 1.0
+    if label_type == "return":
+        return close.shift(-horizon) / close - 1.0
+    if label_type in ("vol_adjusted", "cross_sec_rank"):
+        raise NotImplementedError(
+            f"label_type={label_type!r} is not implemented in PR-A; "
+            f"interface stub only."
+        )
+    raise ValueError(
+        f"unknown label_type={label_type!r}; "
+        f"expected one of: return, vol_adjusted, cross_sec_rank"
+    )
 
 
 def stack_panel_to_xy(
@@ -152,15 +175,32 @@ def build_factor_matrix(
     return out
 
 
-def forward_return(df: pd.DataFrame, horizon: int) -> pd.Series:
-    """``close[t+horizon] / close[t] - 1``,index = current date."""
+def forward_return(
+    df: pd.DataFrame,
+    horizon: int,
+    label_type: str = "return",
+) -> pd.Series:
+    """单股 forward return,带 label_type 接口(与 forward_return_panel 一致)。
+
+    Only ``label_type='return'`` is implemented in PR-A; other documented
+    options raise NotImplementedError as interface placeholders.
+    """
     if horizon <= 0:
         raise ValueError(f"horizon must be > 0, got {horizon}")
-    closes = df["close"].reset_index(drop=True)
-    future = closes.shift(-horizon)
-    y = future / closes - 1.0
-    y.index = pd.Index(df["date"].reset_index(drop=True), name="date")
-    return y
+    if label_type == "return":
+        closes = df["close"].reset_index(drop=True)
+        y = closes.shift(-horizon) / closes - 1.0
+        y.index = pd.Index(df["date"].reset_index(drop=True), name="date")
+        return y
+    if label_type in ("vol_adjusted", "cross_sec_rank"):
+        raise NotImplementedError(
+            f"label_type={label_type!r} is not implemented in PR-A; "
+            f"interface stub only."
+        )
+    raise ValueError(
+        f"unknown label_type={label_type!r}; "
+        f"expected one of: return, vol_adjusted, cross_sec_rank"
+    )
 
 
 def align_xy(
