@@ -269,6 +269,12 @@ F2 PR-B1 起,`strategy.ml_factor.selector.type` 默认为 `"lightgbm"`,用 Light
 
 **不做** holdout + early stopping(留给 F2 PR-B2 或更后)。
 
+**F2 PR-B2 起,`weighter.type` 默认也是 `"lightgbm"`**,完成完全非线性两步法。weighter 与 selector 各训练一次 LGB,refit 训练时间约为 PR-B1 的 1.8-2.2 倍。
+
+**A/B 对照**:想回到 PR-B1 的"LGB selector + IC 加权"baseline 做对照,YAML 改一行 `weighter.type: ic` 即可(`weighter.ic.use_rank: true` 是默认值,可不写)。
+
+**关于 `weighter.contributions()`**:在 LGB weighter 下,返回的是 SHAP 值(每行每因子的边际贡献);在 IC/IR/Equal 等线性 weighter 下,返回 `standardised(X) * weights`。两者形状一致(行 = 样本,列 = 因子),但 LGB 行和 ≈ `predict(X) - base_value`(SHAP convention)而非完全等于 `predict(X)`。
+
 ## ⚠️ 免责声明
 
 本工具产出基于公开行情数据的技术指标计算,信号与打分仅供个人技术分析参考,
