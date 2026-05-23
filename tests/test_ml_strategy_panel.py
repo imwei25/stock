@@ -47,6 +47,7 @@ def test_factor_panel_propagates_via_with_stock():
         factors=["alpha_003", "momentum_5"], horizon=3,
         train_window=30, min_train_samples=20, refit_every=10,
         panel_mode="pooled",
+        embargo_days=0,
     )
     strat = MLFactorStrategy(cfg=cfg, pool_data=pool, factor_panel=factor_panel)
     sa = strat.with_stock("A")
@@ -73,6 +74,7 @@ def test_xfull_from_panel_differs_from_singleton_for_cross_sec():
     cfg = MLFactorConfig(
         factors=["alpha_003"], horizon=3, train_window=30,
         min_train_samples=20, refit_every=10, panel_mode="pooled",
+        embargo_days=0,
     )
 
     # 注入 panel
@@ -133,6 +135,7 @@ def test_build_strategy_injects_panel_in_pooled_mode():
         strategy=StrategyConfig(name="ml_factor", ml_factor=MLFactorConfig(
             factors=["alpha_003"], horizon=3, train_window=30,
             min_train_samples=20, panel_mode="pooled",
+            embargo_days=0,
         )),
     )
     strat = build_strategy(cfg, pool_data=pool, current_stock_code="A")
