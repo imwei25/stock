@@ -89,3 +89,71 @@ def test_factor_analysis_result_json_is_rfc_compliant(tmp_path):
     parsed = json.loads(text)  # would fail with strict parser if NaN present;
                                # CPython's json is lenient but we still want None
     assert parsed["half_life"]["f3"] is None
+
+
+def _synth_panel(n_days: int = 60, n_stocks: int = 8, seed: int = 0):
+    """Build a deterministic OHLCV panel for unit tests."""
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-02", periods=n_days, freq="B")
+    codes = [f"s{i:03d}" for i in range(n_stocks)]
+    close = pd.DataFrame(
+        100.0 * np.cumprod(1 + rng.normal(0.0005, 0.02, (n_days, n_stocks)), axis=0),
+        index=dates, columns=codes,
+    )
+    panel = {
+        "open":  close * 0.998,
+        "high":  close * 1.005,
+        "low":   close * 0.995,
+        "close": close,
+        "volume": pd.DataFrame(
+            rng.integers(1_000_000, 5_000_000, (n_days, n_stocks)).astype(float),
+            index=dates, columns=codes,
+        ),
+    }
+    return panel
+
+
+def test_compute_daily_ic_perfect_negative_correlation():
+    panel = _synth_panel(n_days=30, n_stocks=10, seed=1)
+    # Forward return is close.pct_change(3).shift(-3).
+    fwd = panel["close"].pct_change(3).shift(-3)
+    # Factor = -forward_return → daily Spearman IC == -1 on rows where data is complete.
+    factor = -fwd
+    ic = compute_daily_ic(factor, fwd, method="spearman")
+    # Drop rows where either side is all-NaN (head/tail).
+    valid = ic.dropna()
+    assert len(valid) >= 10
+    assert (valid < -0.999).all(), f"expected IC ≈ -1, got {valid.head()}"
+
+
+def test_compute_daily_ic_zero_for_random_factor():
+    panel = _synth_panel(n_days=200, n_stocks=20, seed=2)
+    fwd = panel["close"].pct_change(3).shift(-3)
+    rng = np.random.default_rng(99)
+    factor = pd.DataFrame(
+        rng.normal(0, 1, fwd.shape), index=fwd.index, columns=fwd.columns,
+    )
+    ic = compute_daily_ic(factor, fwd, method="spearman").dropna()
+    # Mean IC should be small (|μ| < 0.1) over 200 days.
+    assert abs(ic.mean()) < 0.1, f"expected mean IC ≈ 0, got {ic.mean()}"
+
+
+def test_compute_daily_ic_skips_constant_rows():
+    """A day where the factor is constant across stocks must yield NaN, not 0/error."""
+    dates = pd.date_range("2024-01-02", periods=5, freq="B")
+    codes = ["a", "b", "c"]
+    factor = pd.DataFrame(
+        [[1.0, 1.0, 1.0],  # constant — IC should be NaN
+         [1.0, 2.0, 3.0],
+         [3.0, 2.0, 1.0],
+         [1.0, 2.0, 3.0],
+         [1.0, 2.0, 3.0]],
+        index=dates, columns=codes,
+    )
+    fwd = pd.DataFrame(
+        [[0.01, 0.02, 0.03]] * 5, index=dates, columns=codes,
+    )
+    ic = compute_daily_ic(factor, fwd, method="spearman")
+    assert pd.isna(ic.iloc[0])
+    assert ic.iloc[1] == pytest.approx(1.0)
+    assert ic.iloc[2] == pytest.approx(-1.0)

@@ -127,8 +127,49 @@ class FactorAnalysisResult:
 
 
 # Placeholder forward declarations — implemented in later tasks.
-def compute_daily_ic(*args, **kwargs):  # noqa: D401
-    raise NotImplementedError("implemented in Task 2")
+def compute_daily_ic(
+    factor: pd.DataFrame,
+    forward_ret: pd.DataFrame,
+    method: Literal["spearman", "pearson"] = "spearman",
+) -> pd.Series:
+    """Per-day cross-sectional correlation between factor and forward return.
+
+    Args:
+        factor:      T × N wide DataFrame of factor values.
+        forward_ret: T × N wide DataFrame of forward returns (same shape/index).
+        method:      "spearman" (rank IC, default) or "pearson".
+
+    Returns:
+        T-indexed Series of daily IC. Days where either side has <2 valid
+        cross-sectional observations or one side is constant are NaN.
+    """
+    if not factor.index.equals(forward_ret.index):
+        raise ValueError("factor and forward_ret must share the same index")
+    if not factor.columns.equals(forward_ret.columns):
+        raise ValueError("factor and forward_ret must share the same columns")
+    if method not in ("spearman", "pearson"):
+        raise ValueError(f"method must be 'spearman' or 'pearson', got {method!r}")
+
+    out = pd.Series(np.nan, index=factor.index, name="ic")
+    for date in factor.index:
+        x = factor.loc[date]
+        y = forward_ret.loc[date]
+        mask = x.notna() & y.notna()
+        if mask.sum() < 2:
+            continue
+        xv = x[mask]
+        yv = y[mask]
+        if method == "spearman":
+            xr = xv.rank()
+            yr = yv.rank()
+            if xr.std(ddof=0) < 1e-12 or yr.std(ddof=0) < 1e-12:
+                continue
+            out.loc[date] = float(xr.corr(yr))
+        else:
+            if xv.std(ddof=0) < 1e-12 or yv.std(ddof=0) < 1e-12:
+                continue
+            out.loc[date] = float(xv.corr(yv))
+    return out
 
 
 def classify_regimes(*args, **kwargs):  # noqa: D401
