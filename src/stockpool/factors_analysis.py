@@ -172,8 +172,41 @@ def compute_daily_ic(
     return out
 
 
-def classify_regimes(*args, **kwargs):  # noqa: D401
-    raise NotImplementedError("implemented in Task 3")
+def classify_regimes(
+    index_close: pd.Series,
+    sma_window: int = 60,
+    slope_lookback: int = 5,
+) -> pd.Series:
+    """Label each day as 'bull' / 'bear' / 'sideways' from an index close series.
+
+    A day is:
+      * **bull** if close > SMA(sma_window) and SMA is rising over `slope_lookback`;
+      * **bear** if close < SMA(sma_window) and SMA is falling over `slope_lookback`;
+      * **sideways** otherwise.
+
+    The first ``sma_window + slope_lookback - 1`` rows are NaN (warmup).
+    """
+    if not isinstance(index_close, pd.Series):
+        raise TypeError("index_close must be a pd.Series")
+    if sma_window < 2 or slope_lookback < 1:
+        raise ValueError("sma_window >= 2 and slope_lookback >= 1")
+
+    sma = index_close.rolling(sma_window, min_periods=sma_window).mean()
+    slope = sma - sma.shift(slope_lookback)
+
+    out = pd.Series(np.nan, index=index_close.index, dtype=object, name="regime")
+    above = index_close > sma
+    below = index_close < sma
+    rising = slope > 0
+    falling = slope < 0
+
+    out.loc[above & rising] = "bull"
+    out.loc[below & falling] = "bear"
+    # Anything else with non-NaN sma+slope is sideways:
+    valid = sma.notna() & slope.notna()
+    sideways_mask = valid & ~(above & rising) & ~(below & falling)
+    out.loc[sideways_mask] = "sideways"
+    return out
 
 
 def analyze_factors(*args, **kwargs):  # noqa: D401

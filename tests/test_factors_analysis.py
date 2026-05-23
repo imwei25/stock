@@ -157,3 +157,38 @@ def test_compute_daily_ic_skips_constant_rows():
     assert pd.isna(ic.iloc[0])
     assert ic.iloc[1] == pytest.approx(1.0)
     assert ic.iloc[2] == pytest.approx(-1.0)
+
+
+def test_classify_regimes_pure_uptrend_is_bull():
+    dates = pd.date_range("2024-01-02", periods=120, freq="B")
+    # Linear uptrend → close always above SMA, SMA rising.
+    close = pd.Series(np.linspace(100, 200, 120), index=dates)
+    regimes = classify_regimes(close, sma_window=60)
+    # First sma_window-ish days are warmup (NaN); after that should be "bull".
+    tail = regimes.iloc[80:]
+    assert (tail == "bull").all(), f"got {tail.value_counts()}"
+
+
+def test_classify_regimes_pure_downtrend_is_bear():
+    dates = pd.date_range("2024-01-02", periods=120, freq="B")
+    close = pd.Series(np.linspace(200, 100, 120), index=dates)
+    regimes = classify_regimes(close, sma_window=60)
+    tail = regimes.iloc[80:]
+    assert (tail == "bear").all()
+
+
+def test_classify_regimes_choppy_is_sideways():
+    dates = pd.date_range("2024-01-02", periods=120, freq="B")
+    # Oscillation around 100 → SMA flat, close crosses repeatedly.
+    close = pd.Series(100.0 + 5.0 * np.sin(np.linspace(0, 12 * np.pi, 120)), index=dates)
+    regimes = classify_regimes(close, sma_window=60)
+    tail = regimes.iloc[80:]
+    sideways_share = (tail == "sideways").sum() / len(tail)
+    assert sideways_share >= 0.3, f"sideways share {sideways_share} too low"
+
+
+def test_classify_regimes_warmup_is_nan():
+    dates = pd.date_range("2024-01-02", periods=120, freq="B")
+    close = pd.Series(np.linspace(100, 200, 120), index=dates)
+    regimes = classify_regimes(close, sma_window=60)
+    assert regimes.iloc[0:30].isna().all()
