@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from stockpool.backtesting.strategies import MLFactorStrategy
-from stockpool.config import MLFactorConfig, SelectorConfig
+from stockpool.config import MLFactorConfig, SelectorConfig, WeighterConfig
 
 
 def _synthetic_daily(n_days: int = 300, seed: int = 0) -> pd.DataFrame:
@@ -53,6 +53,7 @@ def test_refit_with_default_embargo_returns_none_when_insufficient_history():
         horizon=3, train_window=50, min_train_samples=20,
         refit_every=10, panel_mode="per_stock",
         selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg=cfg)
     df = _synthetic_daily(n_days=30)
@@ -71,6 +72,7 @@ def test_refit_with_legacy_no_embargo_runs_to_completion():
         refit_every=20, panel_mode="per_stock",
         embargo_days=0,
         selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg=cfg)
     df = _synthetic_daily(n_days=300)
@@ -90,6 +92,7 @@ def test_refit_with_default_embargo_long_history_also_runs_to_completion():
         horizon=3, train_window=120, min_train_samples=60,
         refit_every=20, panel_mode="per_stock",
         selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg=cfg)
     df = _synthetic_daily(n_days=300)

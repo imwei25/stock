@@ -34,6 +34,7 @@ def test_generate_signals_yields_expected_columns():
     cfg = MLFactorConfig(
         train_window=120, refit_every=20, min_train_samples=60,
         embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
@@ -46,6 +47,7 @@ def test_per_stock_mode_produces_mix_of_signals():
     cfg = MLFactorConfig(
         train_window=120, refit_every=20, min_train_samples=60,
         embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
@@ -61,6 +63,7 @@ def test_warmup_bars_are_neutral():
     cfg = MLFactorConfig(
         train_window=80, refit_every=20, min_train_samples=80,
         embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
@@ -74,6 +77,7 @@ def test_engine_consumes_ml_signals():
     cfg = MLFactorConfig(
         train_window=120, refit_every=20, min_train_samples=60,
         embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg)
     engine = BacktestEngine(strat, costs=TradeCosts(0.0008, 0.0013))
@@ -91,6 +95,7 @@ def test_decision_rules_respect_config_sets():
         refresh_verdicts=[],
         embargo_days=0,
         selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg)
     enter = BarContext(bar_idx=0, date=pd.Timestamp("2024-01-02"),
@@ -108,6 +113,7 @@ def test_pooled_mode_runs_on_multi_stock_panel():
         panel_mode="pooled",
         embargo_days=0,
         selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg, pool_data=pool, current_stock_code="S0")
     sigs = strat.generate_signals(pool["S0"])
@@ -121,6 +127,7 @@ def test_score_is_nan_during_warmup_and_finite_after():
     cfg = MLFactorConfig(
         train_window=100, refit_every=20, min_train_samples=60,
         embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
@@ -144,6 +151,7 @@ def test_pooled_train_window_is_per_stock_not_global():
         panel_mode="pooled",
         embargo_days=0,
         selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(cfg, pool_data=pool, current_stock_code="S0")
 
@@ -189,6 +197,7 @@ def test_pooled_mode_truncates_other_stocks_at_current_date():
         panel_mode="pooled",
         embargo_days=0,
         selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
     )
     strat = MLFactorStrategy(
         cfg, pool_data={"H": host, "O": other}, current_stock_code="H",

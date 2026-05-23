@@ -227,7 +227,7 @@ class WeighterConfig(BaseModel):
     Default ``type`` is currently ``"ic"`` (Task 1); Task 4 flips it.
     """
     model_config = ConfigDict(extra="forbid")
-    type: Literal["ic", "ir", "equal", "lightgbm"] = "ic"
+    type: Literal["ic", "ir", "equal", "lightgbm"] = "lightgbm"
     ic: ICWeighterConfig = Field(default_factory=ICWeighterConfig)
     ir: IRWeighterConfig = Field(default_factory=IRWeighterConfig)
     equal: EqualWeighterConfig = Field(default_factory=EqualWeighterConfig)

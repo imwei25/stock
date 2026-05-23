@@ -30,7 +30,7 @@ from stockpool.ml.dataset import (
 from stockpool.ml.pipeline import TwoStepPipeline
 from stockpool.ml.selectors import FactorSelector, LassoSelector, LightGBMSelector
 from stockpool.ml.weighters import (
-    EqualWeighter, FactorWeighter, ICWeighter, IRWeighter,
+    EqualWeighter, FactorWeighter, ICWeighter, IRWeighter, LightGBMWeighter,
 )
 from stockpool.signals import (
     Trigger, combine_daily_weekly, detect_signals, score_triggers, verdict_of,
@@ -245,11 +245,7 @@ class SMACrossStrategy(Strategy):
 
 
 def _build_weighter(cfg) -> FactorWeighter:
-    """Translate WeighterConfig → concrete FactorWeighter.
-
-    PR-B2 Task 1: reads from subnested fields.
-    PR-B2 Task 4 will add the "lightgbm" case.
-    """
+    """Translate WeighterConfig → concrete FactorWeighter (PR-B2 subnested)."""
     if cfg.type == "ic":
         return ICWeighter(use_rank=cfg.ic.use_rank, min_abs_ic=cfg.ic.min_abs_ic)
     if cfg.type == "ir":
@@ -261,9 +257,15 @@ def _build_weighter(cfg) -> FactorWeighter:
     if cfg.type == "equal":
         return EqualWeighter()
     if cfg.type == "lightgbm":
-        raise NotImplementedError(
-            "weighter.type='lightgbm' arrives in PR-B2 Task 4 "
-            "(LightGBMWeighter not implemented yet)"
+        c = cfg.lightgbm
+        return LightGBMWeighter(
+            num_leaves=c.num_leaves,
+            min_data_in_leaf=c.min_data_in_leaf,
+            learning_rate=c.learning_rate,
+            num_iterations=c.num_iterations,
+            max_depth=c.max_depth,
+            random_state=c.random_state,
+            verbose=c.verbose,
         )
     raise ValueError(f"unknown weighter type: {cfg.type!r}")
 

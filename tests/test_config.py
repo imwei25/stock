@@ -331,11 +331,11 @@ def test_selector_unknown_type_rejected():
         SelectorConfig.model_validate({"type": "xgboost"})
 
 
-def test_weighter_default_type_is_still_ic_in_task1():
-    """Task 1 keeps default type='ic' to preserve behavior. Task 4 flips it."""
+def test_weighter_default_type_is_lightgbm():
+    """Default weighter.type flips to 'lightgbm' in PR-B2 Task 4."""
     from stockpool.config import WeighterConfig
     cfg = WeighterConfig()
-    assert cfg.type == "ic"
+    assert cfg.type == "lightgbm"
 
 
 def test_weighter_ic_subcfg_explicit():
