@@ -89,7 +89,7 @@ def _wq(num: int, types: tuple[str, ...], description: str):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ret(panel):
-    return panel["close"].pct_change()
+    return panel["close"].pct_change(fill_method=None)
 
 
 def _vwap(panel):

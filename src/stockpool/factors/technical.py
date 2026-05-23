@@ -39,7 +39,7 @@ class MomentumFactor(Factor):
         return f"momentum_{self.n}"
 
     def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
-        return panel["close"].pct_change(self.n)
+        return panel["close"].pct_change(self.n, fill_method=None)
 
 
 @register(

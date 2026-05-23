@@ -180,7 +180,7 @@ def vwap(panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
 
 def returns(close: pd.DataFrame) -> pd.DataFrame:
     """简单日收益。"""
-    return close.pct_change()
+    return close.pct_change(fill_method=None)
 
 
 def adv(volume: pd.DataFrame, d: int) -> pd.DataFrame:

@@ -80,7 +80,7 @@ def validate_ohlcv(df: pd.DataFrame) -> list[str]:
     if zero_vol:
         issues.append(f"检测到 {zero_vol} 根停牌K线(成交量为0)")
 
-    pct = df["close"].pct_change().abs()
+    pct = df["close"].pct_change(fill_method=None).abs()
     big_moves = int((pct > 0.20).sum())
     if big_moves:
         issues.append(f"{big_moves} 个交易日涨跌幅 >20%(含停牌复牌后异常)")

@@ -21,7 +21,7 @@ Adding a new factor:
             return "my_factor"
 
         def compute(self, panel):
-            return panel["close"].pct_change(10)
+            return panel["close"].pct_change(10, fill_method=None)
 
 Built-in factors are auto-registered when this package is imported.
 """
