@@ -38,6 +38,8 @@ start reports/latest.html
 .venv/Scripts/python -m stockpool factors list --type cross_sectional   # 按类型筛
 .venv/Scripts/python -m stockpool factors show alpha_001                # 看元数据
 .venv/Scripts/python -m stockpool factors pick                          # 打开 HTML 选择器
+.venv/Scripts/python -m stockpool factors analyze --universe all --output reports/factor_analysis
+.venv/Scripts/python -m stockpool factors pick-by-ic --input reports/factor_analysis/<日期>.json --output reports/selection.json --top-n 20
 ```
 
 ## 数据源 (`data.source`)
