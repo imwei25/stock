@@ -140,3 +140,106 @@ class LassoSelector(FactorSelector):
 
     def selected_factors(self) -> list[str]:
         return list(self.selected_)
+
+
+class LightGBMSelector(FactorSelector):
+    """Tree-based selector using LightGBM gain importance.
+
+    ``fit()`` trains a regression LightGBM on (X, y);
+    ``selected_factors()`` returns columns whose normalized gain importance
+    is in the top-K AND >= ``max_importance * min_importance_ratio``.
+
+    Attributes after ``fit``:
+      * ``coef_``: pd.Series of normalized gain importance (sums to 1.0 in
+        non-degenerate fits; sums to 0 when y is constant or empty).
+      * ``selected_``: list of factor names that passed the top-K + ratio gate.
+
+    Lazy import: ``import lightgbm`` happens inside ``fit`` so this module
+    can be imported without lightgbm installed (only fitting requires it).
+    """
+
+    def __init__(
+        self,
+        num_leaves: int = 15,
+        min_data_in_leaf: int = 20,
+        learning_rate: float = 0.05,
+        num_iterations: int = 200,
+        max_depth: int = 4,
+        random_state: int = 42,
+        top_k_factors: int = 20,
+        min_importance_ratio: float = 0.01,
+        verbose: int = -1,
+    ):
+        if num_leaves <= 1:
+            raise ValueError(f"num_leaves must be > 1, got {num_leaves}")
+        if min_data_in_leaf <= 0:
+            raise ValueError(f"min_data_in_leaf must be > 0, got {min_data_in_leaf}")
+        if learning_rate <= 0:
+            raise ValueError(f"learning_rate must be > 0, got {learning_rate}")
+        if num_iterations <= 0:
+            raise ValueError(f"num_iterations must be > 0, got {num_iterations}")
+        if max_depth <= 0:
+            raise ValueError(f"max_depth must be > 0, got {max_depth}")
+        if top_k_factors <= 0:
+            raise ValueError(f"top_k_factors must be > 0, got {top_k_factors}")
+        if not (0 <= min_importance_ratio <= 1):
+            raise ValueError(
+                f"min_importance_ratio must be in [0, 1], got {min_importance_ratio}"
+            )
+
+        self.num_leaves = num_leaves
+        self.min_data_in_leaf = min_data_in_leaf
+        self.learning_rate = learning_rate
+        self.num_iterations = num_iterations
+        self.max_depth = max_depth
+        self.random_state = random_state
+        self.top_k_factors = top_k_factors
+        self.min_importance_ratio = min_importance_ratio
+        self.verbose = verbose
+
+        self.coef_: pd.Series | None = None
+        self.selected_: list[str] = []
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        import lightgbm as lgb  # lazy import — ImportError surfaces only at fit
+
+        if X.empty or len(y) == 0:
+            self.coef_ = pd.Series(dtype=float)
+            self.selected_ = []
+            return
+
+        feature_names = list(X.columns)
+        dataset = lgb.Dataset(
+            X.values, label=y.values, feature_name=feature_names,
+        )
+        params = {
+            "objective": "regression",
+            "metric": "rmse",
+            "num_leaves": self.num_leaves,
+            "min_data_in_leaf": self.min_data_in_leaf,
+            "learning_rate": self.learning_rate,
+            "max_depth": self.max_depth,
+            "seed": self.random_state,
+            "verbose": self.verbose,
+        }
+        booster = lgb.train(params, dataset, num_boost_round=self.num_iterations)
+        gain = booster.feature_importance(importance_type="gain").astype(float)
+
+        total = float(gain.sum())
+        if total < 1e-12:
+            # Constant y or no learnable signal → no selection.
+            self.coef_ = pd.Series(0.0, index=feature_names, name="lgb_importance")
+            self.selected_ = []
+            return
+
+        norm = gain / total
+        self.coef_ = pd.Series(norm, index=feature_names, name="lgb_importance")
+
+        max_val = float(self.coef_.max())
+        threshold = max_val * self.min_importance_ratio
+        ranked = self.coef_.sort_values(ascending=False)
+        eligible = ranked[ranked >= threshold].head(self.top_k_factors)
+        self.selected_ = list(eligible.index)
+
+    def selected_factors(self) -> list[str]:
+        return list(self.selected_)
