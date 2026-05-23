@@ -12,7 +12,7 @@ from stockpool.backtesting import (
     PositionContext,
     TradeCosts,
 )
-from stockpool.config import MLFactorConfig, QuantileThresholds, WeighterConfig
+from stockpool.config import MLFactorConfig, QuantileThresholds, SelectorConfig, WeighterConfig
 
 
 def _synth_ohlcv(n: int, seed: int = 0, drift: float = 0.0005) -> pd.DataFrame:
@@ -31,7 +31,10 @@ def _synth_ohlcv(n: int, seed: int = 0, drift: float = 0.0005) -> pd.DataFrame:
 
 def test_generate_signals_yields_expected_columns():
     df = _synth_ohlcv(300, seed=42)
-    cfg = MLFactorConfig(train_window=120, refit_every=20, min_train_samples=60, embargo_days=0)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+    )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
     assert list(sigs.columns) == ["date", "open", "close", "signal", "score"]
@@ -40,7 +43,10 @@ def test_generate_signals_yields_expected_columns():
 
 def test_per_stock_mode_produces_mix_of_signals():
     df = _synth_ohlcv(400, seed=1)
-    cfg = MLFactorConfig(train_window=120, refit_every=20, min_train_samples=60, embargo_days=0)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+    )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
     # Once past warmup, every verdict class should appear at least once.
@@ -52,7 +58,10 @@ def test_per_stock_mode_produces_mix_of_signals():
 def test_warmup_bars_are_neutral():
     """Before min_train_samples + horizon, the model can't fit → neutral."""
     df = _synth_ohlcv(200, seed=2)
-    cfg = MLFactorConfig(train_window=80, refit_every=20, min_train_samples=80, embargo_days=0)
+    cfg = MLFactorConfig(
+        train_window=80, refit_every=20, min_train_samples=80,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+    )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
     # First (min_train_samples + horizon - 1) rows should be all neutral.
@@ -62,7 +71,10 @@ def test_warmup_bars_are_neutral():
 
 def test_engine_consumes_ml_signals():
     df = _synth_ohlcv(400, seed=3)
-    cfg = MLFactorConfig(train_window=120, refit_every=20, min_train_samples=60, embargo_days=0)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+    )
     strat = MLFactorStrategy(cfg)
     engine = BacktestEngine(strat, costs=TradeCosts(0.0008, 0.0013))
     result = engine.run(df, max_holding_days=10)
@@ -78,6 +90,7 @@ def test_decision_rules_respect_config_sets():
         sell_verdicts=["sell"],
         refresh_verdicts=[],
         embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
     )
     strat = MLFactorStrategy(cfg)
     enter = BarContext(bar_idx=0, date=pd.Timestamp("2024-01-02"),
@@ -94,6 +107,7 @@ def test_pooled_mode_runs_on_multi_stock_panel():
         train_window=150, refit_every=30, min_train_samples=80,
         panel_mode="pooled",
         embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
     )
     strat = MLFactorStrategy(cfg, pool_data=pool, current_stock_code="S0")
     sigs = strat.generate_signals(pool["S0"])
@@ -104,7 +118,10 @@ def test_pooled_mode_runs_on_multi_stock_panel():
 
 def test_score_is_nan_during_warmup_and_finite_after():
     df = _synth_ohlcv(300, seed=4)
-    cfg = MLFactorConfig(train_window=100, refit_every=20, min_train_samples=60, embargo_days=0)
+    cfg = MLFactorConfig(
+        train_window=100, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+    )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
     # Warmup region: NaN scores
@@ -126,6 +143,7 @@ def test_pooled_train_window_is_per_stock_not_global():
         train_window=80, refit_every=20, min_train_samples=50,
         panel_mode="pooled",
         embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
     )
     strat = MLFactorStrategy(cfg, pool_data=pool, current_stock_code="S0")
 
@@ -170,6 +188,7 @@ def test_pooled_mode_truncates_other_stocks_at_current_date():
         train_window=80, refit_every=20, min_train_samples=60,
         panel_mode="pooled",
         embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
     )
     strat = MLFactorStrategy(
         cfg, pool_data={"H": host, "O": other}, current_stock_code="H",
@@ -195,6 +214,7 @@ def test_quantile_thresholds_consistent():
         ),
         weighter=WeighterConfig(type="equal"),
         embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
     )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df).dropna(subset=["score"])

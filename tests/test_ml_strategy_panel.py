@@ -42,12 +42,13 @@ def test_factor_panel_propagates_via_with_stock():
     panel = _panel_from_pool(pool)
     factor_panel = compute_factor_panel(panel, ["alpha_003", "momentum_5"])
 
-    from stockpool.config import MLFactorConfig
+    from stockpool.config import MLFactorConfig, SelectorConfig
     cfg = MLFactorConfig(
         factors=["alpha_003", "momentum_5"], horizon=3,
         train_window=30, min_train_samples=20, refit_every=10,
         panel_mode="pooled",
         embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
     )
     strat = MLFactorStrategy(cfg=cfg, pool_data=pool, factor_panel=factor_panel)
     sa = strat.with_stock("A")
@@ -70,11 +71,12 @@ def test_xfull_from_panel_differs_from_singleton_for_cross_sec():
     panel = _panel_from_pool(pool)
     factor_panel = compute_factor_panel(panel, ["alpha_003"])  # cross-sec
 
-    from stockpool.config import MLFactorConfig
+    from stockpool.config import MLFactorConfig, SelectorConfig
     cfg = MLFactorConfig(
         factors=["alpha_003"], horizon=3, train_window=30,
         min_train_samples=20, refit_every=10, panel_mode="pooled",
         embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
     )
 
     # 注入 panel
@@ -100,7 +102,7 @@ def test_build_strategy_injects_panel_in_pooled_mode():
     from stockpool.config import (
         AppConfig, DataConfig, IndicatorsConfig, WeightsConfig, ScoringConfig,
         VerdictsConfig, BacktestConfig, ReportConfig, StrategyConfig,
-        MLFactorConfig, MACDConfig, KDJConfig, BOLLConfig, Stock,
+        MLFactorConfig, MACDConfig, KDJConfig, BOLLConfig, Stock, SelectorConfig,
     )
     from stockpool.strategy_factory import build_strategy
 
@@ -136,6 +138,7 @@ def test_build_strategy_injects_panel_in_pooled_mode():
             factors=["alpha_003"], horizon=3, train_window=30,
             min_train_samples=20, panel_mode="pooled",
             embargo_days=0,
+            selector=SelectorConfig(type="lasso"),
         )),
     )
     strat = build_strategy(cfg, pool_data=pool, current_stock_code="A")
