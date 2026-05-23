@@ -332,5 +332,49 @@ def analyze_factors(
     )
 
 
-def pick_top_factors(*args, **kwargs):  # noqa: D401
-    raise NotImplementedError("implemented in Task 6")
+def pick_top_factors(
+    result: FactorAnalysisResult,
+    top_n: int = 20,
+    max_correlation: float = 0.6,
+    min_ir: float = 0.05,
+    score_by: Literal["ir", "mean_ic", "abs_ic"] = "ir",
+) -> list[str]:
+    """Greedy de-correlation selection on a FactorAnalysisResult.
+
+    Algorithm:
+      1. Score = |result.ic_ir|  (or |mean_ic|, or abs_ic_mean — picked by ``score_by``).
+      2. Drop factors with |ic_ir| < min_ir up front.
+      3. Sort survivors by score descending.
+      4. Walk the list; accept a factor iff its absolute IC-correlation with
+         every already-accepted factor is < max_correlation.
+      5. Stop when ``top_n`` factors accepted.
+
+    Returns the picked factor names in selection order (highest-scored first).
+    """
+    if top_n <= 0:
+        raise ValueError(f"top_n must be > 0, got {top_n}")
+    if not (0 < max_correlation <= 1):
+        raise ValueError(f"max_correlation must be in (0, 1], got {max_correlation}")
+    if score_by == "ir":
+        score = result.ic_ir.abs()
+    elif score_by == "mean_ic":
+        score = result.mean_ic.abs()
+    elif score_by == "abs_ic":
+        score = result.abs_ic_mean
+    else:
+        raise ValueError(f"unknown score_by: {score_by!r}")
+
+    eligible = [
+        n for n in result.factor_names
+        if not pd.isna(score[n]) and abs(result.ic_ir.get(n, 0.0)) >= min_ir
+    ]
+    eligible.sort(key=lambda n: float(score[n]), reverse=True)
+
+    picked: list[str] = []
+    for name in eligible:
+        if len(picked) >= top_n:
+            break
+        if any(abs(result.ic_correlation.loc[name, p]) >= max_correlation for p in picked):
+            continue
+        picked.append(name)
+    return picked

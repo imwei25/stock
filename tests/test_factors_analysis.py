@@ -294,3 +294,65 @@ def test_analyze_factors_ic_correlation_diagonal_is_one():
     )
     diag = np.diag(result.ic_correlation.values)
     assert np.allclose(diag, 1.0, atol=1e-9)
+
+
+def _build_pick_fixture(factor_names, ir_values, corr_pairs=None):
+    """Build a minimal FactorAnalysisResult for pick_top_factors tests."""
+    n = len(factor_names)
+    corr = pd.DataFrame(
+        np.eye(n), index=factor_names, columns=factor_names,
+    )
+    for (a, b, v) in (corr_pairs or []):
+        corr.loc[a, b] = v
+        corr.loc[b, a] = v
+    dates = pd.date_range("2024-01-02", periods=10, freq="B")
+    return FactorAnalysisResult(
+        factor_names=list(factor_names),
+        daily_ic={n: pd.Series([0.0] * 10, index=dates) for n in factor_names},
+        mean_ic=pd.Series(dict(zip(factor_names, ir_values))),
+        ic_ir=pd.Series(dict(zip(factor_names, ir_values))),
+        abs_ic_mean=pd.Series(dict(zip(factor_names, [abs(v) for v in ir_values]))),
+        half_life=pd.Series(dict(zip(factor_names, [10.0] * n))),
+        ic_correlation=corr,
+        regime_ic={},
+        horizon=3, ic_window=60, n_stocks=5, n_days=10,
+        start_date=dates[0], end_date=dates[-1],
+    )
+
+
+def test_pick_top_factors_drops_correlated():
+    res = _build_pick_fixture(
+        factor_names=["a", "b", "c", "d"],
+        ir_values=[0.5, 0.45, 0.4, 0.3],
+        corr_pairs=[("a", "b", 0.8)],  # a and b too correlated
+    )
+    picked = pick_top_factors(res, top_n=3, max_correlation=0.6, min_ir=0.0)
+    assert picked == ["a", "c", "d"]   # b is dropped, c/d are independent
+
+
+def test_pick_top_factors_respects_min_ir():
+    res = _build_pick_fixture(
+        factor_names=["a", "b", "c", "d"],
+        ir_values=[0.5, 0.4, 0.03, 0.01],
+    )
+    picked = pick_top_factors(res, top_n=4, max_correlation=0.6, min_ir=0.05)
+    assert picked == ["a", "b"]
+
+
+def test_pick_top_factors_uses_absolute_score():
+    """Negative IR is still informative — sort by |ir|, not raw ir."""
+    res = _build_pick_fixture(
+        factor_names=["a", "b", "c"],
+        ir_values=[0.1, -0.5, 0.3],
+    )
+    picked = pick_top_factors(res, top_n=2, max_correlation=0.99, min_ir=0.0)
+    assert picked == ["b", "c"]
+
+
+def test_pick_top_factors_returns_empty_when_all_below_threshold():
+    res = _build_pick_fixture(
+        factor_names=["a", "b"],
+        ir_values=[0.01, 0.02],
+    )
+    picked = pick_top_factors(res, top_n=5, max_correlation=0.6, min_ir=0.1)
+    assert picked == []
