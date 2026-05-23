@@ -217,3 +217,48 @@ def test_selector_flat_alpha_rejected():
     with pytest.raises(pydantic.ValidationError) as exc:
         SelectorConfig.model_validate({"type": "lasso", "alpha": 0.01})
     assert "extra" in str(exc.value).lower() or "forbid" in str(exc.value).lower()
+
+
+def test_mlfactor_embargo_days_default_is_none():
+    from stockpool.config import MLFactorConfig
+    cfg = MLFactorConfig()
+    assert cfg.embargo_days is None
+
+
+def test_mlfactor_embargo_days_explicit_zero():
+    from stockpool.config import MLFactorConfig
+    cfg = MLFactorConfig(embargo_days=0)
+    assert cfg.embargo_days == 0
+
+
+def test_mlfactor_embargo_days_explicit_positive():
+    from stockpool.config import MLFactorConfig
+    cfg = MLFactorConfig(embargo_days=5)
+    assert cfg.embargo_days == 5
+
+
+def test_mlfactor_embargo_days_negative_rejected():
+    import pydantic
+    from stockpool.config import MLFactorConfig
+    with pytest.raises(pydantic.ValidationError):
+        MLFactorConfig(embargo_days=-1)
+
+
+def test_mlfactor_label_type_default_is_return():
+    from stockpool.config import MLFactorConfig
+    cfg = MLFactorConfig()
+    assert cfg.label_type == "return"
+
+
+def test_mlfactor_label_type_accepts_all_documented():
+    from stockpool.config import MLFactorConfig
+    for label in ("return", "vol_adjusted", "cross_sec_rank"):
+        cfg = MLFactorConfig(label_type=label)
+        assert cfg.label_type == label
+
+
+def test_mlfactor_label_type_unknown_rejected():
+    import pydantic
+    from stockpool.config import MLFactorConfig
+    with pytest.raises(pydantic.ValidationError):
+        MLFactorConfig(label_type="momentum")

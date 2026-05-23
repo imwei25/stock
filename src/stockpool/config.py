@@ -241,6 +241,18 @@ class MLFactorConfig(BaseModel):
     # 缓存键 (sig, year, month),同月内所有股、所有 refit_bar 复用同一 pipeline。
     # 代价:host 自身历史以 ~1/N 权重进入自己的训练(N=pool 大小),IC 加权下可忽略。
     share_pool_fit: bool = True
+    # Walk-forward embargo: extra gap (in bars) between train window end and
+    # the test bar, to prevent horizon-day forward returns from leaking into
+    # training labels. ``None`` means "auto = horizon" (recommended default).
+    # Set to ``0`` to opt out and reproduce pre-PR-A behavior.
+    embargo_days: int | None = Field(default=None, ge=0)
+
+    # Training-label transform. PR-A only implements "return" (the legacy
+    # absolute forward return). "vol_adjusted" and "cross_sec_rank" are
+    # interface placeholders — calls into the corresponding code path will
+    # raise NotImplementedError until a later PR fills them in.
+    label_type: Literal["return", "vol_adjusted", "cross_sec_rank"] = "return"
+
     selector: SelectorConfig = Field(default_factory=SelectorConfig)
     weighter: WeighterConfig = Field(default_factory=WeighterConfig)
     thresholds: QuantileThresholds = Field(default_factory=QuantileThresholds)
