@@ -194,3 +194,46 @@ def test_classify_regimes_warmup_is_nan():
     warmup = 60 + 5 - 1   # sma_window + slope_lookback - 1, defaults
     assert regimes.iloc[:warmup].isna().all()
     assert regimes.iloc[warmup:warmup + 5].notna().all()
+
+
+from stockpool.factors_analysis import _half_life_from_acf
+
+
+def test_half_life_ar1_known_decay():
+    """AR(1) with ρ=0.5 → half-life = log(0.5)/log(0.5) = 1.0"""
+    n = 500
+    rng = np.random.default_rng(7)
+    rho = 0.5
+    x = np.zeros(n)
+    for t in range(1, n):
+        x[t] = rho * x[t - 1] + rng.normal(0, 1)
+    series = pd.Series(x)
+    hl = _half_life_from_acf(series)
+    assert 0.7 < hl < 1.5, f"expected half-life ≈ 1.0, got {hl}"
+
+
+def test_half_life_ar1_slow_decay():
+    """AR(1) with ρ=0.9 → half-life = log(0.5)/log(0.9) ≈ 6.58"""
+    n = 2000
+    rng = np.random.default_rng(11)
+    rho = 0.9
+    x = np.zeros(n)
+    for t in range(1, n):
+        x[t] = rho * x[t - 1] + rng.normal(0, 1)
+    series = pd.Series(x)
+    hl = _half_life_from_acf(series)
+    assert 5.0 < hl < 9.0, f"expected half-life ≈ 6.58, got {hl}"
+
+
+def test_half_life_white_noise_is_nan_or_zero():
+    """White noise has ρ ≈ 0, so half-life is either NaN (rho ≤ 0) or tiny."""
+    rng = np.random.default_rng(13)
+    series = pd.Series(rng.normal(0, 1, 500))
+    hl = _half_life_from_acf(series)
+    assert pd.isna(hl) or hl < 0.5, f"got {hl}"
+
+
+def test_half_life_handles_nan_input():
+    series = pd.Series([np.nan] * 10)
+    hl = _half_life_from_acf(series)
+    assert pd.isna(hl)

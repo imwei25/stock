@@ -209,6 +209,28 @@ def classify_regimes(
     return out
 
 
+def _half_life_from_acf(series: pd.Series, max_half_life: float = 252.0) -> float:
+    """Half-life of a series via AR(1) lag-1 autocorrelation.
+
+    Returns ``log(0.5) / log(ρ_1)`` if ``ρ_1`` is in ``(0, 1)``; ``NaN`` otherwise.
+    Clipped at ``max_half_life`` to avoid blow-up near unit-root.
+    """
+    s = series.dropna()
+    if len(s) < 10:
+        return float("nan")
+    s_centered = s - s.mean()
+    s_shifted = s_centered.shift(1).dropna()
+    s_current = s_centered.iloc[1:]
+    denom = (s_shifted ** 2).sum()
+    if denom < 1e-12:
+        return float("nan")
+    rho = float((s_current * s_shifted).sum() / denom)
+    if rho <= 0 or rho >= 1:
+        return float("nan")
+    hl = float(np.log(0.5) / np.log(rho))
+    return min(hl, max_half_life)
+
+
 def analyze_factors(*args, **kwargs):  # noqa: D401
     raise NotImplementedError("implemented in Task 5")
 
