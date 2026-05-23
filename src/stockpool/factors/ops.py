@@ -92,12 +92,13 @@ def decay_linear(x: pd.DataFrame, d: int) -> pd.DataFrame:
     weights = np.arange(1, d + 1, dtype=float)
     weights /= weights.sum()
 
-    def _dot(s: pd.Series) -> float:
-        a = s.values
+    def _dot(a: np.ndarray) -> float:
         if np.isnan(a).any():
             return np.nan
         return float(np.dot(a, weights))
-    return x.rolling(d, min_periods=d).apply(_dot, raw=False)
+    # raw=True: 直接收 ndarray,绕过 pandas 在大宽表上构造 Series 时触发的
+    # closure-cell 路径 bug (TypeError: 'cell' object is not callable)。
+    return x.rolling(d, min_periods=d).apply(_dot, raw=True)
 
 
 def correlation(x: pd.DataFrame, y: pd.DataFrame, d: int) -> pd.DataFrame:
