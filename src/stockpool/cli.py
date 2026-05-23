@@ -27,6 +27,7 @@ from stockpool.fetcher import (
     validate_ohlcv,
 )
 from stockpool.indicators import add_all
+from stockpool.recommend_pool import PoolBEntry, compute_or_load_pool_b
 from stockpool.report import ContextSignal, StockAnalysis, render_report
 from stockpool.signals import (
     combine_daily_weekly,
@@ -401,12 +402,23 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
     cache_dir = Path(cfg.data.cache_dir)
 
     if args.universe == "all":
-        codes = list_universe(cache_dir)
-        if not codes:
+        universe_file = cache_dir / "universe.parquet"
+        if not universe_file.exists():
             log.error(
-                "universe=all but data/universe.parquet is empty; "
-                "run `python -m stockpool fetch-universe` first"
+                "universe=all but %s does not exist; "
+                "run `python -m stockpool fetch-universe` first",
+                universe_file,
             )
+            return 1
+        all_codes = pd.read_parquet(universe_file)["code"].tolist()
+        # Skip codes whose per-stock parquet is missing (fetch-universe may have
+        # failed on a handful of codes — e.g. newly listed with no history).
+        codes = [c for c in all_codes if (cache_dir / f"{c}_daily.parquet").exists()]
+        missing = len(all_codes) - len(codes)
+        if missing:
+            log.warning("Skipping %d codes with no daily cache", missing)
+        if not codes:
+            log.error("No usable per-stock cache under %s; re-run fetch-universe", cache_dir)
             return 1
     else:
         codes = [s.code for s in cfg.stocks]
@@ -555,6 +567,19 @@ def cmd_run(args: argparse.Namespace) -> int:
                 context=list(market_context),
             ))
 
+    pool_b: list[PoolBEntry] = []
+    if cfg.recommend_pool.enabled:
+        try:
+            pool_b = compute_or_load_pool_b(
+                cfg, today,
+                pool_data=pool_data, factor_panel=factor_panel,
+            )
+            log.info("Pool B: %d stocks (top_n=%d)",
+                     len(pool_b), cfg.recommend_pool.top_n)
+        except Exception as e:
+            log.error("Pool B failed (continuing without it): %s\n%s",
+                      e, traceback.format_exc())
+
     out = render_report(
         analyses, run_date=run_date,
         config_path=Path(args.config), config_hash=cfg.content_hash,
@@ -562,6 +587,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         keep_history=cfg.report.keep_history,
         klines_to_show=cfg.report.klines_to_show,
         market_context=market_context,
+        pool_b=pool_b or None,
     )
     log.info("Report written: %s", out)
     log.info("Latest also at: %s", Path(cfg.report.output_dir) / "latest.html")

@@ -54,12 +54,14 @@ python -m stockpool factors pick-by-ic \
 | `src/stockpool/factors/ops.py` | **WQ 算子库** (ts_rank / rank / decay_linear / indneutralize / ...) |
 | `src/stockpool/factors/wq101.py` | **WorldQuant 101 Formulaic Alphas** 全套实现 (Alpha001..Alpha101) |
 | `src/stockpool/factors_picker.py` | **HTML 因子选择器** + `factors` CLI 子命令 |
+| `src/stockpool/industry_map.py` | `code → 行业` 映射;多源(`auto` / `baostock` / `akshare`);缓存到 `data/stock_industry_map.parquet`,>30 天过期自动重拉。**mootdx 路径无效**:TDX 服务器对 `block_hy.dat` 返回 0 字节 |
+| `src/stockpool/recommend_pool.py` | **Pool B**(全市场量化推荐池):漏斗 + 排序 + 周缓存;`compute_or_load_pool_b` 顶层 API |
 | `src/stockpool/factors_analysis.py` | **因子分析**: 滚动 IC / IR / half-life / 相关性 / regime 切片;`analyze_factors` + `pick_top_factors` |
 | `src/stockpool/factors_analysis_report.py` | pyecharts HTML 报告: 排名表 + IC 时序 + 相关性 heatmap + regime 拆分 |
 | `src/stockpool/panel.py` | **Panel** 数据结构 (T×N 宽表 dict) + `build_panel_from_cache` |
 | `src/stockpool/ml/` | **两步法 ML 组合**(dataset / Lasso selector / IC&IR weighter / TwoStepPipeline) |
 | `src/stockpool/strategy_factory.py` | 按 `cfg.strategy.name` 工厂构造策略 + ML 通用 simulate;ml_factor 注入 `cache_dir` 以启用日报路径的月度训练缓存;`build_factor_panel` 顶层助手用于 CLI 预算 |
-| `src/stockpool/report.py` | 日报 HTML(含市场背景、板块上下文) |
+| `src/stockpool/report.py` | 日报 HTML(含市场背景、板块上下文);`_optimize_html` 做 echarts lib 去重 + `<details>` 默认折叠 + 图表懒加载,降低首屏开销 |
 | `src/stockpool/backtest.py` | 单信号前瞻命中率 |
 | `src/stockpool/backtesting/` | **回测框架**(策略 ABC + 引擎),见下 |
 | `src/stockpool/backtest_composite.py` | 综合策略回测的旧 API 适配层,委托给框架 |
@@ -125,6 +127,7 @@ python -m stockpool factors pick-by-ic \
 - `context` — `indices`(大盘指数列表,默认上证/深证成指)
 - `report` — `output_dir` / `keep_history` / `klines_to_show`
 - **`strategy`** — `name` (`composite_verdict` 默认 / `ml_factor`) + `ml_factor` 子配置(`factors` 或 **`factors_file`** / `horizon` / `train_window` / `refit_every` / `panel_mode` / **`training_universe`** / **`share_pool_fit`** / `selector` / `weighter` / `thresholds` / `*_verdicts`)。`factors_file` 指向 HTML picker 导出的 JSON,与 `factors` 列表二选一。**`training_universe`**: `pool`(默认,只用 cfg.stocks)/ `all`(全市场 cache,需先 `fetch-universe`;仅在 `panel_mode=pooled` 时生效)。**`share_pool_fit`**(默认 `true`,仅 `panel_mode=pooled` 生效):跨股共享 fit,缓存键 `(sig, year, month)`,同月内所有股、所有 refit_bar 复用同一 pipeline;训练集不再剔除 host,host 自己以 ~1/N 权重进入自己的训练。切到 `all` 或翻 `share_pool_fit` 后旧的 ml_models pkl 会因 sig 变化自动失效
+- **`recommend_pool`** — Pool B(全市场量化推荐池)。`enabled`(默认 `true`)/ `top_n`(30)/ `min_avg_amount_20d`(5e7 元;mootdx `vol*close*100`)/ `max_per_industry`(5;"未知" 桶在**所有股都未映射时**自动跳过 cap,否则正常计)/ `refresh`(`weekly`默认/`always`/`never`)/ `cache_dir`(`data/recommend_pool`)/ `industry_map_max_age_days`(30)/ **`industry_source`**(`auto` 默认 = baostock→akshare 链 / `baostock` / `akshare`)。**前置条件**:必须先跑 `python -m stockpool fetch-universe`;首次运行自动从所选 industry_source 拉映射(baostock ~5-10s,akshare ~1-2min)。**缓存键**含 `cfg.content_hash`,改 yaml 任一字段都失效
 
 ## 数据流
 
@@ -142,6 +145,13 @@ python -m stockpool factors pick-by-ic \
 - `ml_factor`:从 `<cache_dir>/ml_models/<sig>_<code>.pkl` 加载已训练 pipeline+quantiles,**每个自然月最多重训一次**(同月内 predict-only,跨月自动重训并覆写缓存);`<sig>` = 8 位 MLFactorConfig 哈希,改 factors/horizon/selector/weighter/thresholds 等任一项即失效
 - `pooled` 模式下 `cmd_run` 会预加载整池 `pool_data` 喂给 `build_strategy`,保证 cross-sec 因子有真实横截面值
 
+**Pool B(全市场量化推荐池)**在 `render_report` 之前由 `recommend_pool.compute_or_load_pool_b` 计算:
+- 始终用 `load_universe_cache(cfg.data.cache_dir)` 作为**应用池**(独立于 strategy 训练池)
+- 漏斗:**流动性**(近 20 日 `vol*close*100` ≥ `min_avg_amount_20d`) → **ST 二次防御**(name 含 ST) → 调当前 strategy 的 `predict_latest` 打分 → **行业上限贪心**(score 降序扫描,每行业 ≤ `max_per_industry`,收满 `top_n` 即停)
+- 复用 `cli._prepare_ml_pool` 给 strategy 的 `pool_data` / `factor_panel`(ml_factor + training_universe=all 时跨 4000 票 cross-sec 真实横截面),不重复加载
+- 缓存键 `poolb_<content_hash>_<isoyear>w<isoweek>.parquet`;同周 + 同 yaml 直接读盘,跨周或改 yaml 自动重算
+- 失败隔离:per-stock predict 异常只 log warning 跳过该股;Pool B 整体失败不影响 Pool A 日报
+
 缓存(`data/`):
 - `<code>_daily.parquet` — 股票
 - `idx_<symbol>.parquet` — 指数(`stock_zh_index_daily` 全量替换)
@@ -149,6 +159,8 @@ python -m stockpool factors pick-by-ic \
 - `ml_models/<sig>_<code>.pkl` — ml_factor 日报路径的月度训练缓存(`share_pool_fit=false` 时)
 - `ml_models/<sig>_shared.pkl` — `share_pool_fit=true` 时,所有股共享一份月度 pickle
 - `universe.parquet` — `fetch-universe` 写入的全 A 股清单 (code/name/market)
+- `stock_industry_map.parquet` — Pool B 用的 `code → 行业` 映射(akshare 东财板块,30 天有效期)
+- `recommend_pool/poolb_<content_hash>_<isoyear>w<NN>.parquet` — Pool B 本周排名缓存
 
 报告:
 - 日报:`reports/<YYYY-MM-DD>.html` + `reports/latest.html`
@@ -156,7 +168,7 @@ python -m stockpool factors pick-by-ic \
 
 ## 测试
 
-152 个,`pytest tests/ -q` 一次跑完。按域分布:
+233 个,`pytest tests/ -q` 一次跑完。按域分布:
 
 | 文件 | 覆盖 |
 |---|---|
@@ -178,6 +190,8 @@ python -m stockpool factors pick-by-ic \
 | `test_ml_strategy_panel.py` | factor_panel 注入 + with_stock 传播 + cross-sec 不退化 |
 | `test_config.py` | Pydantic 校验(含 `strategy` 段) |
 | `test_report_smoke.py` | 全链路 `cmd_run` 烟雾 |
+| `test_industry_map.py` | baostock + akshare 双源 mock,auto-fallback 链,parquet 缓存 / 过期 / failure-isolation |
+| `test_recommend_pool.py` | Pool B 漏斗(流动性/ST/行业上限)+ ISO 周缓存 + content_hash 失效 + 失败隔离 |
 | `test_factors_analysis.py` | FactorAnalysisResult / compute_daily_ic / classify_regimes / half-life / analyze_factors / pick_top_factors |
 | `test_factors_analysis_report.py` | HTML 渲染烟雾 + 空 regime 处理 |
 | `test_cli_factors_analyze.py` | `factors analyze` 与 `factors pick-by-ic` CLI 烟雾 |
@@ -250,7 +264,7 @@ strategy:
 
 - 做空、多标的组合、盘中数据、部分成交、资金成本(融资融券)
 - 仓位管理仅"满仓单笔"或"固定额度多笔"两种;无 Kelly / 比例追加
-- 个股 → 板块的**自动**映射:目前需要在 `stocks[].sector` 手填(中文名或 6 位 88xxxx 代码);自动从 mootdx 拉成分关系会触发 tdxpy 的 bytearray bug,留作 follow-up
+- 个股 → 板块的**自动**映射:`cfg.stocks[].sector` 仍需手填(中文名或 6 位 88xxxx 代码);**Pool B 的 code→行业映射独立**走 baostock/akshare(见 `industry_map.py`)。mootdx 路径不可用 —— 实测 TDX 服务器对 `block_hy.dat` 返回 0 字节,触发 tdxpy 的空 bytearray bug
 
 ## 改动后更新文档(CLAUDE.md + README.md)
 

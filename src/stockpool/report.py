@@ -1,16 +1,20 @@
 """HTML 报告生成 — pyecharts driver."""
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from pyecharts import options as opts
 from pyecharts.charts import Bar, Grid, Kline, Line
 
 from stockpool.signals import Trigger
+
+if TYPE_CHECKING:
+    from stockpool.recommend_pool import PoolBEntry
 
 
 _VERDICT_LABEL = {
@@ -403,7 +407,7 @@ def _stock_section_html(a: StockAnalysis, klines_to_show: int) -> str:
     context_bar = _context_bar_html(a.context)
 
     return f"""
-    <details id="stock-{a.code}" open>
+    <details id="stock-{a.code}">
       <summary>
         <span style="font-size:1.3em; font-weight:bold">{a.code} {a.name}</span>
         <span style="color:{color}; margin-left:1em">{emoji} {label} 终分 {a.final_score:+.1f}</span>
@@ -452,6 +456,105 @@ _CSS = """
 """
 
 
+def _render_pool_b_section(pool_b: list["PoolBEntry"], run_date: str) -> str:
+    """Pool B (全市场量化推荐池) 底部段。每周刷新,允许与 Pool A 重叠 (⭐)。"""
+    from datetime import date as _date
+    iso = _date.fromisoformat(run_date).isocalendar()
+    rows = []
+    for e in pool_b:
+        emoji, label, color = _VERDICT_LABEL.get(e.verdict, ("⚪", "观望", "#999"))
+        star = "⭐" if e.is_in_pool_a else ""
+        rows.append(
+            f"<tr>"
+            f"<td style='text-align:right'>{e.rank}</td>"
+            f"<td>{e.code}</td>"
+            f"<td>{e.name} {star}</td>"
+            f"<td>{e.industry}</td>"
+            f"<td style='text-align:right; font-weight:bold; color:{color}'>"
+            f"{e.final_score:+.3f}</td>"
+            f"<td><span style='color:{color}'>{emoji} {label}</span></td>"
+            f"</tr>"
+        )
+    return f"""
+  <h2>Pool B · 全市场量化推荐池 (top {len(pool_b)})</h2>
+  <p class="meta">
+    本池每周刷新 (ISO {iso.year}-W{iso.week:02d}),按当前策略
+    <code>predict_latest</code> 全市场打分,经流动性 + ST + 行业上限漏斗后取 top-N。
+    标 ⭐ 的代码同时在自选 Pool A 中。
+  </p>
+  <table class="overview">
+    <thead><tr>
+      <th>排名</th><th>代码</th><th>名称</th><th>行业</th>
+      <th>终分</th><th>判定</th>
+    </tr></thead>
+    <tbody>{"".join(rows)}</tbody>
+  </table>
+"""
+
+
+_ECHARTS_LIB_RE = re.compile(
+    r'\s*<script type="text/javascript" src="[^"]*echarts\.min\.js"></script>'
+)
+_ECHARTS_INIT_RE = re.compile(
+    r'<script>(\s*var chart_[0-9a-f]+ = echarts\.init\b.*?)</script>',
+    re.DOTALL,
+)
+
+_LAZY_LOADER_JS = """
+<script>
+(function () {
+  function activate(root) {
+    root.querySelectorAll('script[type="text/echarts-pending"]').forEach(function (s) {
+      if (s.dataset.done) return;
+      var ns = document.createElement('script');
+      ns.text = s.textContent;
+      s.parentNode.insertBefore(ns, s.nextSibling);
+      s.dataset.done = '1';
+    });
+  }
+  function openHashTarget() {
+    if (!location.hash) return;
+    var el = document.getElementById(location.hash.slice(1));
+    if (el && el.tagName === 'DETAILS') el.open = true;
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('details').forEach(function (d) {
+      d.addEventListener('toggle', function () { if (d.open) activate(d); });
+    });
+    openHashTarget();
+  });
+  window.addEventListener('hashchange', openHashTarget);
+})();
+</script>
+"""
+
+
+def _optimize_html(html: str) -> str:
+    """单次 echarts lib + 懒加载图表 init,改善大报告首屏速度。
+
+    1. 删除每章重复的 ``<script src=".../echarts.min.js">``,在 ``<head>`` 放一份带
+       ``defer`` 的引用。
+    2. 把 ``<script>var chart_UUID = echarts.init(...)...</script>`` 改成
+       ``type="text/echarts-pending"``,避免页面加载时立即执行。
+    3. 注入小段 loader:``<details>`` 第一次展开(或被锚点定位)时再执行其内
+       的延迟脚本。
+    """
+    lib_tags = _ECHARTS_LIB_RE.findall(html)
+    if lib_tags:
+        html = _ECHARTS_LIB_RE.sub('', html)
+        lib_tag = lib_tags[0].strip().replace(
+            '></script>', ' defer></script>', 1
+        )
+        html = html.replace('</head>', f'  {lib_tag}\n</head>', 1)
+
+    html = _ECHARTS_INIT_RE.sub(
+        r'<script type="text/echarts-pending">\1</script>',
+        html,
+    )
+
+    return html.replace('</body>', _LAZY_LOADER_JS + '</body>', 1)
+
+
 def _summary_counts(analyses: list[StockAnalysis]) -> str:
     counts = {k: 0 for k in _VERDICT_LABEL}
     for a in analyses:
@@ -472,6 +575,7 @@ def render_report(
     keep_history: bool,
     klines_to_show: int = 120,
     market_context: list[ContextSignal] | None = None,
+    pool_b: list["PoolBEntry"] | None = None,
 ) -> Path:
     """Render full-page HTML report, return file path."""
     output_dir = Path(output_dir)
@@ -487,6 +591,8 @@ def render_report(
     market_html = ""
     if market_context:
         market_html = f"<h2>市场环境</h2>{_context_bar_html(market_context)}"
+
+    pool_b_html = _render_pool_b_section(pool_b, run_date) if pool_b else ""
 
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -514,6 +620,8 @@ def render_report(
   <h2>单股详情</h2>
   {stock_sections}
 
+  {pool_b_html}
+
   <footer>
     <p>Config: <code>{config_path}</code> &nbsp; hash <code>{config_hash}</code></p>
     <p>⚠️ <strong>免责声明:</strong>本报告基于公开行情数据的技术指标计算,
@@ -523,6 +631,7 @@ def render_report(
 </body>
 </html>
 """
+    html = _optimize_html(html)
     out_path.write_text(html, encoding="utf-8")
 
     latest = output_dir / "latest.html"
