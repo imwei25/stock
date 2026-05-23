@@ -183,19 +183,55 @@ class SelectorConfig(BaseModel):
     lightgbm: LightGBMSelectorConfig = Field(default_factory=LightGBMSelectorConfig)
 
 
+class ICWeighterConfig(BaseModel):
+    """IC weighter hyperparameters (was flat fields on WeighterConfig pre-PR-B2)."""
+    model_config = ConfigDict(extra="forbid")
+    use_rank: bool = True
+    min_abs_ic: float = Field(default=0.0, ge=0.0)
+
+
+class IRWeighterConfig(BaseModel):
+    """IR weighter hyperparameters.
+
+    ``IRWeighter`` internally uses ``use_rank`` to choose Spearman vs Pearson
+    when computing per-chunk IC; ``min_abs_ir`` filters factors by IR magnitude.
+    """
+    model_config = ConfigDict(extra="forbid")
+    n_chunks: int = Field(default=6, gt=0)
+    use_rank: bool = True
+    min_abs_ir: float = Field(default=0.0, ge=0.0)
+
+
+class EqualWeighterConfig(BaseModel):
+    """Equal weighter has no hyperparameters; placeholder for uniform structure."""
+    model_config = ConfigDict(extra="forbid")
+
+
+class LightGBMWeighterConfig(BaseModel):
+    """LightGBM weighter hyperparameters. Defaults match LightGBMSelectorConfig."""
+    model_config = ConfigDict(extra="forbid")
+    num_leaves: int = Field(default=15, gt=1)
+    min_data_in_leaf: int = Field(default=20, gt=0)
+    learning_rate: float = Field(default=0.05, gt=0)
+    num_iterations: int = Field(default=200, gt=0)
+    max_depth: int = Field(default=4, gt=0)
+    random_state: int = Field(default=42, ge=0)
+    verbose: int = Field(default=-1)
+
+
 class WeighterConfig(BaseModel):
     """Step-2 (factor weighting) settings.
 
-    * ``ic``: weight ∝ Spearman/Pearson IC against the target.
-    * ``ir``: weight ∝ information ratio (mean(IC)/std(IC)) over sub-windows.
-    * ``equal``: equal weight on every selected factor (baseline).
+    PR-B2 refactors this from flat fields to subnested per-type blocks
+    (ic / ir / equal / lightgbm), parallel to PR-A's SelectorConfig.
+    Default ``type`` is currently ``"ic"`` (Task 1); Task 4 flips it.
     """
-    type: Literal["ic", "ir", "equal"] = "ic"
-    use_rank: bool = True
-    min_abs_ic: float = Field(default=0.0, ge=0.0)
-    # IR-only
-    n_chunks: int = Field(default=6, gt=0)
-    min_abs_ir: float = Field(default=0.0, ge=0.0)
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["ic", "ir", "equal", "lightgbm"] = "ic"
+    ic: ICWeighterConfig = Field(default_factory=ICWeighterConfig)
+    ir: IRWeighterConfig = Field(default_factory=IRWeighterConfig)
+    equal: EqualWeighterConfig = Field(default_factory=EqualWeighterConfig)
+    lightgbm: LightGBMWeighterConfig = Field(default_factory=LightGBMWeighterConfig)
 
 
 class QuantileThresholds(BaseModel):

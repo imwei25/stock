@@ -166,11 +166,22 @@ strategy:
         tol: 1.0e-6
 
     weighter:
-      type: ic                # ic | ir | equal
-      use_rank: true          # rank IC (Spearman) 更稳健
-      min_abs_ic: 0.0
-      n_chunks: 6             # 仅 type=ir 时用
-      min_abs_ir: 0.0
+      type: ic                # ic | ir | equal | lightgbm (PR-B2 Task 4 改默认)
+      ic:
+        use_rank: true        # rank IC (Spearman) 更稳健
+        min_abs_ic: 0.0
+      ir:
+        n_chunks: 6
+        use_rank: true
+        min_abs_ir: 0.0
+      # equal 子段无超参,不写就用 EqualWeighterConfig() 默认空块
+      # lightgbm:             # PR-B2 Task 4 启用时可调超参,默认见 LightGBMWeighterConfig
+      #   num_leaves: 15
+      #   min_data_in_leaf: 20
+      #   learning_rate: 0.05
+      #   num_iterations: 200
+      #   max_depth: 4
+      #   random_state: 42
 
     # 训练集分位数 -> verdict; 必须 strong_sell < sell < buy < strong_buy
     thresholds:

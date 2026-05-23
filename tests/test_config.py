@@ -146,7 +146,7 @@ def test_strategy_can_be_set_to_ml_factor(tmp_path):
             "refit_every": 30,
             "panel_mode": "pooled",
             "selector": {"type": "lasso", "lasso": {"alpha": 0.01}},
-            "weighter": {"type": "ir", "n_chunks": 8},
+            "weighter": {"type": "ir", "ir": {"n_chunks": 8}},
             "thresholds": {
                 "strong_buy": 0.85, "buy": 0.65, "sell": 0.35, "strong_sell": 0.15,
             },
@@ -159,7 +159,7 @@ def test_strategy_can_be_set_to_ml_factor(tmp_path):
     assert cfg.strategy.ml_factor.factors == ["momentum_5", "macd_hist"]
     assert cfg.strategy.ml_factor.panel_mode == "pooled"
     assert cfg.strategy.ml_factor.weighter.type == "ir"
-    assert cfg.strategy.ml_factor.weighter.n_chunks == 8
+    assert cfg.strategy.ml_factor.weighter.ir.n_chunks == 8
     assert cfg.strategy.ml_factor.thresholds.strong_buy == 0.85
 
 
@@ -329,3 +329,100 @@ def test_selector_unknown_type_rejected():
     from stockpool.config import SelectorConfig
     with pytest.raises(pydantic.ValidationError):
         SelectorConfig.model_validate({"type": "xgboost"})
+
+
+def test_weighter_default_type_is_still_ic_in_task1():
+    """Task 1 keeps default type='ic' to preserve behavior. Task 4 flips it."""
+    from stockpool.config import WeighterConfig
+    cfg = WeighterConfig()
+    assert cfg.type == "ic"
+
+
+def test_weighter_ic_subcfg_explicit():
+    from stockpool.config import WeighterConfig
+    cfg = WeighterConfig.model_validate({
+        "type": "ic",
+        "ic": {"use_rank": False, "min_abs_ic": 0.05},
+    })
+    assert cfg.type == "ic"
+    assert cfg.ic.use_rank is False
+    assert cfg.ic.min_abs_ic == 0.05
+
+
+def test_weighter_ic_subcfg_defaults():
+    from stockpool.config import WeighterConfig
+    cfg = WeighterConfig.model_validate({"type": "ic"})
+    assert cfg.ic.use_rank is True
+    assert cfg.ic.min_abs_ic == 0.0
+
+
+def test_weighter_ir_subcfg_explicit():
+    from stockpool.config import WeighterConfig
+    cfg = WeighterConfig.model_validate({
+        "type": "ir",
+        "ir": {"n_chunks": 4, "use_rank": False, "min_abs_ir": 0.1},
+    })
+    assert cfg.type == "ir"
+    assert cfg.ir.n_chunks == 4
+    assert cfg.ir.use_rank is False
+    assert cfg.ir.min_abs_ir == 0.1
+
+
+def test_weighter_ir_subcfg_defaults():
+    from stockpool.config import WeighterConfig
+    cfg = WeighterConfig.model_validate({"type": "ir"})
+    assert cfg.ir.n_chunks == 6
+    assert cfg.ir.use_rank is True
+    assert cfg.ir.min_abs_ir == 0.0
+
+
+def test_weighter_equal_subcfg_parses():
+    from stockpool.config import WeighterConfig
+    cfg = WeighterConfig.model_validate({"type": "equal"})
+    assert cfg.type == "equal"
+    assert cfg.equal is not None
+
+
+def test_weighter_lightgbm_subcfg_explicit():
+    from stockpool.config import WeighterConfig
+    cfg = WeighterConfig.model_validate({
+        "type": "lightgbm",
+        "lightgbm": {
+            "num_leaves": 31,
+            "min_data_in_leaf": 50,
+            "learning_rate": 0.1,
+            "num_iterations": 100,
+            "max_depth": 6,
+            "random_state": 7,
+            "verbose": 0,
+        },
+    })
+    assert cfg.type == "lightgbm"
+    assert cfg.lightgbm.num_leaves == 31
+    assert cfg.lightgbm.learning_rate == 0.1
+
+
+def test_weighter_lightgbm_subcfg_defaults():
+    from stockpool.config import WeighterConfig
+    cfg = WeighterConfig.model_validate({"type": "lightgbm"})
+    assert cfg.lightgbm.num_leaves == 15
+    assert cfg.lightgbm.min_data_in_leaf == 20
+    assert cfg.lightgbm.learning_rate == 0.05
+    assert cfg.lightgbm.num_iterations == 200
+    assert cfg.lightgbm.max_depth == 4
+    assert cfg.lightgbm.random_state == 42
+    assert cfg.lightgbm.verbose == -1
+
+
+def test_weighter_flat_use_rank_rejected():
+    import pydantic
+    from stockpool.config import WeighterConfig
+    with pytest.raises(pydantic.ValidationError):
+        WeighterConfig.model_validate({"type": "ic", "use_rank": True})
+
+
+def test_weighter_unknown_type_rejected():
+    import pydantic
+    from stockpool.config import WeighterConfig
+    with pytest.raises(pydantic.ValidationError):
+        WeighterConfig.model_validate({"type": "catboost"})

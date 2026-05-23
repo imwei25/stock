@@ -245,16 +245,26 @@ class SMACrossStrategy(Strategy):
 
 
 def _build_weighter(cfg) -> FactorWeighter:
-    """Translate WeighterConfig → concrete FactorWeighter."""
+    """Translate WeighterConfig → concrete FactorWeighter.
+
+    PR-B2 Task 1: reads from subnested fields.
+    PR-B2 Task 4 will add the "lightgbm" case.
+    """
     if cfg.type == "ic":
-        return ICWeighter(use_rank=cfg.use_rank, min_abs_ic=cfg.min_abs_ic)
+        return ICWeighter(use_rank=cfg.ic.use_rank, min_abs_ic=cfg.ic.min_abs_ic)
     if cfg.type == "ir":
         return IRWeighter(
-            n_chunks=cfg.n_chunks, use_rank=cfg.use_rank,
-            min_abs_ir=cfg.min_abs_ir,
+            n_chunks=cfg.ir.n_chunks,
+            use_rank=cfg.ir.use_rank,
+            min_abs_ir=cfg.ir.min_abs_ir,
         )
     if cfg.type == "equal":
         return EqualWeighter()
+    if cfg.type == "lightgbm":
+        raise NotImplementedError(
+            "weighter.type='lightgbm' arrives in PR-B2 Task 4 "
+            "(LightGBMWeighter not implemented yet)"
+        )
     raise ValueError(f"unknown weighter type: {cfg.type!r}")
 
 
