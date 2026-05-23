@@ -548,9 +548,9 @@ class MLFactorStrategy(Strategy):
 
         pipeline = TwoStepPipeline(
             selector=LassoSelector(
-                alpha=cfg.selector.alpha,
-                max_iter=cfg.selector.max_iter,
-                tol=cfg.selector.tol,
+                alpha=cfg.selector.lasso.alpha,
+                max_iter=cfg.selector.lasso.max_iter,
+                tol=cfg.selector.lasso.tol,
             ),
             weighter=_build_weighter(cfg.weighter),
         )
