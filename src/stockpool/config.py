@@ -139,16 +139,27 @@ class ReportConfig(BaseModel):
 
 # === ML factor strategy ===
 
-class SelectorConfig(BaseModel):
-    """Step-1 (factor selection) settings.
+class LassoConfig(BaseModel):
+    """Lasso-specific hyperparameters for ``selector.type == 'lasso'``.
 
-    Currently only ``type: lasso`` is supported; ``alpha`` is the L1 penalty
-    strength on standardised features (typical range 1e-4 — 1e-1).
+    ``alpha`` is the L1 penalty on standardised features (typical range 1e-4 — 1e-1).
     """
-    type: Literal["lasso"] = "lasso"
+    model_config = ConfigDict(extra="forbid")
     alpha: float = Field(default=0.001, ge=0.0)
     max_iter: int = Field(default=1000, gt=0)
     tol: float = Field(default=1e-6, gt=0.0)
+
+
+class SelectorConfig(BaseModel):
+    """Step-1 (factor selection) settings.
+
+    PR-A only supports ``type: lasso``; PR-B will add ``"lightgbm"``.
+    Hyperparameters live in the per-type subsection (``lasso.alpha`` etc.) so
+    new selector types can add their own block without flattening into this one.
+    """
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["lasso"] = "lasso"
+    lasso: LassoConfig = Field(default_factory=LassoConfig)
 
 
 class WeighterConfig(BaseModel):
@@ -270,6 +281,35 @@ class StrategyConfig(BaseModel):
     ml_factor: MLFactorConfig = Field(default_factory=MLFactorConfig)
 
 
+class RecommendPoolConfig(BaseModel):
+    """Pool B — 全市场量化推荐池.
+
+    在保留 ``cfg.stocks``(Pool A, 手填 watchlist)的前提下,对全市场 A 股
+    调用 ``cfg.strategy`` 的 ``predict_latest`` 打分,经 "流动性 + ST 剔除 +
+    行业上限" 漏斗后取 top-N,作为日报底部的推荐池。两池独立、允许重叠。
+
+    周缓存:跨过 ISO 周边界才重算(``refresh="weekly"``,默认);缓存键含
+    ``cfg.content_hash``,改任何 yaml 字段都自动失效。
+
+    Pool B 不做回测(MVP);留作 follow-up。
+    """
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    top_n: int = Field(default=30, gt=0)
+    min_avg_amount_20d: float = Field(
+        default=5e7, ge=0.0,
+        description="最近 20 日均成交额下限 (元)。mootdx volume 单位是手, "
+                    "amount = volume * close * 100。",
+    )
+    max_per_industry: int = Field(default=5, gt=0)
+    refresh: Literal["weekly", "always", "never"] = "weekly"
+    cache_dir: str = "data/recommend_pool"
+    industry_map_max_age_days: int = Field(default=30, gt=0)
+    # baostock = 一次性 5500+ 行,稳;akshare = 逐板块拉,慢且受代理影响;
+    # auto = 先 baostock 后 akshare
+    industry_source: Literal["auto", "baostock", "akshare"] = "auto"
+
+
 class AppConfig(BaseModel):
     """Root config. `content_hash` is set post-load, not in YAML."""
     stocks: list[Stock]
@@ -282,6 +322,7 @@ class AppConfig(BaseModel):
     report: ReportConfig
     context: ContextConfig = Field(default_factory=ContextConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
+    recommend_pool: RecommendPoolConfig = Field(default_factory=RecommendPoolConfig)
 
     content_hash: str = ""
 

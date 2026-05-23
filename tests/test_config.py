@@ -145,7 +145,7 @@ def test_strategy_can_be_set_to_ml_factor(tmp_path):
             "train_window": 500,
             "refit_every": 30,
             "panel_mode": "pooled",
-            "selector": {"type": "lasso", "alpha": 0.01},
+            "selector": {"type": "lasso", "lasso": {"alpha": 0.01}},
             "weighter": {"type": "ir", "n_chunks": 8},
             "thresholds": {
                 "strong_buy": 0.85, "buy": 0.65, "sell": 0.35, "strong_sell": 0.15,
@@ -186,3 +186,34 @@ def test_quantile_thresholds_must_be_ordered(tmp_path):
     cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_config(cfg_file)
+
+
+def test_selector_lasso_subcfg_explicit():
+    """New form: selector.lasso.alpha works."""
+    from stockpool.config import SelectorConfig
+    cfg = SelectorConfig.model_validate({
+        "type": "lasso",
+        "lasso": {"alpha": 0.01, "max_iter": 500, "tol": 1e-5},
+    })
+    assert cfg.type == "lasso"
+    assert cfg.lasso.alpha == 0.01
+    assert cfg.lasso.max_iter == 500
+    assert cfg.lasso.tol == 1e-5
+
+
+def test_selector_lasso_subcfg_defaults():
+    """selector: {type: lasso} uses LassoConfig defaults."""
+    from stockpool.config import SelectorConfig
+    cfg = SelectorConfig.model_validate({"type": "lasso"})
+    assert cfg.lasso.alpha == 0.001
+    assert cfg.lasso.max_iter == 1000
+    assert cfg.lasso.tol == 1e-6
+
+
+def test_selector_flat_alpha_rejected():
+    """Legacy flat alpha field on SelectorConfig must raise ValidationError."""
+    import pydantic
+    from stockpool.config import SelectorConfig
+    with pytest.raises(pydantic.ValidationError) as exc:
+        SelectorConfig.model_validate({"type": "lasso", "alpha": 0.01})
+    assert "extra" in str(exc.value).lower() or "forbid" in str(exc.value).lower()
