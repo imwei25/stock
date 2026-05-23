@@ -262,3 +262,70 @@ def test_mlfactor_label_type_unknown_rejected():
     from stockpool.config import MLFactorConfig
     with pytest.raises(pydantic.ValidationError):
         MLFactorConfig(label_type="momentum")
+
+
+def test_selector_default_type_is_lightgbm():
+    """Default selector.type flips to 'lightgbm' in PR-B1."""
+    from stockpool.config import SelectorConfig
+    cfg = SelectorConfig()
+    assert cfg.type == "lightgbm"
+
+
+def test_selector_lightgbm_subcfg_explicit():
+    """selector.lightgbm.num_leaves and friends parse from YAML."""
+    from stockpool.config import SelectorConfig
+    cfg = SelectorConfig.model_validate({
+        "type": "lightgbm",
+        "lightgbm": {
+            "num_leaves": 31,
+            "min_data_in_leaf": 50,
+            "learning_rate": 0.1,
+            "num_iterations": 100,
+            "max_depth": 6,
+            "random_state": 7,
+            "top_k_factors": 10,
+            "min_importance_ratio": 0.05,
+            "verbose": 0,
+        },
+    })
+    assert cfg.type == "lightgbm"
+    assert cfg.lightgbm.num_leaves == 31
+    assert cfg.lightgbm.min_data_in_leaf == 50
+    assert cfg.lightgbm.learning_rate == 0.1
+    assert cfg.lightgbm.num_iterations == 100
+    assert cfg.lightgbm.max_depth == 6
+    assert cfg.lightgbm.random_state == 7
+    assert cfg.lightgbm.top_k_factors == 10
+    assert cfg.lightgbm.min_importance_ratio == 0.05
+    assert cfg.lightgbm.verbose == 0
+
+
+def test_selector_lightgbm_subcfg_defaults():
+    """LightGBMSelectorConfig defaults match spec section 3.2."""
+    from stockpool.config import SelectorConfig
+    cfg = SelectorConfig.model_validate({"type": "lightgbm"})
+    assert cfg.lightgbm.num_leaves == 15
+    assert cfg.lightgbm.min_data_in_leaf == 20
+    assert cfg.lightgbm.learning_rate == 0.05
+    assert cfg.lightgbm.num_iterations == 200
+    assert cfg.lightgbm.max_depth == 4
+    assert cfg.lightgbm.random_state == 42
+    assert cfg.lightgbm.top_k_factors == 20
+    assert cfg.lightgbm.min_importance_ratio == 0.01
+    assert cfg.lightgbm.verbose == -1
+
+
+def test_selector_lightgbm_flat_num_leaves_rejected():
+    """Flat num_leaves at SelectorConfig level is rejected (extra='forbid')."""
+    import pydantic
+    from stockpool.config import SelectorConfig
+    with pytest.raises(pydantic.ValidationError):
+        SelectorConfig.model_validate({"type": "lightgbm", "num_leaves": 31})
+
+
+def test_selector_unknown_type_rejected():
+    """type='xgboost' is not in Literal['lasso','lightgbm'] → reject."""
+    import pydantic
+    from stockpool.config import SelectorConfig
+    with pytest.raises(pydantic.ValidationError):
+        SelectorConfig.model_validate({"type": "xgboost"})

@@ -150,16 +150,37 @@ class LassoConfig(BaseModel):
     tol: float = Field(default=1e-6, gt=0.0)
 
 
+class LightGBMSelectorConfig(BaseModel):
+    """LightGBM-based selector hyperparameters.
+
+    Defaults are conservative for walk-forward training (small per-refit
+    training set; the embedded forest is intentionally shallow). Tighten
+    ``num_leaves`` / increase ``min_data_in_leaf`` if observed IC is unstable
+    across refits.
+    """
+    model_config = ConfigDict(extra="forbid")
+    num_leaves: int = Field(default=15, gt=1)
+    min_data_in_leaf: int = Field(default=20, gt=0)
+    learning_rate: float = Field(default=0.05, gt=0)
+    num_iterations: int = Field(default=200, gt=0)
+    max_depth: int = Field(default=4, gt=0)
+    random_state: int = Field(default=42, ge=0)
+    top_k_factors: int = Field(default=20, gt=0)
+    min_importance_ratio: float = Field(default=0.01, ge=0, le=1)
+    verbose: int = Field(default=-1)
+
+
 class SelectorConfig(BaseModel):
     """Step-1 (factor selection) settings.
 
-    PR-A only supports ``type: lasso``; PR-B will add ``"lightgbm"``.
-    Hyperparameters live in the per-type subsection (``lasso.alpha`` etc.) so
-    new selector types can add their own block without flattening into this one.
+    PR-A introduced ``selector.lasso.*`` subnesting. PR-B1 adds
+    ``selector.lightgbm.*`` as a parallel block and flips the default
+    ``type`` to ``"lightgbm"``.
     """
     model_config = ConfigDict(extra="forbid")
-    type: Literal["lasso"] = "lasso"
+    type: Literal["lasso", "lightgbm"] = "lightgbm"
     lasso: LassoConfig = Field(default_factory=LassoConfig)
+    lightgbm: LightGBMSelectorConfig = Field(default_factory=LightGBMSelectorConfig)
 
 
 class WeighterConfig(BaseModel):
