@@ -59,7 +59,7 @@ python -m stockpool factors pick-by-ic \
 | `src/stockpool/factors_analysis.py` | **因子分析**: 滚动 IC / IR / half-life / 相关性 / regime 切片;`analyze_factors` + `pick_top_factors` |
 | `src/stockpool/factors_analysis_report.py` | pyecharts HTML 报告: 排名表 + IC 时序 + 相关性 heatmap + regime 拆分 |
 | `src/stockpool/panel.py` | **Panel** 数据结构 (T×N 宽表 dict) + `build_panel_from_cache` |
-| `src/stockpool/ml/` | **两步法 ML 组合**(dataset / Lasso selector / IC&IR weighter / TwoStepPipeline) |
+| `src/stockpool/ml/` | **两步法 ML 组合**(dataset / Lasso selector(`selector.lasso.*`) / IC&IR weighter / TwoStepPipeline) |
 | `src/stockpool/strategy_factory.py` | 按 `cfg.strategy.name` 工厂构造策略 + ML 通用 simulate;ml_factor 注入 `cache_dir` 以启用日报路径的月度训练缓存;`build_factor_panel` 顶层助手用于 CLI 预算 |
 | `src/stockpool/report.py` | 日报 HTML(含市场背景、板块上下文);`_optimize_html` 做 echarts lib 去重 + `<details>` 默认折叠 + 图表懒加载,降低首屏开销 |
 | `src/stockpool/backtest.py` | 单信号前瞻命中率 |
@@ -126,7 +126,7 @@ python -m stockpool factors pick-by-ic \
 - `backtest` — `forward_days` / `equity_curve_holding_days` / `risk_free_rate` / `costs` / **`engine`** / **`position_size`** / **`max_concurrent_lots`**
 - `context` — `indices`(大盘指数列表,默认上证/深证成指)
 - `report` — `output_dir` / `keep_history` / `klines_to_show`
-- **`strategy`** — `name` (`composite_verdict` 默认 / `ml_factor`) + `ml_factor` 子配置(`factors` 或 **`factors_file`** / `horizon` / `train_window` / `refit_every` / `panel_mode` / **`training_universe`** / **`share_pool_fit`** / `selector` / `weighter` / `thresholds` / `*_verdicts`)。`factors_file` 指向 HTML picker 导出的 JSON,与 `factors` 列表二选一。**`training_universe`**: `pool`(默认,只用 cfg.stocks)/ `all`(全市场 cache,需先 `fetch-universe`;仅在 `panel_mode=pooled` 时生效)。**`share_pool_fit`**(默认 `true`,仅 `panel_mode=pooled` 生效):跨股共享 fit,缓存键 `(sig, year, month)`,同月内所有股、所有 refit_bar 复用同一 pipeline;训练集不再剔除 host,host 自己以 ~1/N 权重进入自己的训练。切到 `all` 或翻 `share_pool_fit` 后旧的 ml_models pkl 会因 sig 变化自动失效
+- **`strategy`** — `name` (`composite_verdict` 默认 / `ml_factor`) + `ml_factor` 子配置(`factors` 或 **`factors_file`** / `horizon` / `train_window` / `refit_every` / `panel_mode` / **`training_universe`** / **`share_pool_fit`** / **`embargo_days`** / **`label_type`** / `selector.lasso` / `weighter` / `thresholds` / `*_verdicts`)。`factors_file` 指向 HTML picker 导出的 JSON,与 `factors` 列表二选一。**`training_universe`**: `pool`(默认,只用 cfg.stocks)/ `all`(全市场 cache,需先 `fetch-universe`;仅在 `panel_mode=pooled` 时生效)。**`share_pool_fit`**(默认 `true`,仅 `panel_mode=pooled` 生效):跨股共享 fit,缓存键 `(sig, year, month)`,同月内所有股、所有 refit_bar 复用同一 pipeline;训练集不再剔除 host,host 自己以 ~1/N 权重进入自己的训练。**`embargo_days`**(默认 `null` = auto = `horizon`,F2 PR-A 新增):walk-forward 训练集与测试集之间的额外间隔,消除 horizon 日前向收益的标签泄露;设 `0` 回到 pre-PR-A 行为。**`label_type`**(默认 `"return"`,F2 PR-A 接口位):训练标签变换 — `"return"` 已实装,`"vol_adjusted"` / `"cross_sec_rank"` 是占位 raise `NotImplementedError`,后续 PR 实装。**`selector.lasso`**(F2 PR-A 子段化):`alpha` / `max_iter` / `tol` 现在嵌在 `selector.lasso` 下,顶层扁平字段已被 Pydantic 拒绝;后续 PR-B 会加 `selector.lightgbm` 同级。切到 `all` 或翻 `share_pool_fit`、改 `embargo_days` / `label_type` / `selector` 任一项后旧的 ml_models pkl 会因 sig 变化自动失效
 - **`recommend_pool`** — Pool B(全市场量化推荐池)。`enabled`(默认 `true`)/ `top_n`(30)/ `min_avg_amount_20d`(5e7 元;mootdx `vol*close*100`)/ `max_per_industry`(5;"未知" 桶在**所有股都未映射时**自动跳过 cap,否则正常计)/ `refresh`(`weekly`默认/`always`/`never`)/ `cache_dir`(`data/recommend_pool`)/ `industry_map_max_age_days`(30)/ **`industry_source`**(`auto` 默认 = baostock→akshare 链 / `baostock` / `akshare`)。**前置条件**:必须先跑 `python -m stockpool fetch-universe`;首次运行自动从所选 industry_source 拉映射(baostock ~5-10s,akshare ~1-2min)。**缓存键**含 `cfg.content_hash`,改 yaml 任一字段都失效
 
 ## 数据流
@@ -195,6 +195,8 @@ python -m stockpool factors pick-by-ic \
 | `test_factors_analysis.py` | FactorAnalysisResult / compute_daily_ic / classify_regimes / half-life / analyze_factors / pick_top_factors |
 | `test_factors_analysis_report.py` | HTML 渲染烟雾 + 空 regime 处理 |
 | `test_cli_factors_analyze.py` | `factors analyze` 与 `factors pick-by-ic` CLI 烟雾 |
+| `test_ml_dataset_labels.py` | forward_return / forward_return_panel 的 label_type 接口(只 "return" 已实装) |
+| `test_ml_strategy_embargo.py` | walk-forward embargo: 默认 auto=horizon,explicit 0 恢复旧行为,泄露 bar 被排除 |
 
 写测试时:**用合成 OHLCV、`monkeypatch` 掉 AKShare 和 `_today`**(`test_cli_backtest.py` 是参考)。
 
