@@ -41,6 +41,7 @@ from stockpool.factors.registry import (
 # Side-effect: register built-in factors.
 from stockpool.factors import technical  # noqa: F401
 from stockpool.factors import wq101  # noqa: F401
+from stockpool.factors import custom  # noqa: F401
 
 __all__ = [
     "Factor",
