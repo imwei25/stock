@@ -75,6 +75,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 | `src/stockpool/report.py` | 日报 HTML(含市场背景、板块上下文);`_optimize_html` 做 echarts lib 去重 + `<details>` 默认折叠 + 图表懒加载,降低首屏开销 |
 | `src/stockpool/backtest.py` | 单信号前瞻命中率 |
 | `src/stockpool/backtesting/` | **回测框架**(策略 ABC + 引擎),见下 |
+| `src/stockpool/backtesting/sizing.py` | **LotSizer Protocol** + `FixedLotSizer` / `VolTargetLotSizer` + `build_lot_sizer(SizingConfig)` 工厂 (F3 PR-C);独立模块,无 config 运行时依赖 (TYPE_CHECKING 引用) |
 | `src/stockpool/backtest_composite.py` | 综合策略回测的旧 API 适配层,委托给框架 |
 | `src/stockpool/backtest_report.py` | 回测 HTML 渲染 |
 
@@ -86,7 +87,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
   `generate_signals` 输出至少含 `date / open / close / signal`(`open` 用于次日开盘成交;省略时引擎按 `close.shift(1)` 兜底);
   可选 `should_reset_timer`(返回 True 重置 N 天计时器)、`predict_latest(daily_df) -> dict`(给日报路径用,返回最后一根 bar 的 `{signal, final_score, ...}`;默认实现是跑全程 `generate_signals` 取末行,子类可重写做单点优化或加缓存)。
 - `BacktestEngine` — 单仓位、long-only、T+1、单笔进出。
-- `MultiLotBacktestEngine` — 每个 buy 开一个独立的 `position_size` 大小 lot,各自计 N、各自记账。
+- `MultiLotBacktestEngine` — 每个 buy 开一个独立的 lot(仓位由 `LotSizer` 决定,见下方 Sizing 段),各自计 N、各自记账。
 - `BacktestResult` — `signals` / `curve` / `trades` / `metrics` / `max_holding_days` / `strategy_name`。
 - `TradeCosts(buy_cost, sell_cost)` — 比例(`0.001` = 0.1%)。
 - `compute_metrics` 纯函数 — total/ann return、max DD、Sharpe、win rate、avg trade ret。
@@ -107,7 +108,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 | `sell_verdicts` | `("sell","strong_sell")` | 触发 `should_exit` |
 | `refresh_verdicts` | `("strong_buy",)` | 持仓时触发 `should_reset_timer`(刷新 N 天计时);传 `()` 关闭 |
 
-**CLI 默认引擎是 `multi_lot`**(见 `config.yaml:backtest.engine`),`position_size=0.1`。
+**CLI 默认引擎是 `multi_lot`**(见 `config.yaml:backtest.engine`),`sizing.type` 默认 `vol_target`(F3 PR-C 起;切回老的固定仓位行为:`sizing.type: fixed`,`sizing.fixed.size: 0.1`)。
 要切回老的单仓位行为:`engine: single`。
 
 完整 API 参见 `docs/backtesting_framework.md`。
@@ -124,6 +125,17 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 - **`should_reset_timer` 胜出**:同时为真时优先于 `time_exit` 与 `should_exit`。
 - **B&H 基准不扣手续费**(让策略对比更保守),锚定 `open[0]`:`equity[t] = close[t]/open[0]`。
 
+## Sizing(F3 PR-C 起)
+
+`MultiLotBacktestEngine` 不再硬编码 `position_size`,改由 `LotSizer` 注入:
+
+- `FixedLotSizer(size)` — 老行为,每单恒定 `size` 比例
+- `VolTargetLotSizer(baseline, ref_vol, window, min, max, fallback)` — 按个股最近 `window` bars 的滚动 std 反比调仓:`size = baseline × (ref_vol / recent_vol)`,clip 到 `[min, max]`
+  - 冷启动(< window+1 bar)/ NaN / vol=0 → 走 `fallback`:`"fixed"` 退回 baseline,`"skip"` 返 0(本次不开仓)
+  - 公式锚点 `baseline = cfg.backtest.sizing.fixed.size`:fixed 和 vol_target 之间切换时,锚点不变,差异纯来自 vol-adjust
+- 工厂 `build_lot_sizer(cfg.backtest.sizing)` 是顶层 wiring(cli / backtest_runner / backtest_composite / strategy_factory / ab/config 全部走它)
+- `Trade.lot_size` 记录每笔成交的实际仓位,A/B 报告可用其做归因
+
 ## 配置 (`config.yaml`)
 
 所有字段由 `config.py:AppConfig` 校验。结构概览:
@@ -134,12 +146,12 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 - `weights` — 各信号触发的得分
 - `scoring` — `daily_weight` / `weekly_weight` / `resonance_bonus`(共振奖励)
 - `verdicts` — `strong_buy` / `buy` / `sell` / `strong_sell` 分数阈值
-- `backtest` — `forward_days` / `equity_curve_holding_days` / `risk_free_rate` / `costs` / **`engine`** / **`position_size`** / **`max_concurrent_lots`**
+- `backtest` — `forward_days` / `equity_curve_holding_days` / `risk_free_rate` / `costs` / **`engine`** / **`sizing`**(`type: fixed | vol_target`, 默认 `vol_target`;`fixed.size` 是 vol_target 公式的 baseline 锚点) / **~~`position_size`~~**(deprecated alias of `sizing.fixed.size`,自动迁移 + DeprecationWarning) / **`max_concurrent_lots`**
 - `context` — `indices`(大盘指数列表,默认上证/深证成指)
 - `report` — `output_dir` / `keep_history` / `klines_to_show`
 - **`strategy`** — `name` (`composite_verdict` 默认 / `ml_factor`) + `ml_factor` 子配置(`factors` 或 **`factors_file`** / `horizon` / `train_window` / `refit_every` / `panel_mode` / **`training_universe`** / **`share_pool_fit`** / **`embargo_days`** / **`label_type`** / `selector.{lasso|lightgbm}` / `weighter` / `thresholds` / `*_verdicts`)。`factors_file` 指向 HTML picker 导出的 JSON,与 `factors` 列表二选一。**`training_universe`**: `pool`(默认,只用 cfg.stocks)/ `all`(全市场 cache,需先 `fetch-universe`;仅在 `panel_mode=pooled` 时生效)。**`share_pool_fit`**(默认 `true`,仅 `panel_mode=pooled` 生效):跨股共享 fit,缓存键 `(sig, year, month)`,同月内所有股、所有 refit_bar 复用同一 pipeline;训练集不再剔除 host,host 自己以 ~1/N 权重进入自己的训练。**`embargo_days`**(默认 `null` = auto = `horizon`,F2 PR-A 新增):walk-forward 训练集与测试集之间的额外间隔,消除 horizon 日前向收益的标签泄露;设 `0` 回到 pre-PR-A 行为。**`label_type`**(默认 `"return"`,F2 PR-A 接口位):训练标签变换 — `"return"` 已实装,`"vol_adjusted"` / `"cross_sec_rank"` 是占位 raise `NotImplementedError`,后续 PR 实装。**`selector.{lasso|lightgbm}`**(F2 PR-A 子段化 + PR-B1 加 LGB):`type` 默认 **`"lasso"`**(2026-05-24 从 `"lightgbm"` 回退,见 `docs/ab_validation_results.md`:LGB+LGB 在 16 股 × 500bar baseline 上 sharpe 退 0.2 / return 退 20%),`lasso.{alpha,max_iter,tol}` 或 `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state,top_k_factors,min_importance_ratio}` 子段二选一,顶层扁平字段被 Pydantic 拒绝。改 `selector` 任一字段后旧 ml_models pkl 自动失效。切到 `all` 或翻 `share_pool_fit`、改 `embargo_days` / `label_type` / `selector` 任一项后旧的 ml_models pkl 会因 sig 变化自动失效。**`weighter.{ic|ir|equal|lightgbm}`**(F2 PR-B2 子段化):`type` 默认 **`"ic"`**(同 2026-05-24 回退,见上),`ic.{use_rank,min_abs_ic}` / `ir.{n_chunks,use_rank,min_abs_ir}` / `equal` (无参) / `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state}` 子段四选一,顶层扁平字段被 Pydantic 拒绝。LGB 仍可 opt-in,但需先调超参或扩股池验证。
 - **`recommend_pool`** — Pool B(全市场量化推荐池)。`enabled`(默认 `true`)/ `top_n`(30)/ `min_avg_amount_20d`(5e7 元;mootdx `vol*close*100`)/ `max_per_industry`(5;"未知" 桶在**所有股都未映射时**自动跳过 cap,否则正常计)/ `refresh`(`weekly`默认/`always`/`never`)/ `cache_dir`(`data/recommend_pool`)/ `industry_map_max_age_days`(30)/ **`industry_source`**(`auto` 默认 = baostock→akshare 链 / `baostock` / `akshare`)。**前置条件**:必须先跑 `python -m stockpool fetch-universe`;首次运行自动从所选 industry_source 拉映射(baostock ~5-10s,akshare ~1-2min)。**缓存键**含 `cfg.content_hash`,改 yaml 任一字段都失效
-- **A/B 测试**(独立配置文件 `ab.yaml`,主 `AppConfig` 不变):见 `docs/superpowers/specs/2026-05-24-ab-testing-design.md`。结构 `base_config: <path>` + 可选 `stocks_filter: [...]` (只能减) + `arms: {<name>: {strategy: {...}, backtest: {equity_curve_holding_days: [N], ...}}}` (恰好 2 个)。每个 arm 只能覆盖 `strategy` 段(整段替换)和 `backtest` 段(字段级合并,None 字段继承 base),其他顶层字段(`indicators`/`weights`/`verdicts`/`scoring`/`data`/`stocks`)继承 base。`equity_curve_holding_days` 强制单元素列表。ML 缓存通过 `effective_cfg.content_hash` 自动隔离,arm 间互不污染
+- **A/B 测试**(独立配置文件 `ab.yaml`,主 `AppConfig` 不变):见 `docs/superpowers/specs/2026-05-24-ab-testing-design.md`。结构 `base_config: <path>` + 可选 `stocks_filter: [...]` (只能减) + `arms: {<name>: {strategy: {...}, backtest: {equity_curve_holding_days: [N], ...}}}` (恰好 2 个)。每个 arm 只能覆盖 `strategy` 段(整段替换)和 `backtest` 段(字段级合并,None 字段继承 base),其他顶层字段(`indicators`/`weights`/`verdicts`/`scoring`/`data`/`stocks`)继承 base。`equity_curve_holding_days` 强制单元素列表。ML 缓存通过 `effective_cfg.content_hash` 自动隔离,arm 间互不污染。`backtest.sizing` 是 F3 PR-C 起新支持的覆盖字段(整段替换,与 strategy 段语义对齐),用于比较 fixed vs vol_target sizing。
 
 ## 数据流
 
@@ -181,12 +193,12 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 
 ## 测试
 
-338 个,`pytest tests/ -q` 一次跑完。按域分布:
+374 个,`pytest tests/ -q` 一次跑完。按域分布:
 
 | 文件 | 覆盖 |
 |---|---|
 | `test_backtesting_framework.py` | 引擎契约、T+1、成本、扫 N、Strategy ABC |
-| `test_multi_lot_engine.py` | 多仓位 lot 独立计时、现金约束、reset hook |
+| `test_multi_lot_engine.py` | 多仓位 lot 独立计时、现金约束、reset hook;`lot_sizer` 注入 + `Trade.lot_size` 透传 + skip-fallback 不开仓 |
 | `test_timer_reset.py` | strong_buy 刷新计时;reset 与 exit 同时为真时 reset 胜出 |
 | `test_backtest_composite.py` | 适配层、综合策略 walk-forward 等价性 |
 | `test_backtest.py` | 单信号命中率 |
@@ -215,6 +227,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 | `test_cli_factors_analyze.py` | `factors analyze` 与 `factors pick-by-ic` CLI 烟雾 |
 | `test_ml_dataset_labels.py` | forward_return / forward_return_panel 的 label_type 接口(只 "return" 已实装) |
 | `test_ml_strategy_embargo.py` | walk-forward embargo: 默认 auto=horizon,explicit 0 恢复旧行为,泄露 bar 被排除 |
+| `test_sizing.py` | FixedLotSizer / VolTargetLotSizer 数学 + fallback + build_lot_sizer 工厂 |
 
 写测试时:**用合成 OHLCV、`monkeypatch` 掉 AKShare 和 `_today`**(`test_cli_backtest.py` 是参考)。
 
@@ -307,7 +320,7 @@ strategy:
 - `Strategy` ABC、`BacktestEngine` / `MultiLotBacktestEngine` 的公开签名变化
 - `config.py` 中 schema 字段新增 / 删除 / 默认值改变 / 语义改变
 - CLI 子命令的增减、参数变化、命令行用法示例变化
-- 默认行为(尤其是 `engine`、`refresh_verdicts`、`position_size`、数据源行业板块路由)的切换
+- 默认行为(尤其是 `engine`、`refresh_verdicts`、`sizing`、数据源行业板块路由)的切换
 - 测试目录新增的"按域覆盖"文件 → CLAUDE.md 的测试表加一行
 - 数据流 / 缓存路径 / 报告路径 / 数据源 行为变化
 - 新增的因子来源/类型标签(影响 HTML picker 和 `factors list --source/--type` 用例)

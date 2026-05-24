@@ -332,6 +332,17 @@ arms:                              # 恰好两个 arm,key 名自由
 
 **当前不支持**:portfolio-level 回测(每个 arm 仍是 per-stock 独立 + 跨股聚合)、统计显著性检验(样本太小)、覆盖 `weights`/`verdicts`/`scoring` 顶层字段(留作 follow-up,等 `composite_verdict` 参数下沉到 `strategy.composite_verdict.*` 子段后自动可用)。完整 schema + 设计权衡见 `docs/superpowers/specs/2026-05-24-ab-testing-design.md`。
 
+### 仓位 sizing
+
+(适用于所有回测模式 — `backtest` 命令和 A/B 测试均生效)
+
+`backtest.sizing` 子段控制每笔买入的仓位大小:
+
+- **`sizing.type: fixed`** — 每只票同样大小(`sizing.fixed.size`,默认 10%)
+- **`sizing.type: vol_target`** (默认,F3 PR-C 起) — 按个股近期波动反比调仓,目标是让每只票贡献的风险大致相等。主效应是降低组合 max DD
+
+老的 `backtest.position_size: 0.1` 仍能工作(自动迁移 + DeprecationWarning),但新代码请直接写 `sizing` 子段。
+
 ## ⚠️ 免责声明
 
 本工具产出基于公开行情数据的技术指标计算,信号与打分仅供个人技术分析参考,
