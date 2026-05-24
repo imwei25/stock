@@ -250,10 +250,16 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         return 1
 
     if cfg.backtest.engine == "multi_lot":
-        _pos_size = cfg.backtest.sizing.fixed.size
-        engine_label = (
-            f"multi_lot · 每次买入 {_pos_size:.0%} 起始资本独立一单"
-        )
+        sizing = cfg.backtest.sizing
+        if sizing.type == "fixed":
+            sizing_desc = f"fixed {sizing.fixed.size:.0%}"
+        else:
+            vt = sizing.vol_target
+            sizing_desc = (
+                f"vol_target ref={vt.reference_vol_annual:.0%} "
+                f"window={vt.vol_window} clip=[{vt.min_size:.0%},{vt.max_size:.0%}]"
+            )
+        engine_label = f"multi_lot · {sizing_desc}"
     else:
         engine_label = "single · 同时只持一只票,信号反转换仓"
     out = render_backtest_report(

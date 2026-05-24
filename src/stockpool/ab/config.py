@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from stockpool.config import (
     AppConfig,
     BacktestCostConfig,
+    SizingConfig,
     StrategyConfig,
     load_config,
 )
@@ -21,6 +22,11 @@ class ArmBacktestOverride(BaseModel):
 
     equity_curve_holding_days is required and must be a length-1 list.
     All other fields default to None, meaning "inherit base.backtest.<same>".
+
+    Note: sizing is whole-block-replace (matches strategy override semantics).
+    position_size is the deprecated alias kept for arm-level back-compat —
+    the merged AppConfig's _migrate_position_size handles the deprecation
+    warning and conflict checks on the merged result.
     """
     model_config = ConfigDict(extra="forbid")
     equity_curve_holding_days: list[int]
@@ -28,6 +34,7 @@ class ArmBacktestOverride(BaseModel):
     risk_free_rate: float | None = None
     costs: BacktestCostConfig | None = None
     engine: Literal["single", "multi_lot"] | None = None
+    sizing: SizingConfig | None = None
     position_size: float | None = None
     max_concurrent_lots: int | None = None
 
@@ -93,12 +100,6 @@ def build_effective_cfg(base: AppConfig, arm: ArmOverride) -> AppConfig:
     for k, v in arm_bt.items():
         if v is not None:
             base_bt[k] = v
-    # If the arm sets position_size (legacy field), reset the sizing block to
-    # its default so the BacktestConfig migration validator can convert
-    # position_size → sizing.fixed cleanly without hitting the conflict guard.
-    if arm_bt.get("position_size") is not None:
-        from stockpool.config import SizingConfig
-        base_bt["sizing"] = SizingConfig().model_dump(mode="python")
     merged["backtest"] = base_bt
     out = AppConfig.model_validate(merged)
     canonical = yaml.safe_dump(merged, sort_keys=True).encode("utf-8")

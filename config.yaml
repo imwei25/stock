@@ -23,7 +23,7 @@ data:
   # 数据源: mootdx(默认, 通达信 TCP, 含当日盘中) | baostock(无 token, 收盘后更新)
   #        | akshare(东财爬虫, 兜底, 不稳定)
   # 板块(行业)K 线始终走 akshare,因为另两家不直接提供。
-  source: mootdx
+  source: baostock
 
 context:
   indices:
@@ -82,7 +82,18 @@ backtest:
   #   multi_lot — 每次 buy 开独立的 position_size 小单,各自 N 天平仓
   #   single    — 同时只持一只票,sell 或 N 满才平仓
   engine: multi_lot
-  position_size: 0.1            # multi_lot 模式下每单占用的起始资本比例 (0, 1]
+  # sizing 默认 vol_target (波动大的票仓位小, 波动小的票仓位大),
+  # 想回到老的"每只票都 10% 仓"行为, 把 type 切回 fixed 即可。
+  sizing:
+    type: vol_target            # fixed | vol_target
+    fixed:
+      size: 0.1                 # fixed 模式下每单资本占比, 也是 vol_target 公式的锚点
+    vol_target:
+      reference_vol_annual: 0.30   # "标准 A 股个股年化 vol", recent_vol = ref 时仓位 = fixed.size
+      vol_window: 20               # 滚动 std 用的 bar 数
+      min_size: 0.03               # 最小仓位下限
+      max_size: 0.20               # 最大仓位上限
+      fallback_to: fixed           # 冷启动 / vol 算不出时: fixed 用 baseline, skip 不开仓
   max_concurrent_lots: null     # null = 由现金自然封顶
 
 report:

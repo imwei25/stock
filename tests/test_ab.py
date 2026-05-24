@@ -12,7 +12,13 @@ from stockpool.ab import (
     build_effective_cfg,
     load_ab_config,
 )
-from stockpool.config import load_config, StrategyConfig
+from stockpool.config import (
+    load_config,
+    StrategyConfig,
+    SizingConfig,
+    FixedSizingConfig,
+    VolTargetSizingConfig,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -590,3 +596,66 @@ def test_compute_diff_table_uses_only_common_stocks(tmp_path,
     )
     table = compute_diff_table(result.arm_a, result.arm_b)
     assert table["common_stocks_count"] == 1
+
+
+# ============================================================================
+# F3 PR-C — sizing merge through ArmBacktestOverride
+# ============================================================================
+
+
+def test_arm_sizing_replaces_base_sizing(tmp_path):
+    """When an arm provides sizing, it replaces base.backtest.sizing wholesale."""
+    base = load_config(_write_base_config(tmp_path))
+    arm = ArmOverride(
+        strategy=base.strategy,
+        backtest=ArmBacktestOverride(
+            equity_curve_holding_days=[10],
+            sizing=SizingConfig(
+                type="vol_target",
+                vol_target=VolTargetSizingConfig(reference_vol_annual=0.25),
+            ),
+        ),
+    )
+    eff = build_effective_cfg(base, arm)
+    assert eff.backtest.sizing.type == "vol_target"
+    assert eff.backtest.sizing.vol_target.reference_vol_annual == 0.25
+
+
+def test_arm_without_sizing_inherits_base_sizing(tmp_path):
+    """When arm.sizing is None, base.backtest.sizing carries through."""
+    base = load_config(_write_base_config(tmp_path))
+    base.backtest.sizing = SizingConfig(
+        type="fixed",
+        fixed=FixedSizingConfig(size=0.07),
+    )
+    arm = ArmOverride(
+        strategy=base.strategy,
+        backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+    )
+    eff = build_effective_cfg(base, arm)
+    assert eff.backtest.sizing.type == "fixed"
+    assert eff.backtest.sizing.fixed.size == 0.07
+
+
+def test_two_arms_with_different_sizing_stay_isolated(tmp_path):
+    """Different arms produce different effective_cfgs with different content_hash."""
+    base = load_config(_write_base_config(tmp_path))
+    arm_fixed = ArmOverride(
+        strategy=base.strategy,
+        backtest=ArmBacktestOverride(
+            equity_curve_holding_days=[10],
+            sizing=SizingConfig(type="fixed", fixed=FixedSizingConfig(size=0.1)),
+        ),
+    )
+    arm_vol = ArmOverride(
+        strategy=base.strategy,
+        backtest=ArmBacktestOverride(
+            equity_curve_holding_days=[10],
+            sizing=SizingConfig(type="vol_target"),
+        ),
+    )
+    eff_fixed = build_effective_cfg(base, arm_fixed)
+    eff_vol = build_effective_cfg(base, arm_vol)
+    assert eff_fixed.backtest.sizing.type == "fixed"
+    assert eff_vol.backtest.sizing.type == "vol_target"
+    assert eff_fixed.content_hash != eff_vol.content_hash

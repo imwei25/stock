@@ -17,6 +17,7 @@ import traceback
 import pandas as pd
 
 from stockpool.backtest_composite import EquityResult, simulate_equity_curve, walk_forward_verdicts
+from stockpool.backtesting.sizing import build_lot_sizer
 from stockpool.config import AppConfig, Stock
 from stockpool.fetcher import fetch_daily, load_universe_cache
 from stockpool.strategy_factory import build_factor_panel, build_strategy, simulate_strategy_equity_curve
@@ -130,7 +131,7 @@ def backtest_stocks(
                     sell_cost=cfg.backtest.costs.sell_cost,
                     risk_free_rate=cfg.backtest.risk_free_rate,
                     engine=cfg.backtest.engine,
-                    position_size=cfg.backtest.sizing.fixed.size,
+                    lot_sizer=build_lot_sizer(cfg.backtest.sizing),
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
                 )
             else:
@@ -149,7 +150,7 @@ def backtest_stocks(
                     sell_cost=cfg.backtest.costs.sell_cost,
                     risk_free_rate=cfg.backtest.risk_free_rate,
                     engine=cfg.backtest.engine,
-                    position_size=cfg.backtest.sizing.fixed.size,
+                    lot_sizer=build_lot_sizer(cfg.backtest.sizing),
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
                 )
             per_stock.append((s.code, s.name, result))

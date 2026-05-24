@@ -26,6 +26,7 @@ from stockpool.backtesting import (
     VerdictExecution,
     buy_and_hold_baseline,
 )
+from stockpool.backtesting.sizing import FixedLotSizer, LotSizer
 from stockpool.config import (
     IndicatorsConfig, ScoringConfig, VerdictsConfig, WeightsConfig,
 )
@@ -158,7 +159,8 @@ def simulate_equity_curve(
     sell_cost: float = 0.0,
     risk_free_rate: float = 0.02,
     engine: str = "single",
-    position_size: float = 0.1,
+    position_size: float | None = None,
+    lot_sizer: LotSizer | None = None,
     max_concurrent_lots: int | None = None,
 ) -> EquityResult:
     """Simulate the composite strategy for each holding-day cap in the list.
@@ -171,8 +173,15 @@ def simulate_equity_curve(
     Args:
         engine: ``"single"`` (default, satisfies legacy callers/tests) or
                 ``"multi_lot"``.
-        position_size: only used when ``engine="multi_lot"`` — fraction of
-                       starting capital per lot, must be in (0, 1].
+        lot_sizer: only used when ``engine="multi_lot"`` — a ``LotSizer``
+                   callable (e.g. ``FixedLotSizer(0.1)`` or ``VolTargetLotSizer(...)``)
+                   that determines lot size per buy. Preferred over the
+                   deprecated ``position_size``.
+        position_size: deprecated alias of ``lot_sizer=FixedLotSizer(position_size)``;
+                       kept for backwards compat (existing tests pass it as a
+                       kwarg). Mutually exclusive with ``lot_sizer`` — passing
+                       both raises ValueError. If both are None, defaults to
+                       ``FixedLotSizer(0.1)``.
         max_concurrent_lots: only used when ``engine="multi_lot"`` — cap on
                              simultaneous open lots; None = uncapped by count
                              (cash still self-caps).
@@ -187,9 +196,16 @@ def simulate_equity_curve(
             risk_free_rate=risk_free_rate,
         )
     elif engine == "multi_lot":
+        if lot_sizer is None:
+            size = position_size if position_size is not None else 0.1
+            lot_sizer = FixedLotSizer(size)
+        elif position_size is not None:
+            raise ValueError(
+                "Pass either lot_sizer or position_size, not both"
+            )
         bt = MultiLotBacktestEngine(
             VerdictExecution(),
-            position_size=position_size,
+            lot_sizer=lot_sizer,
             costs=costs,
             risk_free_rate=risk_free_rate,
             max_concurrent_lots=max_concurrent_lots,
