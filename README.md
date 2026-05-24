@@ -40,6 +40,11 @@ start reports/latest.html
 .venv/Scripts/python -m stockpool factors pick                          # 打开 HTML 选择器
 .venv/Scripts/python -m stockpool factors analyze --universe all --output reports/factor_analysis
 .venv/Scripts/python -m stockpool factors pick-by-ic --input reports/factor_analysis/<日期>.json --output reports/selection.json --top-n 20
+
+# A/B 测试 (比较两个策略在同一池/同段历史下的优劣 → reports/ab/latest.html)
+.venv/Scripts/python -m stockpool ab --config ab.yaml
+.venv/Scripts/python -m stockpool ab --config ab.yaml --arm <name>          # 只跑单边, 打印指标到 stdout
+.venv/Scripts/python -m stockpool ab --config ab.yaml --no-share-pool       # 强制每边独立 load 池
 ```
 
 ## 数据源 (`data.source`)
@@ -274,6 +279,53 @@ F2 PR-B1 起,`strategy.ml_factor.selector.type` 默认为 `"lightgbm"`,用 Light
 **A/B 对照**:想回到 PR-B1 的"LGB selector + IC 加权"baseline 做对照,YAML 改一行 `weighter.type: ic` 即可(`weighter.ic.use_rank: true` 是默认值,可不写)。
 
 **关于 `weighter.contributions()`**:在 LGB weighter 下,返回的是 SHAP 值(每行每因子的边际贡献);在 IC/IR/Equal 等线性 weighter 下,返回 `standardised(X) * weights`。两者形状一致(行 = 样本,列 = 因子),但 LGB 行和 ≈ `predict(X) - base_value`(SHAP convention)而非完全等于 `predict(X)`。
+
+### 对比两个策略 — A/B testing
+
+`stockpool ab` 在**同一份 stocks / data / indicators / context** 下并行跑两个策略,
+产出 side-by-side 净值曲线 + 聚合差值表 + Sharpe 散点图 + 差值直方图,
+方便回答"换了一个 selector / weighter / 因子集后到底有没有变好"。
+
+新建一个 `ab.yaml`(完整可注释样例见 `ab.yaml.example`):
+
+```yaml
+base_config: config.yaml           # 共享的 stocks/data/indicators 来源
+
+arms:                              # 恰好两个 arm,key 名自由
+  composite:
+    strategy: {name: composite_verdict}
+    backtest: {equity_curve_holding_days: [10]}
+
+  ml_lgbm:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        selector: {type: lightgbm}
+        weighter: {type: lightgbm}
+    backtest: {equity_curve_holding_days: [10]}
+```
+
+跑:
+
+```bash
+.venv/Scripts/python -m stockpool ab --config ab.yaml
+# 输出: reports/ab/<日期>.html  +  reports/ab/latest.html
+```
+
+调试单边(只跑 ml_lgbm,打印指标到 stdout、不出 HTML):
+
+```bash
+.venv/Scripts/python -m stockpool ab --config ab.yaml --arm ml_lgbm
+```
+
+**规则**:
+- 每个 arm 只能覆盖 `strategy:` 和 `backtest:` 段;`indicators` / `weights` / `verdicts` / `scoring` 等顶层字段必须共享(强制 A/B 对比的"环境一致性")
+- `equity_curve_holding_days` 强制单元素列表(A/B 在固定 N 下对比;扫 N 用普通 `backtest` 命令)
+- 可选 `stocks_filter: [...]` 选股池子集(只能减,不能加;减完仍须在 base.stocks 内)
+- ML 缓存通过 `effective_cfg.content_hash` 自动隔离两个 arm(`ml_models/<sig>_<code>.pkl`),改完任一边参数下次只重训那一边
+
+**当前不支持**:portfolio-level 回测(每个 arm 仍是 per-stock 独立 + 跨股聚合)、统计显著性检验(样本太小)、覆盖 `weights`/`verdicts`/`scoring` 顶层字段(留作 follow-up,等 `composite_verdict` 参数下沉到 `strategy.composite_verdict.*` 子段后自动可用)。完整 schema + 设计权衡见 `docs/superpowers/specs/2026-05-24-ab-testing-design.md`。
 
 ## ⚠️ 免责声明
 
