@@ -436,8 +436,9 @@ class MLFactorConfig(BaseModel):
 | **T1 A/B testing tool** — `stockpool ab` 子命令 + `ab/{config,runner,report}.py` + `backtest_runner.py` | spec `2026-05-24-ab-testing-design.md` | — (工具性 PR) |
 | **T1 fix** — `_decide_pool_sharing` 按 arm 需要 gate universe 注入(commit `3648d50`) | — | 由 P3-2 第一次跑出 Δ=0 触发 |
 | **P3-2 验证 + verdict** — `training_universe=all` 在 16 股上 Δsharpe=-0.243 / Δreturn=-14.32%,**保持 `pool` 默认** | `ab_validation_results.md` §3.7 | **❌ regression** |
+| **F3 PR-C** — Sizing 子段化 + vol-target 仓位 | spec `2026-05-24-f3-pr-c-...` | **✅ pass gate** — Δsharpe=-0.007, Δmax_dd_ratio=-27.8%, Δreturn=-4.21pp. DD 收窄 27.8% 超过 20% 门槛,Sharpe 几乎持平(-0.007),**vol_target 为默认** |
 
-**当前 sweet spot 默认**(7 个 A/B 对照之上):
+**当前 sweet spot 默认**(8 个 A/B 对照之上):
 
 ```yaml
 strategy:
@@ -449,6 +450,8 @@ strategy:
     selector: {type: lasso}     # ❌ lightgbm 倒退 (P0-2/P1-2)
     weighter: {type: ic}        # ❌ lightgbm 倒退 (P0-2/P1-2)
     share_pool_fit: true        # 与 pooled+pool 配合工作良好
+backtest:
+  sizing: {type: vol_target}    # ✅ vol-target won validation (DD -27.8%, sharpe flat)
 ```
 
 ### 🚧 待做(按建议优先级)
@@ -459,7 +462,6 @@ strategy:
 
 | 子 PR | 交付物 | 估算 | A/B 验证 |
 |------|--------|------|---------|
-| **PR-C** — Sizing | `BacktestConfig.sizing` 子段(`type: fixed | vol_target`,默认 `vol_target`)+ vol-targeted position 实现 | 6-8 task | 单独 A/B:固定 vs vol_target sizing,看 max DD 收窄 |
 | **PR-D** — Risk overlay | `BacktestConfig.risk_overlay`(max DD 熔断 + cooldown + sector cap 单股版本)| 6-8 task | A/B:overlay on/off,看 max DD 与 trade count 变化 |
 | **PR-E** — Score smoothing | `MLFactorConfig.score_smoothing: none | ema`,默认 `none`(显式违反"新方案做 default"原则,因为延迟成本不确定) | 4-6 task | A/B:span 不同值,看 trade churn |
 
