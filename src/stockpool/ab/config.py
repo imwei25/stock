@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from stockpool.config import (
     AppConfig,
@@ -75,6 +75,13 @@ def build_effective_cfg(base: AppConfig, arm: ArmOverride) -> AppConfig:
       * All other top-level fields pass through unchanged.
 
     Returns a fresh AppConfig with content_hash recomputed; does not mutate base.
+
+    Note: ``content_hash`` is recomputed from the dumped merged dict (canonical
+    sorted-key yaml), which is intentionally a different canonicalisation from
+    ``load_config``'s raw-bytes hash. The hashes are only comparable across
+    effective_cfgs produced by this function — they will not match the hash of
+    a plain ``load_config(<base_yaml>)``. This is fine for the only consumer
+    (ML monthly fit cache keyed by sig) because both arms route through here.
     """
     merged = base.model_dump(mode="python")
     merged["strategy"] = arm.strategy.model_dump(mode="python")
@@ -121,7 +128,9 @@ def load_ab_config(ab_path: str | Path) -> ABConfig:
     for name, arm in ab_cfg.arms.items():
         try:
             build_effective_cfg(base_cfg, arm)
-        except Exception as e:
-            raise ValueError(f"arm {name!r} fails effective-config validation: {e}")
+        except ValidationError as e:
+            raise ValueError(
+                f"arm {name!r} fails effective-config validation: {e}"
+            ) from e
 
     return ab_cfg

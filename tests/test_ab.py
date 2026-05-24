@@ -162,7 +162,7 @@ def test_merge_revalidates_pydantic(tmp_path):
             position_size=2.0,  # exceeds le=1.0 in BacktestConfig
         ),
     )
-    with pytest.raises(Exception):  # pydantic ValidationError
+    with pytest.raises(ValidationError):
         build_effective_cfg(base, arm)
 
 
