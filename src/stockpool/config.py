@@ -417,13 +417,19 @@ class MLFactorConfig(BaseModel):
                     f"factors_file {self.factors_file!r} must contain "
                     f"a 'factors' list"
                 )
-            # 用文件覆盖默认 factors;若用户两边都给且不一致 → 报错
+            # 用文件覆盖默认 factors;若用户两边都给且不一致 → 报错。
+            # 例外:如果 factors 已经等于文件内容(model_dump → model_validate
+            # round-trip,例如经过 ab.build_effective_cfg),允许通过。
             file_factors = list(data["factors"])
             default_factors = [
                 "momentum_20", "macd_hist", "rsi_centered_14",
                 "ma_distance_20", "vol_ratio_5", "boll_position_20",
             ]
-            if self.factors and self.factors != default_factors:
+            if (
+                self.factors
+                and self.factors != default_factors
+                and self.factors != file_factors
+            ):
                 raise ValueError(
                     "Cannot specify both 'factors' and 'factors_file'; "
                     "remove 'factors' to use the file"
