@@ -14,6 +14,8 @@ from stockpool.factors.context import get_sector_map
 from stockpool.factors.registry import register
 
 
+# ── IndustryRelativeStrengthFactor ──────────────────────────────────────────
+
 @register(
     "industry_relative_strength",
     sources=("custom",),
@@ -61,3 +63,60 @@ class IndustryRelativeStrengthFactor(Factor):
         if unknown_cols:
             result.loc[:, unknown_cols] = np.nan
         return result
+
+
+# ── LimitUpCountFactor ──────────────────────────────────────────────────────
+
+@register(
+    "limit_up_count",
+    sources=("custom",),
+    types=("momentum", "time_series"),
+    description="近 N 日触及涨停 (close > prev_close × 1.099) 的次数",
+)
+class LimitUpCountFactor(Factor):
+    def __init__(self, n: int = 20):
+        if n <= 0:
+            raise ValueError(f"window must be > 0, got {n}")
+        self.n = n
+
+    @property
+    def name(self) -> str:
+        return f"limit_up_count_{self.n}"
+
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        close = panel["close"]
+        ret = close.pct_change(fill_method=None)
+        # 主板涨停 10%, 留 0.1% tolerance 免 round-off
+        # ST/科创/北交已被 fetch-universe 过滤, 此处不区分
+        is_limit_up = (ret > 0.099).astype(float)
+        # bar 0's pct_change is NaN → astype(float) → 0.0; force to NaN
+        # so rolling.sum with min_periods=n properly warmups
+        is_limit_up.iloc[0] = np.nan
+        return is_limit_up.rolling(self.n, min_periods=self.n).sum()
+
+
+# ── TurnoverZScoreFactor ────────────────────────────────────────────────────
+
+@register(
+    "turnover_zscore",
+    sources=("custom",),
+    types=("volume", "time_series"),
+    description="log(volume) 的 N 日时间序列 z-score, 反映异常活跃度",
+)
+class TurnoverZScoreFactor(Factor):
+    def __init__(self, n: int = 60):
+        if n <= 0:
+            raise ValueError(f"window must be > 0, got {n}")
+        self.n = n
+
+    @property
+    def name(self) -> str:
+        return f"turnover_zscore_{self.n}"
+
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        v = panel["volume"].replace(0.0, np.nan)
+        lv = np.log(v)
+        mean = lv.rolling(self.n, min_periods=self.n).mean()
+        std = lv.rolling(self.n, min_periods=self.n).std(ddof=0)
+        std = std.replace(0.0, np.nan)
+        return (lv - mean) / std
