@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -112,13 +113,58 @@ class BacktestCostConfig(BaseModel):
         return self.commission_rate + self.stamp_duty_rate + self.slippage_rate
 
 
+class FixedSizingConfig(BaseModel):
+    """Constant lot size — every buy commits the same fraction of capital."""
+    model_config = ConfigDict(extra="forbid")
+    size: float = Field(default=0.1, gt=0.0, le=1.0)
+
+
+class VolTargetSizingConfig(BaseModel):
+    """Vol-target sizing — scale each lot inversely to recent stock vol.
+
+    Formula (β, relative-to-baseline):
+        size = fixed.size * (reference_vol_annual / recent_vol_annual)
+        size = clip(size, min_size, max_size)
+
+    ``fixed.size`` doubles as the baseline anchor: at recent_vol = reference_vol,
+    the lot equals fixed.size. Vol estimator: simple rolling std over
+    ``vol_window`` bars of daily simple returns, annualised with sqrt(252).
+    """
+    model_config = ConfigDict(extra="forbid")
+    reference_vol_annual: float = Field(default=0.30, gt=0.0)
+    vol_window: int = Field(default=20, gt=1)
+    min_size: float = Field(default=0.03, gt=0.0, le=1.0)
+    max_size: float = Field(default=0.20, gt=0.0, le=1.0)
+    fallback_to: Literal["fixed", "skip"] = "fixed"
+
+    @model_validator(mode="after")
+    def _check_min_le_max(self) -> "VolTargetSizingConfig":
+        if self.min_size > self.max_size:
+            raise ValueError(
+                f"min_size ({self.min_size}) must be <= max_size ({self.max_size})"
+            )
+        return self
+
+
+class SizingConfig(BaseModel):
+    """Per-lot sizing strategy. Default flipped to vol_target in F3 PR-C."""
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["fixed", "vol_target"] = "vol_target"
+    fixed: FixedSizingConfig = Field(default_factory=FixedSizingConfig)
+    vol_target: VolTargetSizingConfig = Field(default_factory=VolTargetSizingConfig)
+
+
 class BacktestConfig(BaseModel):
     forward_days: list[int]
     equity_curve_holding_days: list[int] = Field(default_factory=lambda: [5, 10, 20])
     risk_free_rate: float = 0.02
     costs: BacktestCostConfig = Field(default_factory=BacktestCostConfig)
     engine: Literal["single", "multi_lot"] = "multi_lot"
-    position_size: float = Field(default=0.1, gt=0.0, le=1.0)
+    sizing: SizingConfig = Field(default_factory=SizingConfig)
+    # Deprecated alias for sizing.fixed.size. None = use sizing.
+    # If set alongside a non-default sizing block, raises ValueError.
+    # If set alone, auto-migrates to sizing.type=fixed + emits DeprecationWarning.
+    position_size: float | None = Field(default=None, gt=0.0, le=1.0)
     max_concurrent_lots: int | None = Field(default=None, gt=0)
 
     @field_validator("equity_curve_holding_days")
@@ -129,6 +175,41 @@ class BacktestConfig(BaseModel):
         if any(n <= 0 for n in v):
             raise ValueError("equity_curve_holding_days entries must be positive integers")
         return v
+
+    @model_validator(mode="after")
+    def _migrate_position_size(self) -> "BacktestConfig":
+        if self.position_size is None:
+            return self
+        # Heuristic: detect "user wrote sizing explicitly" by checking only
+        # sizing.type and sizing.fixed.size. We deliberately do NOT inspect
+        # vol_target.* sub-fields — combining legacy position_size with an
+        # explicit vol_target block is incoherent (position_size is fixed-only
+        # semantics), so silently dropping vol_target overrides on migration
+        # is the documented tradeoff. Spec §2.1 calls this a tolerable false
+        # negative. If sizing.type and sizing.fixed.size are both at defaults,
+        # we cannot distinguish "user did not write sizing" from "user wrote
+        # sizing with default values" — the latter collapses to migration.
+        sizing_explicit = (
+            self.sizing.type != "vol_target"
+            or self.sizing.fixed.size != 0.1
+        )
+        if sizing_explicit:
+            raise ValueError(
+                "Cannot set both backtest.position_size (deprecated) and "
+                "backtest.sizing. Migrate position_size into sizing.fixed.size."
+            )
+        warnings.warn(
+            "backtest.position_size is deprecated; use "
+            "backtest.sizing.fixed.size (with sizing.type=fixed) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.sizing = SizingConfig(
+            type="fixed",
+            fixed=FixedSizingConfig(size=self.position_size),
+        )
+        self.position_size = None
+        return self
 
 
 class ReportConfig(BaseModel):

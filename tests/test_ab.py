@@ -116,7 +116,11 @@ def test_merge_backtest_fields_override_when_set(tmp_path):
     )
     eff = build_effective_cfg(base, arm)
     assert eff.backtest.engine == "single"
-    assert eff.backtest.position_size == 0.25
+    # position_size is deprecated and migrated; after migration it is cleared
+    # and the value is reflected in sizing.fixed.size.
+    assert eff.backtest.position_size is None
+    assert eff.backtest.sizing.type == "fixed"
+    assert eff.backtest.sizing.fixed.size == 0.25
 
 
 def test_merge_does_not_mutate_base(tmp_path):

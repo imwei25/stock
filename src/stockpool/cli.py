@@ -250,8 +250,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         return 1
 
     if cfg.backtest.engine == "multi_lot":
+        _pos_size = cfg.backtest.sizing.fixed.size
         engine_label = (
-            f"multi_lot · 每次买入 {cfg.backtest.position_size:.0%} 起始资本独立一单"
+            f"multi_lot · 每次买入 {_pos_size:.0%} 起始资本独立一单"
         )
     else:
         engine_label = "single · 同时只持一只票,信号反转换仓"

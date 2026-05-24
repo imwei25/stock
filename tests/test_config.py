@@ -431,3 +431,121 @@ def test_weighter_unknown_type_rejected():
     from stockpool.config import WeighterConfig
     with pytest.raises(pydantic.ValidationError):
         WeighterConfig.model_validate({"type": "catboost"})
+
+
+# ============================================================================
+# F3 PR-C — SizingConfig + position_size deprecation
+# ============================================================================
+
+import warnings
+from stockpool.config import (
+    BacktestConfig, SizingConfig, FixedSizingConfig, VolTargetSizingConfig,
+)
+
+
+def test_sizing_config_defaults():
+    """Default sizing.type is vol_target with all-default sub-fields."""
+    s = SizingConfig()
+    assert s.type == "vol_target"
+    assert s.fixed.size == 0.1
+    assert s.vol_target.reference_vol_annual == 0.30
+    assert s.vol_target.vol_window == 20
+    assert s.vol_target.min_size == 0.03
+    assert s.vol_target.max_size == 0.20
+    assert s.vol_target.fallback_to == "fixed"
+
+
+def test_sizing_config_rejects_extra_fields():
+    """SizingConfig has extra='forbid'."""
+    with pytest.raises(ValidationError):
+        SizingConfig(type="fixed", unknown_field=1)
+
+
+def test_vol_target_rejects_min_gt_max():
+    with pytest.raises(ValidationError):
+        VolTargetSizingConfig(min_size=0.5, max_size=0.1)
+
+
+def test_vol_target_rejects_invalid_fallback():
+    with pytest.raises(ValidationError):
+        VolTargetSizingConfig(fallback_to="bogus")
+
+
+def test_backtest_config_default_sizing_is_vol_target():
+    bt = BacktestConfig(forward_days=[5], equity_curve_holding_days=[5])
+    assert bt.sizing.type == "vol_target"
+    assert bt.position_size is None
+
+
+def test_position_size_alone_migrates_with_deprecation_warning():
+    """Setting position_size= triggers DeprecationWarning + auto-migration."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        bt = BacktestConfig(
+            forward_days=[5], equity_curve_holding_days=[5],
+            position_size=0.15,
+        )
+        depr = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert len(depr) == 1
+        assert "position_size" in str(depr[0].message)
+    assert bt.sizing.type == "fixed"
+    assert bt.sizing.fixed.size == 0.15
+    assert bt.position_size is None  # cleared after migration
+
+
+def test_position_size_alone_at_default_value_still_migrates():
+    """Even position_size=0.1 (= default) triggers migration."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        bt = BacktestConfig(
+            forward_days=[5], equity_curve_holding_days=[5],
+            position_size=0.1,
+        )
+    assert bt.sizing.type == "fixed"
+    assert bt.sizing.fixed.size == 0.1
+
+
+def test_position_size_plus_explicit_sizing_fixed_size_raises():
+    """Explicit non-default sizing.fixed.size alongside position_size → conflict."""
+    with pytest.raises(ValidationError, match="position_size"):
+        BacktestConfig(
+            forward_days=[5], equity_curve_holding_days=[5],
+            position_size=0.1,
+            sizing=SizingConfig(
+                type="fixed",
+                fixed=FixedSizingConfig(size=0.2),
+            ),
+        )
+
+
+def test_yaml_with_sizing_block_loads(tmp_path):
+    """End-to-end: YAML with sizing: block loads cleanly."""
+    raw = _minimal_yaml()
+    raw["backtest"]["sizing"] = {
+        "type": "vol_target",
+        "vol_target": {
+            "reference_vol_annual": 0.25,
+            "vol_window": 30,
+        },
+    }
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    cfg = load_config(cfg_file)
+    assert cfg.backtest.sizing.type == "vol_target"
+    assert cfg.backtest.sizing.vol_target.reference_vol_annual == 0.25
+    assert cfg.backtest.sizing.vol_target.vol_window == 30
+
+
+def test_yaml_with_legacy_position_size_loads_with_warning(tmp_path):
+    """End-to-end: legacy position_size YAML still works, emits warning."""
+    raw = _minimal_yaml()
+    raw["backtest"]["position_size"] = 0.07
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cfg = load_config(cfg_file)
+        depr = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert len(depr) == 1
+    assert cfg.backtest.sizing.type == "fixed"
+    assert cfg.backtest.sizing.fixed.size == 0.07

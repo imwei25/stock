@@ -93,6 +93,12 @@ def build_effective_cfg(base: AppConfig, arm: ArmOverride) -> AppConfig:
     for k, v in arm_bt.items():
         if v is not None:
             base_bt[k] = v
+    # If the arm sets position_size (legacy field), reset the sizing block to
+    # its default so the BacktestConfig migration validator can convert
+    # position_size → sizing.fixed cleanly without hitting the conflict guard.
+    if arm_bt.get("position_size") is not None:
+        from stockpool.config import SizingConfig
+        base_bt["sizing"] = SizingConfig().model_dump(mode="python")
     merged["backtest"] = base_bt
     out = AppConfig.model_validate(merged)
     canonical = yaml.safe_dump(merged, sort_keys=True).encode("utf-8")

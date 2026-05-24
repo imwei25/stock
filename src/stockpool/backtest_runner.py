@@ -130,7 +130,7 @@ def backtest_stocks(
                     sell_cost=cfg.backtest.costs.sell_cost,
                     risk_free_rate=cfg.backtest.risk_free_rate,
                     engine=cfg.backtest.engine,
-                    position_size=cfg.backtest.position_size,
+                    position_size=cfg.backtest.sizing.fixed.size,
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
                 )
             else:
@@ -149,7 +149,7 @@ def backtest_stocks(
                     sell_cost=cfg.backtest.costs.sell_cost,
                     risk_free_rate=cfg.backtest.risk_free_rate,
                     engine=cfg.backtest.engine,
-                    position_size=cfg.backtest.position_size,
+                    position_size=cfg.backtest.sizing.fixed.size,
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
                 )
             per_stock.append((s.code, s.name, result))
