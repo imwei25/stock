@@ -226,3 +226,90 @@ def test_extra_field_in_arm_backtest_rejected(tmp_path):
     ab_path = _write_ab_yaml(tmp_path, with_typo=True)
     with pytest.raises(ValidationError):
         load_ab_config(ab_path)
+
+
+# ── Pool sharing plan ───────────────────────────────────────────────────────
+
+
+def _make_cfg(tmp_path, strategy_name, panel_mode=None,
+              training_universe=None, factors=None):
+    """Helper: build an effective AppConfig with the requested strategy variant."""
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+    if strategy_name == "ml_factor":
+        from stockpool.config import MLFactorConfig
+        kw = {}
+        if panel_mode is not None:
+            kw["panel_mode"] = panel_mode
+        if training_universe is not None:
+            kw["training_universe"] = training_universe
+        if factors is not None:
+            kw["factors"] = factors
+        ml_cfg = MLFactorConfig(**kw)
+        arm = ArmOverride(
+            strategy=StrategyConfig(name="ml_factor", ml_factor=ml_cfg),
+            backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+        )
+    else:
+        arm = ArmOverride(
+            strategy=StrategyConfig(name="composite_verdict"),
+            backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+        )
+    return build_effective_cfg(base, arm)
+
+
+def test_pool_plan_both_composite(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    cfgs = [_make_cfg(tmp_path, "composite_verdict")] * 2
+    plan = _decide_pool_sharing(cfgs, stocks=[])
+    assert plan["load_universe"] is False
+    assert plan["shared_factors"] is None
+
+
+def test_pool_plan_ml_vs_composite(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    cfgs = [
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all"),
+        _make_cfg(tmp_path, "composite_verdict"),
+    ]
+    plan = _decide_pool_sharing(cfgs, stocks=[])
+    assert plan["load_universe"] is True
+    assert plan["shared_factors"] is None
+
+
+def test_pool_plan_both_ml_pooled_all_same_factors(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    factors = ["momentum_20", "rsi_centered_14"]
+    cfgs = [
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all", factors=factors),
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all", factors=factors),
+    ]
+    plan = _decide_pool_sharing(cfgs, stocks=[])
+    assert plan["load_universe"] is True
+    assert plan["shared_factors"] == factors
+
+
+def test_pool_plan_both_ml_pooled_all_different_factors(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    cfgs = [
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all", factors=["momentum_20"]),
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all", factors=["rsi_centered_14"]),
+    ]
+    plan = _decide_pool_sharing(cfgs, stocks=[])
+    assert plan["load_universe"] is True
+    assert plan["shared_factors"] is None
+
+
+def test_pool_plan_one_ml_per_stock_does_not_load_universe(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    cfgs = [
+        _make_cfg(tmp_path, "ml_factor", panel_mode="per_stock"),
+        _make_cfg(tmp_path, "composite_verdict"),
+    ]
+    plan = _decide_pool_sharing(cfgs, stocks=[])
+    assert plan["load_universe"] is False

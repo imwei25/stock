@@ -14,13 +14,16 @@ from stockpool.ab.config import (
     build_effective_cfg,
     load_ab_config,
 )
+from stockpool.ab.runner import ABResult, ArmResult
 
-# Runner + report imports added by Tasks 5-7 as those modules land.
+# run_ab / run_single_arm + report imports added by Tasks 6-7 as those land.
 
 __all__ = [
     "ABConfig",
+    "ABResult",
     "ArmBacktestOverride",
     "ArmOverride",
+    "ArmResult",
     "build_effective_cfg",
     "load_ab_config",
 ]
