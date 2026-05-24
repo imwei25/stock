@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
+
+if TYPE_CHECKING:
+    from stockpool.backtesting.sizing import LotSizer
 
 import pandas as pd
 
@@ -41,6 +44,7 @@ class Trade:
     exit_price: float
     ret: float            # net of buy_cost and sell_cost
     days_held: int
+    lot_size: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -354,29 +358,35 @@ class _OpenLot:
     committed_cash: float    # cash actually invested, AFTER buy_cost
     current_value: float     # mark-to-market value of this lot
     days_held: int = 0
+    lot_size: float = 0.1
 
 
 class MultiLotBacktestEngine:
-    """Multi-lot engine: each enter signal opens an independent fixed-size lot.
+    """Multi-lot engine: each enter signal opens an independent lot.
 
     Differences from ``BacktestEngine``:
 
       * Multiple positions can be open concurrently. Each enter signal
-        commits ``position_size`` of starting capital as a new lot.
+        commits a lot whose size is determined by the injected ``LotSizer``
+        (default: ``FixedLotSizer(0.1)``). Pass ``lot_sizer=`` for dynamic
+        sizing (e.g. vol-target) or the deprecated ``position_size=`` for
+        backwards compatibility — both, however, raises ``ValueError``.
       * Each lot has its own ``days_held`` timer. A lot exits when its own
         timer hits ``max_holding_days`` OR ``strategy.should_exit`` returns
         True for it.
       * Trade returns are per-lot (each closed lot ⇒ one ``Trade``).
+        ``Trade.lot_size`` records the size of that specific lot, enabling
+        per-trade attribution in downstream A/B reports.
       * ``curve["position"]`` becomes the *count of open lots* at each bar.
 
     Capital model:
 
-      * Total equity starts at 1.0; ``position_size`` is a fraction of that
-        starting capital (e.g. ``0.1`` = each lot is 10% of original equity).
-      * "Cash" is the un-invested portion. Each buy deducts ``position_size``
-        from cash and creates a lot worth ``position_size * (1 - buy_cost)``.
-      * If cash < ``position_size`` when a buy signal arrives, that buy is
-        skipped (no partial fill).
+      * Total equity starts at 1.0; lot sizes are fractions of that starting
+        capital (e.g. ``0.1`` = lot is 10% of original equity).
+      * "Cash" is the un-invested portion. Each buy deducts the sizer-returned
+        size from cash and creates a lot worth ``size * (1 - buy_cost)``.
+      * If the sizer returns 0 (skip-fallback) OR ``cash < size`` when a buy
+        signal arrives, that buy is skipped (no partial fill).
       * Buy-and-hold and ``compute_metrics`` semantics are unchanged.
 
     All other conventions match ``BacktestEngine`` (T+1, long-only, costs).
@@ -385,17 +395,25 @@ class MultiLotBacktestEngine:
     def __init__(
         self,
         strategy: Strategy,
-        position_size: float,
+        position_size: float | None = None,
+        lot_sizer: "LotSizer | None" = None,
         costs: TradeCosts = TradeCosts(),
         risk_free_rate: float = 0.02,
         max_concurrent_lots: int | None = None,
     ):
-        if not (0 < position_size <= 1.0):
+        if lot_sizer is not None and position_size is not None:
             raise ValueError(
-                f"position_size must be in (0, 1], got {position_size}"
+                "Pass either `lot_sizer` or `position_size`, not both. "
+                "`position_size` is deprecated; prefer "
+                "`lot_sizer=FixedLotSizer(size)`."
             )
+        if lot_sizer is None:
+            # Bare engine call (legacy) — wrap fixed size.
+            size = position_size if position_size is not None else 0.1
+            from stockpool.backtesting.sizing import FixedLotSizer
+            lot_sizer = FixedLotSizer(size)
         self.strategy = strategy
-        self.position_size = position_size
+        self.lot_sizer = lot_sizer
         self.costs = costs
         self.risk_free_rate = risk_free_rate
         self.max_concurrent_lots = max_concurrent_lots
@@ -410,7 +428,7 @@ class MultiLotBacktestEngine:
         return _simulate_multi_lot(
             signals,
             strategy=self.strategy,
-            position_size=self.position_size,
+            lot_sizer=self.lot_sizer,
             max_concurrent_lots=self.max_concurrent_lots,
             max_holding_days=max_holding_days,
             costs=self.costs,
@@ -430,7 +448,7 @@ def _simulate_multi_lot(
     signals: pd.DataFrame,
     *,
     strategy: Strategy,
-    position_size: float,
+    lot_sizer: "LotSizer",
     max_concurrent_lots: int | None,
     max_holding_days: int,
     costs: TradeCosts,
@@ -497,6 +515,7 @@ def _simulate_multi_lot(
                     exit_price=open_t,
                     ret=float(exit_value / lot.committed_cash - 1),
                     days_held=lot.days_held,
+                    lot_size=lot.lot_size,
                 ))
             else:
                 still_open.append(lot)
@@ -507,7 +526,8 @@ def _simulate_multi_lot(
             lot.current_value *= (1 + hold_ret)
 
         # 4. Maybe open a new lot — fills at open[t]; first-day exposure is
-        #    open[t] → close[t].
+        #    open[t] → close[t]. Lot size now comes from the sizer (which sees
+        #    closes up to bar t-1, preserving look-ahead safety).
         bctx = BarContext(
             bar_idx=t - 1, date=prev_date,
             close=prev_close, signal=prev_signal,
@@ -516,16 +536,19 @@ def _simulate_multi_lot(
             max_concurrent_lots is None
             or len(open_lots) < max_concurrent_lots
         )
-        if strategy.should_enter(bctx) and cash >= position_size and capacity_ok:
-            cash -= position_size
-            committed = position_size * (1 - costs.buy_cost)
-            open_lots.append(_OpenLot(
-                entry_idx=t,
-                entry_price=open_t,
-                committed_cash=committed,
-                current_value=committed * (close_t / open_t),
-                days_held=0,
-            ))
+        if strategy.should_enter(bctx) and capacity_ok:
+            size = lot_sizer(t, opens, closes)
+            if size > 0 and cash >= size:
+                cash -= size
+                committed = size * (1 - costs.buy_cost)
+                open_lots.append(_OpenLot(
+                    entry_idx=t,
+                    entry_price=open_t,
+                    committed_cash=committed,
+                    current_value=committed * (close_t / open_t),
+                    days_held=0,
+                    lot_size=size,
+                ))
 
         equity[t] = cash + sum(lot.current_value for lot in open_lots)
         position[t] = len(open_lots)

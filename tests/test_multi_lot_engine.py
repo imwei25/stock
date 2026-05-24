@@ -1,6 +1,7 @@
 """Tests for MultiLotBacktestEngine — fixed-size, independent lots."""
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -214,3 +215,111 @@ def test_empty_signals_returns_empty_result():
     r = _engine().run_on_signals(sigs, max_holding_days=5)
     assert len(r.curve) == 0
     assert r.metrics["trade_count"] == 0
+
+
+# ============================================================================
+# lot_sizer injection (PR-C)
+# ============================================================================
+
+from stockpool.backtesting.sizing import FixedLotSizer, VolTargetLotSizer
+
+
+def test_engine_accepts_lot_sizer_kwarg():
+    """Constructing with lot_sizer= works and overrides default sizing."""
+    engine = MultiLotBacktestEngine(
+        VerdictExecution(),
+        lot_sizer=FixedLotSizer(0.25),
+    )
+    assert engine.lot_sizer.size == 0.25
+
+
+def test_engine_default_when_neither_provided():
+    """No lot_sizer, no position_size → default FixedLotSizer(0.1)."""
+    engine = MultiLotBacktestEngine(VerdictExecution())
+    assert isinstance(engine.lot_sizer, FixedLotSizer)
+    assert engine.lot_sizer.size == 0.1
+
+
+def test_engine_rejects_both_position_size_and_lot_sizer():
+    with pytest.raises(ValueError, match="Pass either"):
+        MultiLotBacktestEngine(
+            VerdictExecution(),
+            position_size=0.1,
+            lot_sizer=FixedLotSizer(0.2),
+        )
+
+
+def test_engine_position_size_keyword_still_works():
+    """Backwards compatibility: position_size= alone wraps in FixedLotSizer."""
+    engine = MultiLotBacktestEngine(VerdictExecution(), position_size=0.15)
+    assert isinstance(engine.lot_sizer, FixedLotSizer)
+    assert engine.lot_sizer.size == 0.15
+
+
+def test_trade_lot_size_recorded():
+    """Trade.lot_size is populated from the active sizer at entry."""
+    sigs = _signals(
+        ["buy", "hold", "hold", "hold", "hold"],
+        [100, 100, 100, 100, 100],
+    )
+    engine = MultiLotBacktestEngine(
+        VerdictExecution(), lot_sizer=FixedLotSizer(0.07),
+    )
+    r = engine.run_on_signals(sigs, max_holding_days=3)
+    assert len(r.trades) == 1
+    assert r.trades[0].lot_size == pytest.approx(0.07)
+
+
+def test_vol_target_dynamic_sizing_records_per_trade_size():
+    """With vol_target, each trade's lot_size reflects vol at that bar."""
+    # 30 bars of mild noise + 1 buy signal late enough for vol calc to kick in.
+    rng = np.random.default_rng(42)
+    rets = rng.normal(0.0, 0.01, size=30)
+    closes = [100.0]
+    for r in rets:
+        closes.append(closes[-1] * (1 + r))
+    sigs = pd.DataFrame({
+        "date": pd.date_range("2026-01-02", periods=31, freq="B"),
+        "close": closes,
+        "signal": ["hold"] * 25 + ["buy"] + ["hold"] * 5,
+    })
+    sizer = VolTargetLotSizer(
+        baseline_size=0.1, reference_vol_annual=0.30,
+        vol_window=20, min_size=0.03, max_size=0.20, fallback="fixed",
+    )
+    engine = MultiLotBacktestEngine(VerdictExecution(), lot_sizer=sizer)
+    r = engine.run_on_signals(sigs, max_holding_days=3)
+    assert len(r.trades) == 1
+    # daily vol ~1%, annual ~16%; raw size = 0.1 * 0.30 / 0.16 ≈ 0.19 → near max
+    assert 0.05 < r.trades[0].lot_size <= 0.20
+
+
+def test_skip_fallback_zero_size_skips_buy():
+    """When sizer returns 0 (skip fallback during cold-start), no lot opens."""
+    sigs = _signals(
+        ["buy", "hold", "hold"],
+        [100, 100, 100],
+    )
+    sizer = VolTargetLotSizer(
+        baseline_size=0.1, reference_vol_annual=0.30,
+        vol_window=20, min_size=0.03, max_size=0.20, fallback="skip",
+    )
+    engine = MultiLotBacktestEngine(VerdictExecution(), lot_sizer=sizer)
+    r = engine.run_on_signals(sigs, max_holding_days=3)
+    assert r.metrics["trade_count"] == 0
+    assert (r.curve["position"] == 0).all()
+
+
+def test_size_exceeds_cash_skips_buy():
+    """Sizer returns size > available cash → buy skipped (no partial fill)."""
+    sigs = _signals(
+        ["buy", "buy", "buy", "hold"],
+        [100, 100, 100, 100],
+    )
+    # Each lot = 0.5 → first two consume all cash, third must skip.
+    engine = MultiLotBacktestEngine(
+        VerdictExecution(), lot_sizer=FixedLotSizer(0.5),
+    )
+    r = engine.run_on_signals(sigs, max_holding_days=10)
+    # Only 2 lots opened (cash=1.0 → 0.5 → 0.0 < 0.5)
+    assert r.curve["position"].iloc[3] == 2
