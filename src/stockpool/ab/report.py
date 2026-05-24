@@ -10,6 +10,7 @@ Layout (top → bottom):
 """
 from __future__ import annotations
 
+import statistics
 from pathlib import Path
 
 import pandas as pd
@@ -44,6 +45,11 @@ def _fmt(val, kind: str) -> str:
     if kind == "int":
         return str(int(val))
     return str(val)
+
+
+def _safe_num(v) -> float:
+    """Coerce metric value to float, treating None as 0.0."""
+    return 0.0 if v is None else float(v)
 
 
 def _arm_metrics(arm_result: ArmResult) -> dict[str, dict[str, float]]:
@@ -81,12 +87,12 @@ def compute_diff_table(arm_a: ArmResult, arm_b: ArmResult) -> dict:
                 "diff_mean": None, "a_wins": 0, "b_wins": 0,
             })
             continue
-        a_vals = [a_metrics[c].get(key) or 0.0 for c in common]
-        b_vals = [b_metrics[c].get(key) or 0.0 for c in common]
+        a_vals = [_safe_num(a_metrics[c].get(key)) for c in common]
+        b_vals = [_safe_num(b_metrics[c].get(key)) for c in common]
         a_mean = sum(a_vals) / len(a_vals)
         b_mean = sum(b_vals) / len(b_vals)
-        a_med = sorted(a_vals)[len(a_vals) // 2]
-        b_med = sorted(b_vals)[len(b_vals) // 2]
+        a_med = statistics.median(a_vals)
+        b_med = statistics.median(b_vals)
         if higher_better is None:
             a_wins = b_wins = 0
         elif higher_better:
@@ -115,8 +121,11 @@ def _diff_table_html(table: dict, arm_a_name: str, arm_b_name: str) -> str:
     )
     body_rows = []
     for row in table["rows"]:
+        label = row["label"]
+        if row["higher_better"] is False:
+            label += " <span style='color:#888;font-size:.85em'>(lower better)</span>"
         body_rows.append(
-            f"<tr><td>{row['label']}</td>"
+            f"<tr><td>{label}</td>"
             f"<td>{_fmt(row['a_mean'], row['kind'])}</td>"
             f"<td>{_fmt(row['a_median'], row['kind'])}</td>"
             f"<td>{_fmt(row['b_mean'], row['kind'])}</td>"
