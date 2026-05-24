@@ -285,8 +285,8 @@ def _print_single_arm_stdout(arm_result) -> None:
 def cmd_ab(args: argparse.Namespace) -> int:
     try:
         ab_cfg = load_ab_config(args.config)
-    except Exception as e:
-        log.error("ab config invalid: %s", e)
+    except Exception:
+        log.exception("ab config invalid")
         return 2
 
     base_cfg_path = (Path(args.config).parent / ab_cfg.base_config).resolve()
