@@ -73,6 +73,15 @@ def prepare_pool(
         except Exception as e:
             log.warning("Pool preload skipped for %s: %s", s.code, e)
 
+    # Inject sector_map so industry_neutral factors (WQ101 + custom
+    # industry_relative_strength_N) get group context. Empty map → factors
+    # fall back to cross-sec demean / NaN.
+    from stockpool.factors.context import set_sector_map
+    from stockpool.industry_map import load_or_build_industry_map
+
+    sector_map = load_or_build_industry_map(cfg.data.cache_dir, source="auto")
+    set_sector_map(sector_map)
+
     log.info("Building factor panel over %d stocks × %d factors ...",
              len(pool_data), len(ml_cfg.factors))
     factor_panel = build_factor_panel(ml_cfg.factors, pool_data)

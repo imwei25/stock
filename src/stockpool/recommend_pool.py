@@ -98,6 +98,10 @@ def _compute_pool_b(
         max_age_days=cfg_pool.industry_map_max_age_days,
         source=cfg_pool.industry_source,
     )
+    # Make the same map available to factors that consume sector context
+    # (industry_relative_strength_N + WQ101 indneutralize).
+    from stockpool.factors.context import set_sector_map
+    set_sector_map(industry_map)
 
     survivors = _apply_funnel(
         universe_data, name_map,

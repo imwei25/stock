@@ -356,3 +356,37 @@ def test_pick_top_factors_returns_empty_when_all_below_threshold():
     )
     picked = pick_top_factors(res, top_n=5, max_correlation=0.6, min_ir=0.1)
     assert picked == []
+
+
+def test_analyze_factors_with_industry_neutral_factor():
+    """When the factor list contains an industry_neutral factor, callers must
+    inject sector_map first via factors.context.set_sector_map."""
+    import numpy as np
+    import pandas as pd
+    from stockpool.factors.context import set_sector_map
+    from stockpool.factors_analysis import analyze_factors
+
+    n_bars = 60
+    rng = np.random.RandomState(42)
+    dates = pd.date_range("2024-01-01", periods=n_bars)
+    codes = ["A", "B", "C", "D"]
+    closes = pd.DataFrame(
+        {c: 100 + np.cumsum(rng.normal(0, 1, n_bars)) for c in codes},
+        index=dates,
+    )
+    panel = {
+        "open": closes, "high": closes, "low": closes, "close": closes,
+        "volume": pd.DataFrame(1000.0, index=dates, columns=codes),
+    }
+    set_sector_map({"A": "X", "B": "X", "C": "Y", "D": "Y"})
+
+    result = analyze_factors(
+        panel=panel,
+        factor_names=["industry_relative_strength_20", "momentum_5"],
+        horizon=3,
+        ic_window=20,
+    )
+    # Both factors should produce *some* finite daily IC values
+    assert "industry_relative_strength_20" in result.daily_ic
+    assert result.daily_ic["industry_relative_strength_20"].notna().any()
+    set_sector_map({})  # cleanup

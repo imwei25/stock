@@ -415,6 +415,18 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
         len(factor_names), len(codes), args.universe,
     )
 
+    # Sector-aware factors (industry_neutral / industry_relative_strength)
+    # need sector_map. Loading is cheap (baostock cache, ~30 day TTL).
+    from stockpool.factors.context import set_sector_map
+    from stockpool.industry_map import load_or_build_industry_map
+
+    sector_map = load_or_build_industry_map(cache_dir, source="auto")
+    if not sector_map:
+        log.warning(
+            "Industry map unavailable; sector-aware factors will be NaN"
+        )
+    set_sector_map(sector_map)
+
     panel = build_panel_from_cache(codes, cfg.data.history_days, cache_dir)
 
     regime_close = None
