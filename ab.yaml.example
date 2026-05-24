@@ -1,0 +1,39 @@
+# ab.yaml — sample A/B test configuration.
+#
+# Run: python -m stockpool ab --config ab.yaml
+#
+# Output: reports/ab/<date>.html + reports/ab/latest.html
+# Spec:   docs/superpowers/specs/2026-05-24-ab-testing-design.md
+
+# Path to the base AppConfig. Inherits stocks / data / indicators / context.
+# Resolved relative to this file's directory.
+base_config: config.yaml
+
+# Optional: subset of base.stocks to run on. Codes must exist in base.stocks.
+# Empty / omitted = run on the full base.stocks.
+# stocks_filter: ["605589", "300750"]
+
+# Exactly two arms. Key names are free-form and appear verbatim in the report.
+arms:
+  composite_default:
+    strategy:
+      name: composite_verdict
+    backtest:
+      # Required. Must be a length-1 list (A/B compares at one N per side).
+      equity_curve_holding_days: [10]
+      # Other backtest fields (engine, costs, position_size, ...) inherit
+      # from base.backtest if omitted.
+
+  ml_lgbm_top20:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        # Either an explicit factor list, or factors_file pointing to a JSON
+        # produced by `stockpool factors pick` / `factors pick-by-ic`.
+        factors_file: reports/selection.json
+        selector: {type: lightgbm}
+        weighter: {type: lightgbm}
+        panel_mode: pooled
+        training_universe: all
+    backtest:
+      equity_curve_holding_days: [10]
