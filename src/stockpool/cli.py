@@ -15,6 +15,7 @@ from stockpool import __version__
 from stockpool.backtest import compute_hit_rates
 from stockpool.backtest_composite import simulate_equity_curve, verdict_bucket_stats, walk_forward_verdicts
 from stockpool.backtest_report import render_backtest_report
+from stockpool.backtest_runner import prepare_pool as _prepare_ml_pool
 from stockpool.config import AppConfig, load_config
 from stockpool.fetcher import (
     fetch_daily,
@@ -83,61 +84,6 @@ def _setup_logging(log_dir: Path) -> None:
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.handlers = [file_h, stream_h]
-
-
-def _prepare_ml_pool(
-    cfg: AppConfig, stocks, force_refresh: bool,
-) -> tuple[dict[str, pd.DataFrame] | None, dict | None]:
-    """Build (pool_data, factor_panel) for ml_factor strategies, or (None, None).
-
-    Pool composition depends on ``cfg.strategy.ml_factor.training_universe``:
-      * ``pool``: only ``cfg.stocks`` (legacy, ~10 stocks).
-      * ``all``: full A-share cache from ``data/`` (~4000 stocks, requires a
-        prior ``fetch-universe`` run). Application stocks are merged in so any
-        cfg.stocks entry missing from the universe cache (e.g. 北交) is still
-        usable. Cross-sec factors only become meaningful at panel widths in
-        the hundreds, so ``all`` is recommended whenever WQ101 alphas are used.
-
-    The factor panel is computed once on the combined pool and reused across
-    every per-stock predict — the panel-wide computation can be expensive on
-    the all-universe path.
-    """
-    if (
-        cfg.strategy.name != "ml_factor"
-        or cfg.strategy.ml_factor.panel_mode != "pooled"
-    ):
-        return None, None
-
-    ml_cfg = cfg.strategy.ml_factor
-    pool_data: dict[str, pd.DataFrame] = {}
-
-    if ml_cfg.training_universe == "all":
-        log.info("Loading universe cache (training_universe=all) ...")
-        pool_data = load_universe_cache(cfg.data.cache_dir, cfg.data.history_days)
-        if not pool_data:
-            log.warning(
-                "training_universe=all but data/ has no cached stocks. "
-                "Run `python -m stockpool fetch-universe` first; falling back to pool."
-            )
-        else:
-            log.info("Universe cache loaded: %d stocks", len(pool_data))
-
-    # Ensure every application stock is in the pool (fetch fresh if missing
-    # or stale; also picks up today's bar for already-cached stocks).
-    for s in stocks:
-        try:
-            pool_data[s.code] = fetch_daily(
-                s.code, cfg.data.history_days, cfg.data.cache_dir,
-                force_refresh=force_refresh, source=cfg.data.source,
-            )
-        except Exception as e:
-            log.warning("Pool preload skipped for %s: %s", s.code, e)
-
-    log.info("Building factor panel over %d stocks × %d factors ...",
-             len(pool_data), len(ml_cfg.factors))
-    factor_panel = build_factor_panel(ml_cfg.factors, pool_data)
-    log.info("Factor panel built: %d factors", len(factor_panel))
-    return pool_data, factor_panel
 
 
 def _analyze_one(
