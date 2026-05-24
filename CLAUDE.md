@@ -37,13 +37,22 @@ python -m stockpool factors pick-by-ic \
   --input reports/factor_analysis/<日期>.json \
   --output reports/selection.json \
   --top-n 20 --max-corr 0.6 --min-ir 0.05
+
+# A/B testing — 比较两个策略在同一池/同段历史下的优劣
+python -m stockpool ab --config ab.yaml
+# 调试某一边 (只跑单边 + 打印指标到 stdout, 不生成 HTML)
+python -m stockpool ab --config ab.yaml --arm <arm_name>
+# 强制每边独立 load universe / factor panel (escape hatch)
+python -m stockpool ab --config ab.yaml --no-share-pool
 ```
 
 ## 模块地图
 
 | 文件 | 职责 |
 |---|---|
-| `src/stockpool/cli.py` | 入口,定义 `run` 和 `backtest` 子命令 |
+| `src/stockpool/cli.py` | 入口,定义 `run` / `backtest` / `fetch-universe` / `factors *` / `ab` 子命令 |
+| `src/stockpool/backtest_runner.py` | 共享给 `cli.cmd_backtest` 和 `ab.runner` 的两个 helper:`prepare_pool` (ml_factor 池 + factor_panel 预算) 和 `backtest_stocks` (per-stock 回测循环,失败隔离,返回 `(成功, 失败)` 元组) |
+| `src/stockpool/ab/` | A/B 测试子包: `config.py` (`ABConfig` / `ArmOverride` / `load_ab_config` / `build_effective_cfg`) + `runner.py` (`run_ab` / `run_single_arm` / `_decide_pool_sharing` + `ArmResult`/`ABResult`) + `report.py` (HTML 对比报告:banner / 聚合表 / Sharpe 散点 / Sharpe 差直方图 / per-stock 卡片) |
 | `src/stockpool/config.py` | Pydantic schema + YAML 加载;**配置变更必须更新这里** |
 | `src/stockpool/fetcher.py` | 公开 API + Parquet 缓存 + OHLCV 校验;按 `cfg.data.source` 派发后端;`fetch_universe`/`list_universe`/`load_universe_cache` 提供全市场批拉与读盘 |
 | `src/stockpool/data_sources/mootdx_backend.py` | 通达信 TCP 后端(默认)。股票/指数/**行业板块(88xxxx)**;含当日盘中,TDX 占位 bar 会被丢弃 |
@@ -128,6 +137,7 @@ python -m stockpool factors pick-by-ic \
 - `report` — `output_dir` / `keep_history` / `klines_to_show`
 - **`strategy`** — `name` (`composite_verdict` 默认 / `ml_factor`) + `ml_factor` 子配置(`factors` 或 **`factors_file`** / `horizon` / `train_window` / `refit_every` / `panel_mode` / **`training_universe`** / **`share_pool_fit`** / **`embargo_days`** / **`label_type`** / `selector.{lasso|lightgbm}` / `weighter` / `thresholds` / `*_verdicts`)。`factors_file` 指向 HTML picker 导出的 JSON,与 `factors` 列表二选一。**`training_universe`**: `pool`(默认,只用 cfg.stocks)/ `all`(全市场 cache,需先 `fetch-universe`;仅在 `panel_mode=pooled` 时生效)。**`share_pool_fit`**(默认 `true`,仅 `panel_mode=pooled` 生效):跨股共享 fit,缓存键 `(sig, year, month)`,同月内所有股、所有 refit_bar 复用同一 pipeline;训练集不再剔除 host,host 自己以 ~1/N 权重进入自己的训练。**`embargo_days`**(默认 `null` = auto = `horizon`,F2 PR-A 新增):walk-forward 训练集与测试集之间的额外间隔,消除 horizon 日前向收益的标签泄露;设 `0` 回到 pre-PR-A 行为。**`label_type`**(默认 `"return"`,F2 PR-A 接口位):训练标签变换 — `"return"` 已实装,`"vol_adjusted"` / `"cross_sec_rank"` 是占位 raise `NotImplementedError`,后续 PR 实装。**`selector.{lasso|lightgbm}`**(F2 PR-A 子段化 + PR-B1 加 LGB):`type` 默认 `"lightgbm"`,`lasso.{alpha,max_iter,tol}` 或 `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state,top_k_factors,min_importance_ratio}` 子段二选一,顶层扁平字段被 Pydantic 拒绝。改 `selector` 任一字段后旧 ml_models pkl 自动失效。切到 `all` 或翻 `share_pool_fit`、改 `embargo_days` / `label_type` / `selector` 任一项后旧的 ml_models pkl 会因 sig 变化自动失效。**`weighter.{ic|ir|equal|lightgbm}`**(F2 PR-B2 子段化):`type` 默认 `"lightgbm"`,`ic.{use_rank,min_abs_ic}` / `ir.{n_chunks,use_rank,min_abs_ir}` / `equal` (无参) / `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state}` 子段四选一,顶层扁平字段被 Pydantic 拒绝。
 - **`recommend_pool`** — Pool B(全市场量化推荐池)。`enabled`(默认 `true`)/ `top_n`(30)/ `min_avg_amount_20d`(5e7 元;mootdx `vol*close*100`)/ `max_per_industry`(5;"未知" 桶在**所有股都未映射时**自动跳过 cap,否则正常计)/ `refresh`(`weekly`默认/`always`/`never`)/ `cache_dir`(`data/recommend_pool`)/ `industry_map_max_age_days`(30)/ **`industry_source`**(`auto` 默认 = baostock→akshare 链 / `baostock` / `akshare`)。**前置条件**:必须先跑 `python -m stockpool fetch-universe`;首次运行自动从所选 industry_source 拉映射(baostock ~5-10s,akshare ~1-2min)。**缓存键**含 `cfg.content_hash`,改 yaml 任一字段都失效
+- **A/B 测试**(独立配置文件 `ab.yaml`,主 `AppConfig` 不变):见 `docs/superpowers/specs/2026-05-24-ab-testing-design.md`。结构 `base_config: <path>` + 可选 `stocks_filter: [...]` (只能减) + `arms: {<name>: {strategy: {...}, backtest: {equity_curve_holding_days: [N], ...}}}` (恰好 2 个)。每个 arm 只能覆盖 `strategy` 段(整段替换)和 `backtest` 段(字段级合并,None 字段继承 base),其他顶层字段(`indicators`/`weights`/`verdicts`/`scoring`/`data`/`stocks`)继承 base。`equity_curve_holding_days` 强制单元素列表。ML 缓存通过 `effective_cfg.content_hash` 自动隔离,arm 间互不污染
 
 ## 数据流
 
@@ -177,7 +187,9 @@ python -m stockpool factors pick-by-ic \
 | `test_timer_reset.py` | strong_buy 刷新计时;reset 与 exit 同时为真时 reset 胜出 |
 | `test_backtest_composite.py` | 适配层、综合策略 walk-forward 等价性 |
 | `test_backtest.py` | 单信号命中率 |
-| `test_cli_backtest.py` | CLI 烟雾测试 |
+| `test_cli_backtest.py` | CLI 烟雾测试 + 中途单股失败不阻断的回归 |
+| `test_ab.py` | ab/config 校验(arms==2、length-1 N、`extra=forbid`、`stocks_filter` 子集检查)+ `build_effective_cfg`(strategy 整段替换 / backtest 字段级合并 / content_hash 重算 / 非破坏)+ `_decide_pool_sharing` 5 种组合 + `run_ab` / `run_single_arm` 集成 + per-stock 失败隔离 + 报告 smoke (含一边空、common-stocks intersection) |
+| `test_cli_ab.py` | `python -m stockpool ab` CLI smoke:happy path 出 HTML、`--arm` 调试模式只 stdout 不出 HTML、未知 arm 退出 2、`--no-share-pool` 短路验证(monkeypatch `_decide_pool_sharing` 断言调用次数 0) |
 | `test_fetcher.py` | 缓存 + 增量更新 + `validate_ohlcv` |
 | `test_indicators.py` | 数值正确性 |
 | `test_signals.py` | 信号触发条件 |
@@ -269,6 +281,9 @@ strategy:
 - 做空、多标的组合、盘中数据、部分成交、资金成本(融资融券)
 - 仓位管理仅"满仓单笔"或"固定额度多笔"两种;无 Kelly / 比例追加
 - 个股 → 板块的**自动**映射:`cfg.stocks[].sector` 仍需手填(中文名或 6 位 88xxxx 代码);**Pool B 的 code→行业映射独立**走 baostock/akshare(见 `industry_map.py`)。mootdx 路径不可用 —— 实测 TDX 服务器对 `block_hy.dat` 返回 0 字节,触发 tdxpy 的空 bytearray bug
+- **A/B 测试不能覆盖顶层 `indicators` / `weights` / `verdicts` / `scoring`**:`composite_verdict` 的参数还散在 `AppConfig` 顶层(历史遗留;`ml_factor` 已规整到 `strategy.ml_factor.*` 子段),A/B arm 暂时只允许覆盖 `strategy:` 和 `backtest:`。两个 `composite_verdict` arm 想比不同 `weights` → 当前只能改主 cfg 跑两次。Follow-up:把 `composite_verdict` 的参数下沉到 `strategy.composite_verdict.*` 子段,A/B 工具会自动获益(`ab/` 代码不动一行)
+- **A/B 不做 portfolio-level 回测**:每个 arm 仍是 per-stock 独立回测 + 跨股聚合统计(均值/中位/胜出数)。真正的 portfolio-level(策略在每根 bar 看到整个股池横截面,产出一条组合净值)需要新的 `PortfolioStrategy` ABC + portfolio engine,是独立 spec
+- **A/B 报告无统计显著性**:8-30 只股票样本太小,p 值不稳;聚合表只给均值/中位/差值/胜出计数。Pool B 联动扩到几百只股后再考虑加 paired t-test / Wilcoxon
 
 ## 改动后更新文档(CLAUDE.md + README.md)
 
