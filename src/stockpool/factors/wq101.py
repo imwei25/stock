@@ -19,37 +19,25 @@ arxiv.org/abs/1601.00991。
 """
 from __future__ import annotations
 
-from typing import ClassVar, Mapping
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
 
 from stockpool.factors import ops
 from stockpool.factors.base import Factor
+from stockpool.factors.context import (  # noqa: F401 — re-export for back-compat
+    _FactorContext,
+    get_sector_map,
+    indneutralize_with_context as _indneutralize,
+    set_sector_map,
+)
 from stockpool.factors.registry import register
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 上下文注入:跨股票分组(行业中性化用)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class _Wq101Context:
-    """注入 sector_map (code -> sector_name) 给所有 WQ alpha。
-
-    pipeline 在 fit 前调用 ``set_sector_map``;不设的话 indneutralize 退化为
-    整体 demean(等价于把所有票分到同一个组)。
-    """
-    sector_map: ClassVar[Mapping[str, str]] = {}
-
-
-def set_sector_map(mapping: Mapping[str, str]) -> None:
-    _Wq101Context.sector_map = dict(mapping)
-
-
-def _indneutralize(x: pd.DataFrame) -> pd.DataFrame:
-    if _Wq101Context.sector_map:
-        return ops.indneutralize(x, _Wq101Context.sector_map)
-    return ops.cs_demean(x)
+# Legacy alias for any code that imported _Wq101Context directly.
+# All references now go through _FactorContext via factors.context.
+_Wq101Context = _FactorContext
 
 
 # ─────────────────────────────────────────────────────────────────────────────
