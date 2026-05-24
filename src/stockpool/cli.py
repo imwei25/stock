@@ -285,12 +285,11 @@ def _print_single_arm_stdout(arm_result) -> None:
 def cmd_ab(args: argparse.Namespace) -> int:
     try:
         ab_cfg = load_ab_config(args.config)
+        base_cfg_path = (Path(args.config).parent / ab_cfg.base_config).resolve()
+        base_cfg = load_config(base_cfg_path)
     except Exception:
         log.exception("ab config invalid")
         return 2
-
-    base_cfg_path = (Path(args.config).parent / ab_cfg.base_config).resolve()
-    base_cfg = load_config(base_cfg_path)
 
     run_date = date.today().isoformat()
     out_root = Path(base_cfg.report.output_dir) / "ab"

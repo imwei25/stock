@@ -76,12 +76,15 @@ def build_effective_cfg(base: AppConfig, arm: ArmOverride) -> AppConfig:
 
     Returns a fresh AppConfig with content_hash recomputed; does not mutate base.
 
-    Note: ``content_hash`` is recomputed from the dumped merged dict (canonical
-    sorted-key yaml), which is intentionally a different canonicalisation from
-    ``load_config``'s raw-bytes hash. The hashes are only comparable across
-    effective_cfgs produced by this function — they will not match the hash of
-    a plain ``load_config(<base_yaml>)``. This is fine for the only consumer
-    (ML monthly fit cache keyed by sig) because both arms route through here.
+    ⚠ DANGER: ``content_hash`` here is recomputed from the dumped merged dict
+    (canonical sorted-key yaml), which is intentionally a different
+    canonicalisation from ``load_config``'s raw-bytes hash. The hashes are
+    only comparable across effective_cfgs produced by this function — they
+    will NOT match the hash of a plain ``load_config(<base_yaml>)``. This is
+    fine for the only current consumer (ML monthly fit cache keyed by sig)
+    because both arms route through here. If a future consumer wants to
+    compare effective_cfg.content_hash to a plain-load hash, do not — use a
+    different field name or rehash deterministically on both sides.
     """
     merged = base.model_dump(mode="python")
     merged["strategy"] = arm.strategy.model_dump(mode="python")
