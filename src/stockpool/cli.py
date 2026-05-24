@@ -12,6 +12,12 @@ import akshare as ak
 import pandas as pd
 
 from stockpool import __version__
+from stockpool.ab import (
+    load_ab_config,
+    render_ab_report,
+    run_ab,
+    run_single_arm,
+)
 from stockpool.backtest import compute_hit_rates
 from stockpool.backtest_composite import verdict_bucket_stats, walk_forward_verdicts
 from stockpool.backtest_report import render_backtest_report
@@ -254,6 +260,65 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     )
     log.info("Backtest report written: %s", out)
     log.info("Latest also at: %s", backtest_root / "latest.html")
+    return 0
+
+
+def _apply_stocks_filter(stocks, codes):
+    if not codes:
+        return list(stocks)
+    keep = set(codes)
+    return [s for s in stocks if s.code in keep]
+
+
+def _print_single_arm_stdout(arm_result) -> None:
+    print(f"=== Arm: {arm_result.name} ===")
+    print(f"Stocks succeeded: {len(arm_result.per_stock)}; "
+          f"failed: {len(arm_result.failed)}")
+    for code, name, res in arm_result.per_stock:
+        N = next(iter(res.metrics))
+        m = res.metrics[N]
+        print(f"  {code} {name}: total_ret={m['total_return']:+.3f} "
+              f"ann={m['annualized_return']:+.3f} sharpe={m.get('sharpe'):+.2f} "
+              f"max_dd={m['max_drawdown']:.3f}")
+
+
+def cmd_ab(args: argparse.Namespace) -> int:
+    try:
+        ab_cfg = load_ab_config(args.config)
+    except Exception as e:
+        log.error("ab config invalid: %s", e)
+        return 2
+
+    base_cfg_path = (Path(args.config).parent / ab_cfg.base_config).resolve()
+    base_cfg = load_config(base_cfg_path)
+
+    run_date = date.today().isoformat()
+    out_root = Path(base_cfg.report.output_dir) / "ab"
+    _setup_logging(out_root / run_date)
+    log.info("stockpool ab v%s for %s", __version__, run_date)
+
+    stocks = _apply_stocks_filter(base_cfg.stocks, ab_cfg.stocks_filter)
+
+    if args.arm:
+        if args.arm not in ab_cfg.arms:
+            log.error("--arm %r not in %s", args.arm, list(ab_cfg.arms))
+            return 2
+        arm_result = run_single_arm(
+            ab_cfg, base_cfg, stocks, args.refresh, args.arm,
+        )
+        _print_single_arm_stdout(arm_result)
+        return 0
+
+    result = run_ab(
+        ab_cfg, base_cfg, stocks, args.refresh,
+        share_pool=not args.no_share_pool,
+    )
+    if not result.arm_a.per_stock and not result.arm_b.per_stock:
+        log.error("Both arms produced no results.")
+        return 1
+    out = render_ab_report(result, output_dir=out_root)
+    log.info("AB report written: %s", out)
+    log.info("Latest also at: %s", out_root / "latest.html")
     return 0
 
 
@@ -512,6 +577,14 @@ def main(argv: list[str] | None = None) -> int:
     p_bt.add_argument("--refresh", action="store_true", help="Bypass cache, refetch all")
     p_bt.add_argument("--stocks", default="", help="Only run listed codes (comma-separated)")
     p_bt.set_defaults(func=cmd_backtest)
+
+    p_ab = sub.add_parser("ab", help="A/B-compare two strategies on the same universe")
+    p_ab.add_argument("--config", default="ab.yaml")
+    p_ab.add_argument("--refresh", action="store_true")
+    p_ab.add_argument("--arm", default=None, help="Debug: run only one arm by name")
+    p_ab.add_argument("--no-share-pool", action="store_true",
+                      help="Force each arm to load its own universe / factor panel")
+    p_ab.set_defaults(func=cmd_ab)
 
     p_fu = sub.add_parser(
         "fetch-universe",
