@@ -16,8 +16,10 @@ python -m stockpool run --config config.yaml
 # 回测 (走样式综合策略 + 多 N 净值曲线)
 python -m stockpool backtest --config config.yaml [--stocks 605589]
 
-# 拉全市场 A 股缓存 (训练用,剔除 ST/科创/北交; mootdx 8 线程, 全量 ~1 分钟)
-python -m stockpool fetch-universe [--workers 8] [--limit 100] [--refresh]
+# 拉全市场 A 股缓存 (训练用,剔除 ST/科创/北交; 8 线程, mootdx 全量 ~1 分钟)
+# 默认按 cfg.data.source 拉每只票;--source 临时覆盖
+# (清单本身只有 mootdx 实现,所以"列清单"永远走 mootdx)
+python -m stockpool fetch-universe [--workers 8] [--limit 100] [--refresh] [--source baostock]
 
 # 测试
 python -m pytest tests/ -q
@@ -54,7 +56,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 | `src/stockpool/backtest_runner.py` | 共享给 `cli.cmd_backtest` 和 `ab.runner` 的两个 helper:`prepare_pool` (ml_factor 池 + factor_panel 预算) 和 `backtest_stocks` (per-stock 回测循环,失败隔离,返回 `(成功, 失败)` 元组) |
 | `src/stockpool/ab/` | A/B 测试子包: `config.py` (`ABConfig` / `ArmOverride` / `load_ab_config` / `build_effective_cfg`) + `runner.py` (`run_ab` / `run_single_arm` / `_decide_pool_sharing` + `ArmResult`/`ABResult`) + `report.py` (HTML 对比报告:banner / 聚合表 / Sharpe 散点 / Sharpe 差直方图 / per-stock 卡片) |
 | `src/stockpool/config.py` | Pydantic schema + YAML 加载;**配置变更必须更新这里** |
-| `src/stockpool/fetcher.py` | 公开 API + Parquet 缓存 + OHLCV 校验;按 `cfg.data.source` 派发后端;`fetch_universe`/`list_universe`/`load_universe_cache` 提供全市场批拉与读盘 |
+| `src/stockpool/fetcher.py` | 公开 API + Parquet 缓存 + OHLCV 校验;按 `cfg.data.source` 派发后端;`fetch_universe`/`list_universe`/`load_universe_cache` 提供全市场批拉与读盘;`check_source_change`/`update_source_marker` 维护 `data/.data_source` 标记,源变化时自动 force_refresh |
 | `src/stockpool/data_sources/mootdx_backend.py` | 通达信 TCP 后端(默认)。股票/指数/**行业板块(88xxxx)**;含当日盘中,TDX 占位 bar 会被丢弃 |
 | `src/stockpool/data_sources/baostock_backend.py` | baostock 后端(无 token,收盘后约 18:00 更新);不支持板块,板块会自动走 mootdx |
 | `src/stockpool/indicators.py` | MA / MACD / KDJ / RSI / BOLL / Volume / Breakout |
@@ -127,7 +129,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 所有字段由 `config.py:AppConfig` 校验。结构概览:
 
 - `stocks` — 股票池,每条含 `code` / `name` / `sector`
-- `data` — `history_days` / `cache_dir` / `force_refresh` / **`source`** (`mootdx` 默认 / `baostock` / `akshare`)。注意:(1) 切换 source 时建议 `force_refresh: true`,不同后端 volume 计量单位不同(mootdx=手, baostock=股);(2) 行业板块仅在 `source=akshare` 时走东财,其他两种 source 都用 **mootdx 的通达信行业指数 (88xxxx)**;名字→代码映射见 `mootdx_backend._TDX_INDUSTRY_CODES`,也可在 `stocks[].sector` 直接填 6 位 TDX 代码
+- `data` — `history_days` / `cache_dir` / `force_refresh` / **`source`** (`mootdx` 默认 / `baostock` / `akshare`)。注意:(1) 切换 source **自动** force_refresh:`cache_dir/.data_source` 记录上次 source,`fetch_daily` / `fetch_index_daily` / `fetch_sector_daily` / `fetch_universe` 入口比对,不一致直接丢弃旧 parquet 重拉(volume 单位 mootdx=手 / baostock=股,混源会污染相对成交量指标);(2) 行业板块仅在 `source=akshare` 时走东财,其他两种 source 都用 **mootdx 的通达信行业指数 (88xxxx)**;名字→代码映射见 `mootdx_backend._TDX_INDUSTRY_CODES`,也可在 `stocks[].sector` 直接填 6 位 TDX 代码
 - `indicators` — MA 周期、MACD/KDJ/BOLL 参数
 - `weights` — 各信号触发的得分
 - `scoring` — `daily_weight` / `weekly_weight` / `resonance_bonus`(共振奖励)
@@ -135,7 +137,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 - `backtest` — `forward_days` / `equity_curve_holding_days` / `risk_free_rate` / `costs` / **`engine`** / **`position_size`** / **`max_concurrent_lots`**
 - `context` — `indices`(大盘指数列表,默认上证/深证成指)
 - `report` — `output_dir` / `keep_history` / `klines_to_show`
-- **`strategy`** — `name` (`composite_verdict` 默认 / `ml_factor`) + `ml_factor` 子配置(`factors` 或 **`factors_file`** / `horizon` / `train_window` / `refit_every` / `panel_mode` / **`training_universe`** / **`share_pool_fit`** / **`embargo_days`** / **`label_type`** / `selector.{lasso|lightgbm}` / `weighter` / `thresholds` / `*_verdicts`)。`factors_file` 指向 HTML picker 导出的 JSON,与 `factors` 列表二选一。**`training_universe`**: `pool`(默认,只用 cfg.stocks)/ `all`(全市场 cache,需先 `fetch-universe`;仅在 `panel_mode=pooled` 时生效)。**`share_pool_fit`**(默认 `true`,仅 `panel_mode=pooled` 生效):跨股共享 fit,缓存键 `(sig, year, month)`,同月内所有股、所有 refit_bar 复用同一 pipeline;训练集不再剔除 host,host 自己以 ~1/N 权重进入自己的训练。**`embargo_days`**(默认 `null` = auto = `horizon`,F2 PR-A 新增):walk-forward 训练集与测试集之间的额外间隔,消除 horizon 日前向收益的标签泄露;设 `0` 回到 pre-PR-A 行为。**`label_type`**(默认 `"return"`,F2 PR-A 接口位):训练标签变换 — `"return"` 已实装,`"vol_adjusted"` / `"cross_sec_rank"` 是占位 raise `NotImplementedError`,后续 PR 实装。**`selector.{lasso|lightgbm}`**(F2 PR-A 子段化 + PR-B1 加 LGB):`type` 默认 `"lightgbm"`,`lasso.{alpha,max_iter,tol}` 或 `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state,top_k_factors,min_importance_ratio}` 子段二选一,顶层扁平字段被 Pydantic 拒绝。改 `selector` 任一字段后旧 ml_models pkl 自动失效。切到 `all` 或翻 `share_pool_fit`、改 `embargo_days` / `label_type` / `selector` 任一项后旧的 ml_models pkl 会因 sig 变化自动失效。**`weighter.{ic|ir|equal|lightgbm}`**(F2 PR-B2 子段化):`type` 默认 `"lightgbm"`,`ic.{use_rank,min_abs_ic}` / `ir.{n_chunks,use_rank,min_abs_ir}` / `equal` (无参) / `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state}` 子段四选一,顶层扁平字段被 Pydantic 拒绝。
+- **`strategy`** — `name` (`composite_verdict` 默认 / `ml_factor`) + `ml_factor` 子配置(`factors` 或 **`factors_file`** / `horizon` / `train_window` / `refit_every` / `panel_mode` / **`training_universe`** / **`share_pool_fit`** / **`embargo_days`** / **`label_type`** / `selector.{lasso|lightgbm}` / `weighter` / `thresholds` / `*_verdicts`)。`factors_file` 指向 HTML picker 导出的 JSON,与 `factors` 列表二选一。**`training_universe`**: `pool`(默认,只用 cfg.stocks)/ `all`(全市场 cache,需先 `fetch-universe`;仅在 `panel_mode=pooled` 时生效)。**`share_pool_fit`**(默认 `true`,仅 `panel_mode=pooled` 生效):跨股共享 fit,缓存键 `(sig, year, month)`,同月内所有股、所有 refit_bar 复用同一 pipeline;训练集不再剔除 host,host 自己以 ~1/N 权重进入自己的训练。**`embargo_days`**(默认 `null` = auto = `horizon`,F2 PR-A 新增):walk-forward 训练集与测试集之间的额外间隔,消除 horizon 日前向收益的标签泄露;设 `0` 回到 pre-PR-A 行为。**`label_type`**(默认 `"return"`,F2 PR-A 接口位):训练标签变换 — `"return"` 已实装,`"vol_adjusted"` / `"cross_sec_rank"` 是占位 raise `NotImplementedError`,后续 PR 实装。**`selector.{lasso|lightgbm}`**(F2 PR-A 子段化 + PR-B1 加 LGB):`type` 默认 **`"lasso"`**(2026-05-24 从 `"lightgbm"` 回退,见 `docs/ab_validation_results.md`:LGB+LGB 在 16 股 × 500bar baseline 上 sharpe 退 0.2 / return 退 20%),`lasso.{alpha,max_iter,tol}` 或 `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state,top_k_factors,min_importance_ratio}` 子段二选一,顶层扁平字段被 Pydantic 拒绝。改 `selector` 任一字段后旧 ml_models pkl 自动失效。切到 `all` 或翻 `share_pool_fit`、改 `embargo_days` / `label_type` / `selector` 任一项后旧的 ml_models pkl 会因 sig 变化自动失效。**`weighter.{ic|ir|equal|lightgbm}`**(F2 PR-B2 子段化):`type` 默认 **`"ic"`**(同 2026-05-24 回退,见上),`ic.{use_rank,min_abs_ic}` / `ir.{n_chunks,use_rank,min_abs_ir}` / `equal` (无参) / `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state}` 子段四选一,顶层扁平字段被 Pydantic 拒绝。LGB 仍可 opt-in,但需先调超参或扩股池验证。
 - **`recommend_pool`** — Pool B(全市场量化推荐池)。`enabled`(默认 `true`)/ `top_n`(30)/ `min_avg_amount_20d`(5e7 元;mootdx `vol*close*100`)/ `max_per_industry`(5;"未知" 桶在**所有股都未映射时**自动跳过 cap,否则正常计)/ `refresh`(`weekly`默认/`always`/`never`)/ `cache_dir`(`data/recommend_pool`)/ `industry_map_max_age_days`(30)/ **`industry_source`**(`auto` 默认 = baostock→akshare 链 / `baostock` / `akshare`)。**前置条件**:必须先跑 `python -m stockpool fetch-universe`;首次运行自动从所选 industry_source 拉映射(baostock ~5-10s,akshare ~1-2min)。**缓存键**含 `cfg.content_hash`,改 yaml 任一字段都失效
 - **A/B 测试**(独立配置文件 `ab.yaml`,主 `AppConfig` 不变):见 `docs/superpowers/specs/2026-05-24-ab-testing-design.md`。结构 `base_config: <path>` + 可选 `stocks_filter: [...]` (只能减) + `arms: {<name>: {strategy: {...}, backtest: {equity_curve_holding_days: [N], ...}}}` (恰好 2 个)。每个 arm 只能覆盖 `strategy` 段(整段替换)和 `backtest` 段(字段级合并,None 字段继承 base),其他顶层字段(`indicators`/`weights`/`verdicts`/`scoring`/`data`/`stocks`)继承 base。`equity_curve_holding_days` 强制单元素列表。ML 缓存通过 `effective_cfg.content_hash` 自动隔离,arm 间互不污染
 
@@ -171,6 +173,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 - `universe.parquet` — `fetch-universe` 写入的全 A 股清单 (code/name/market)
 - `stock_industry_map.parquet` — Pool B 用的 `code → 行业` 映射(akshare 东财板块,30 天有效期)
 - `recommend_pool/poolb_<content_hash>_<isoyear>w<NN>.parquet` — Pool B 本周排名缓存
+- `.data_source` — 单行文本,记录上次写入该 cache_dir 的 source(`mootdx`/`baostock`/`akshare`);任何 `fetch_*` 启动时与 cfg.data.source 比对,不一致触发 force_refresh + 覆写
 
 报告:
 - 日报:`reports/<YYYY-MM-DD>.html` + `reports/latest.html`
@@ -178,7 +181,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 
 ## 测试
 
-233 个,`pytest tests/ -q` 一次跑完。按域分布:
+337 个,`pytest tests/ -q` 一次跑完。按域分布:
 
 | 文件 | 覆盖 |
 |---|---|
@@ -190,7 +193,8 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 | `test_cli_backtest.py` | CLI 烟雾测试 + 中途单股失败不阻断的回归 |
 | `test_ab.py` | ab/config 校验(arms==2、length-1 N、`extra=forbid`、`stocks_filter` 子集检查)+ `build_effective_cfg`(strategy 整段替换 / backtest 字段级合并 / content_hash 重算 / 非破坏)+ `_decide_pool_sharing` 5 种组合 + `run_ab` / `run_single_arm` 集成 + per-stock 失败隔离 + 报告 smoke (含一边空、common-stocks intersection) |
 | `test_cli_ab.py` | `python -m stockpool ab` CLI smoke:happy path 出 HTML、`--arm` 调试模式只 stdout 不出 HTML、未知 arm 退出 2、`--no-share-pool` 短路验证(monkeypatch `_decide_pool_sharing` 断言调用次数 0) |
-| `test_fetcher.py` | 缓存 + 增量更新 + `validate_ohlcv` |
+| `test_fetcher.py` | 缓存 + 增量更新 + `validate_ohlcv` + source-change marker 自动 force_refresh |
+| `test_cli_fetch_universe.py` | `python -m stockpool fetch-universe` 默认按 `cfg.data.source`、`--source` 覆盖、source 变更自动 force_refresh |
 | `test_indicators.py` | 数值正确性 |
 | `test_signals.py` | 信号触发条件 |
 | `test_factors.py` | 因子注册表 + 后缀参数解析 + 无 look-ahead + 数值正确 |

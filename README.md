@@ -59,7 +59,9 @@ start reports/latest.html
 
 行业板块在 `source=mootdx` / `baostock` 下统一走 mootdx 的**通达信行业指数 (88xxxx)**,稳定性远高于东财爬虫。`config.yaml` 里 `stocks[].sector` 既可以填行业名(查内置映射表)也可以直接填 6 位 TDX 代码(如 `880305`)。内置映射见 `src/stockpool/data_sources/mootdx_backend.py::_TDX_INDUSTRY_CODES`,需要新行业时直接加一行即可。
 
-切换 source 时建议先设 `force_refresh: true` 跑一次:不同后端 volume 计量单位不同(mootdx = 手,baostock = 股),旧缓存若混入会让相对成交量指标失真。
+**切换 source 会自动 force_refresh**:`data/.data_source` 记录上次拉数据的后端,`fetch_daily` / `fetch_index_daily` / `fetch_sector_daily` / `fetch_universe` 启动时比对,不一致就丢弃旧缓存重拉,无须手动 `force_refresh: true`。不同后端 volume 计量单位不同(mootdx = 手,baostock = 股),否则混源会让相对成交量指标失真。
+
+`fetch-universe` 默认按 `cfg.data.source` 拉每只票 K 线;`--source` 仅用于临时覆盖(可选 `mootdx`/`baostock`/`akshare`)。**注**:全市场清单本身只有 mootdx 实现,所以"列清单"那一步永远走 mootdx。
 
 ```yaml
 data:
@@ -264,21 +266,24 @@ follow-up。日报上 Pool B 段失败不影响 Pool A 段。
 
 检测到问题时在报告中以橙色警告框显示。
 
-### 关于 LightGBM 默认 selector
+### 关于 LightGBM selector / weighter(默认已回退到 Lasso+IC)
 
-F2 PR-B1 起,`strategy.ml_factor.selector.type` 默认为 `"lightgbm"`,用 LightGBM 在 walk-forward 训练窗口上选因子。这是非线性选 + IC 线性加的两步法。
+F2 PR-B1 引入了 LightGBM selector,PR-B2 引入了 LightGBM weighter,默认值曾切到 `"lightgbm"`。**2026-05-24 在 16 股 × 500 bar baseline 上做了 A/B 验证**(`docs/ab_validation_results.md`):
 
-**过拟合提示**:每次 refit 训练集只有 ~250 bars × N 股,LGB 在小样本上容易过拟合。当前默认参数(`num_leaves=15`、`min_data_in_leaf=20`、`learning_rate=0.05`、`num_iterations=200`)已为这个规模做了保守化,但仍然 *依赖* "walk-forward 每次重训,单次过拟合无伤大雅" 这个假设。
+- **LGB+LGB vs Lasso+IC**:sharpe Δ=-0.20,total return Δ=-20%,7/16 股 B 胜 — **显著倒退**
+- **拆解**:LGB selector 单独几乎平局(P1-1: Δ=-0.027),退化主要来自 LGB weighter 的过拟合(trade count 翻倍,churn 高 sharpe 低)
+- **小训练集**:~250 bars × 16 股 ≈ 4k 行,LGB 的 `num_leaves=15`/`min_data_in_leaf=20` 默认在这规模上还是太宽
 
-**观测指标**:跑回测后看 `reports/backtest/latest.html` 里的 trade 分布;如果 IC 跨 refit 不稳、净值曲线锯齿明显,先调小 `num_leaves` 或调大 `min_data_in_leaf`;还不行就 `selector.type: lasso` 回到 PR-A 的线性 baseline 做对照。
+**结论**:已把 `selector.type` / `weighter.type` 默认值从 `"lightgbm"` 回退到 `"lasso"` / `"ic"`。LGB 仍可通过 YAML opt-in,但建议:
+1. 先把 `num_leaves` 调到 7-10、`min_data_in_leaf` 调到 50+ 看是否能压住过拟合
+2. 或先把 `training_universe` 切到 `"all"` 扩大训练集(需先 `python -m stockpool fetch-universe`)
+3. 再用 `python -m stockpool ab --config <ab.yaml>` 对照 Lasso+IC baseline 看是否净改善
 
-**不做** holdout + early stopping(留给 F2 PR-B2 或更后)。
+**结构性收益(仍保留)**:
+- **PR-A embargo**(默认 `embargo_days: null` = auto = horizon):A/B 验证 tied,无副作用,继续保留
+- **`pooled` panel_mode**(默认):A/B P3-1 验证 Δsharpe=+0.23,11/16 胜 — 真收益,继续默认
 
-**F2 PR-B2 起,`weighter.type` 默认也是 `"lightgbm"`**,完成完全非线性两步法。weighter 与 selector 各训练一次 LGB,refit 训练时间约为 PR-B1 的 1.8-2.2 倍。
-
-**A/B 对照**:想回到 PR-B1 的"LGB selector + IC 加权"baseline 做对照,YAML 改一行 `weighter.type: ic` 即可(`weighter.ic.use_rank: true` 是默认值,可不写)。
-
-**关于 `weighter.contributions()`**:在 LGB weighter 下,返回的是 SHAP 值(每行每因子的边际贡献);在 IC/IR/Equal 等线性 weighter 下,返回 `standardised(X) * weights`。两者形状一致(行 = 样本,列 = 因子),但 LGB 行和 ≈ `predict(X) - base_value`(SHAP convention)而非完全等于 `predict(X)`。
+**关于 `weighter.contributions()`**:在 LGB weighter 下返回 SHAP 值,在 IC/IR/Equal 线性 weighter 下返回 `standardised(X) * weights`。两者形状一致(行 = 样本,列 = 因子),但 LGB 行和 ≈ `predict(X) - base_value`(SHAP convention)而非完全等于 `predict(X)`。
 
 ### 对比两个策略 — A/B testing
 

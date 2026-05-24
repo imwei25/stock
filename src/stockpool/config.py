@@ -173,12 +173,16 @@ class LightGBMSelectorConfig(BaseModel):
 class SelectorConfig(BaseModel):
     """Step-1 (factor selection) settings.
 
-    PR-A introduced ``selector.lasso.*`` subnesting. PR-B1 adds
-    ``selector.lightgbm.*`` as a parallel block and flips the default
-    ``type`` to ``"lightgbm"``.
+    PR-A introduced ``selector.lasso.*`` subnesting. PR-B1 added
+    ``selector.lightgbm.*`` as a parallel block; the default flipped to
+    ``"lightgbm"`` initially but was rolled back to ``"lasso"`` on
+    2026-05-24 after A/B validation
+    (`docs/ab_validation_results.md`) showed LGB selector + LGB weighter
+    regressed sharpe by 0.20 and total return by 20% on the 16-stock ×
+    500-bar baseline. LGB remains opt-in via ``type: lightgbm``.
     """
     model_config = ConfigDict(extra="forbid")
-    type: Literal["lasso", "lightgbm"] = "lightgbm"
+    type: Literal["lasso", "lightgbm"] = "lasso"
     lasso: LassoConfig = Field(default_factory=LassoConfig)
     lightgbm: LightGBMSelectorConfig = Field(default_factory=LightGBMSelectorConfig)
 
@@ -224,10 +228,14 @@ class WeighterConfig(BaseModel):
 
     PR-B2 refactors this from flat fields to subnested per-type blocks
     (ic / ir / equal / lightgbm), parallel to PR-A's SelectorConfig.
-    Default ``type`` is currently ``"ic"`` (Task 1); Task 4 flips it.
+    Default ``type`` flipped to ``"lightgbm"`` initially but was rolled
+    back to ``"ic"`` on 2026-05-24 after A/B validation
+    (`docs/ab_validation_results.md`) showed LGB weighter contributed
+    ~-12% return on the small training-set baseline. LGB remains opt-in
+    via ``type: lightgbm``.
     """
     model_config = ConfigDict(extra="forbid")
-    type: Literal["ic", "ir", "equal", "lightgbm"] = "lightgbm"
+    type: Literal["ic", "ir", "equal", "lightgbm"] = "ic"
     ic: ICWeighterConfig = Field(default_factory=ICWeighterConfig)
     ir: IRWeighterConfig = Field(default_factory=IRWeighterConfig)
     equal: EqualWeighterConfig = Field(default_factory=EqualWeighterConfig)

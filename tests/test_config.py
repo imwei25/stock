@@ -264,11 +264,13 @@ def test_mlfactor_label_type_unknown_rejected():
         MLFactorConfig(label_type="momentum")
 
 
-def test_selector_default_type_is_lightgbm():
-    """Default selector.type flips to 'lightgbm' in PR-B1."""
+def test_selector_default_type_is_lasso():
+    """Default selector.type was 'lightgbm' in PR-B1 but rolled back to
+    'lasso' on 2026-05-24 after A/B validation showed LGB regressed sharpe
+    on the 16-stock × 500-bar baseline. See docs/ab_validation_results.md."""
     from stockpool.config import SelectorConfig
     cfg = SelectorConfig()
-    assert cfg.type == "lightgbm"
+    assert cfg.type == "lasso"
 
 
 def test_selector_lightgbm_subcfg_explicit():
@@ -331,11 +333,14 @@ def test_selector_unknown_type_rejected():
         SelectorConfig.model_validate({"type": "xgboost"})
 
 
-def test_weighter_default_type_is_lightgbm():
-    """Default weighter.type flips to 'lightgbm' in PR-B2 Task 4."""
+def test_weighter_default_type_is_ic():
+    """Default weighter.type was 'lightgbm' in PR-B2 but rolled back to 'ic'
+    on 2026-05-24 after A/B validation showed LGB weighter contributed ~-12%
+    return on the 16-stock × 500-bar baseline. See
+    docs/ab_validation_results.md."""
     from stockpool.config import WeighterConfig
     cfg = WeighterConfig()
-    assert cfg.type == "lightgbm"
+    assert cfg.type == "ic"
 
 
 def test_weighter_ic_subcfg_explicit():
