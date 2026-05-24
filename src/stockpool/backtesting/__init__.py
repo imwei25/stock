@@ -38,6 +38,12 @@ from stockpool.backtesting.strategies import (
     SMACrossStrategy,
     VerdictExecution,
 )
+from stockpool.backtesting.sizing import (
+    FixedLotSizer,
+    LotSizer,
+    VolTargetLotSizer,
+    build_lot_sizer,
+)
 
 __all__ = [
     "BacktestEngine",
@@ -55,4 +61,8 @@ __all__ = [
     "MLFactorStrategy",
     "VerdictExecution",
     "SMACrossStrategy",
+    "FixedLotSizer",
+    "LotSizer",
+    "VolTargetLotSizer",
+    "build_lot_sizer",
 ]
