@@ -15,6 +15,7 @@ from typing import Literal, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from stockpool.factors.registry import make_factor
 from stockpool.ml.dataset import compute_factor_panel, forward_return_panel
 
 
@@ -262,6 +263,11 @@ def analyze_factors(
     factor_names = list(factor_names)
     if not factor_names:
         raise ValueError("factor_names must be non-empty")
+
+    # Resolve base names (e.g. "momentum", "boll_position") to canonical names
+    # ("momentum_20", "boll_position_20") so downstream lookups against the
+    # compute_factor_panel output align. Pre-resolved names round-trip unchanged.
+    factor_names = [make_factor(n).name for n in factor_names]
 
     fp = compute_factor_panel(panel, factor_names)
     fwd = forward_return_panel(panel["close"], horizon)
