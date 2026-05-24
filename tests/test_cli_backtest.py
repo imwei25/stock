@@ -63,3 +63,39 @@ def test_backtest_cli_produces_html(tmp_path, isolated_cache, monkeypatch):
     for N in raw["backtest"]["equity_curve_holding_days"]:
         assert f"N={N}" in html
     assert "605589" in html
+
+
+def test_backtest_continues_after_per_stock_failure(tmp_path, isolated_cache, monkeypatch):
+    """A mid-loop stock failure must not abort the run; warning is logged."""
+    cache_last = pd.date_range("2024-01-02", periods=200, freq="B")[-1]
+    fresh_today = pd.Timestamp(cache_last) + pd.Timedelta(days=1)
+    monkeypatch.setattr("stockpool.fetcher._today", lambda: fresh_today)
+
+    import yaml
+    raw = yaml.safe_load((PROJECT_ROOT / "config.yaml").read_text(encoding="utf-8"))
+    raw["data"]["cache_dir"] = str(isolated_cache)
+    raw["data"]["history_days"] = 200
+    raw["report"]["output_dir"] = str(tmp_path / "reports")
+    raw["stocks"] = [
+        {"code": "605589", "name": "Cached", "sector": ""},
+        {"code": "000001", "name": "Missing", "sector": ""},
+    ]
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    # Patch backtest_runner.fetch_daily: serve 605589 from disk, raise for others.
+    real_read = pd.read_parquet
+    cached_codes = {"605589"}
+    def _selective_fetch(code, *a, **kw):
+        if code in cached_codes:
+            return real_read(isolated_cache / f"{code}_daily.parquet")
+        raise RuntimeError("network disabled in test")
+    monkeypatch.setattr("stockpool.backtest_runner.fetch_daily", _selective_fetch)
+
+    rc = main(["backtest", "--config", str(cfg_file)])
+    assert rc == 0  # cached stock succeeded → report renders
+    latest = tmp_path / "reports" / "backtest" / "latest.html"
+    assert latest.exists()
+    html = latest.read_text(encoding="utf-8")
+    assert "605589" in html
+    assert "000001" not in html  # failed stock not in report

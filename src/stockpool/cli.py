@@ -13,9 +13,9 @@ import pandas as pd
 
 from stockpool import __version__
 from stockpool.backtest import compute_hit_rates
-from stockpool.backtest_composite import simulate_equity_curve, verdict_bucket_stats, walk_forward_verdicts
+from stockpool.backtest_composite import verdict_bucket_stats, walk_forward_verdicts
 from stockpool.backtest_report import render_backtest_report
-from stockpool.backtest_runner import prepare_pool as _prepare_ml_pool
+from stockpool.backtest_runner import backtest_stocks, prepare_pool as _prepare_ml_pool
 from stockpool.config import AppConfig, load_config
 from stockpool.fetcher import (
     fetch_daily,
@@ -36,7 +36,7 @@ from stockpool.signals import (
     score_triggers,
     verdict_of,
 )
-from stockpool.strategy_factory import build_factor_panel, build_strategy, simulate_strategy_equity_curve
+from stockpool.strategy_factory import build_strategy
 
 log = logging.getLogger("stockpool")
 
@@ -227,61 +227,16 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     # the strategy can build a panel at each refit point. Pool composition is
     # decided by ``training_universe``.
     pool_data, factor_panel = _prepare_ml_pool(cfg, stocks, args.refresh)
-    needs_pool = pool_data is not None
     # One shared cache for the whole backtest run — lets MLFactorStrategy
     # reuse the stacked (X, y) panel across stocks and share monthly fits.
     shared_cache: dict = {}
 
-    per_stock: list = []
-    for s in stocks:
-        log.info("Backtesting %s (%s)...", s.code, s.name)
-        try:
-            daily = pool_data.get(s.code) if needs_pool else None
-            if daily is None:
-                daily = fetch_daily(
-                    s.code, cfg.data.history_days, cfg.data.cache_dir,
-                    force_refresh=args.refresh, source=cfg.data.source,
-                )
-            if cfg.strategy.name == "composite_verdict":
-                wf = walk_forward_verdicts(
-                    daily, cfg.weights, cfg.scoring, cfg.verdicts, cfg.indicators
-                )
-                if len(wf) == 0:
-                    log.warning("%s: insufficient history, skipping", s.code)
-                    continue
-                result = simulate_equity_curve(
-                    wf,
-                    holding_days_list=cfg.backtest.equity_curve_holding_days,
-                    with_buy_and_hold=True,
-                    buy_cost=cfg.backtest.costs.buy_cost,
-                    sell_cost=cfg.backtest.costs.sell_cost,
-                    risk_free_rate=cfg.backtest.risk_free_rate,
-                    engine=cfg.backtest.engine,
-                    position_size=cfg.backtest.position_size,
-                    max_concurrent_lots=cfg.backtest.max_concurrent_lots,
-                )
-            else:
-                strategy = build_strategy(
-                    cfg,
-                    pool_data=pool_data if needs_pool else None,
-                    current_stock_code=s.code,
-                    factor_panel=factor_panel,
-                    shared_cache=shared_cache,
-                )
-                result = simulate_strategy_equity_curve(
-                    daily, strategy,
-                    holding_days_list=cfg.backtest.equity_curve_holding_days,
-                    with_buy_and_hold=True,
-                    buy_cost=cfg.backtest.costs.buy_cost,
-                    sell_cost=cfg.backtest.costs.sell_cost,
-                    risk_free_rate=cfg.backtest.risk_free_rate,
-                    engine=cfg.backtest.engine,
-                    position_size=cfg.backtest.position_size,
-                    max_concurrent_lots=cfg.backtest.max_concurrent_lots,
-                )
-            per_stock.append((s.code, s.name, result))
-        except Exception as e:
-            log.error("Backtest failed for %s: %s\n%s", s.code, e, traceback.format_exc())
+    per_stock, failed = backtest_stocks(
+        cfg, stocks, pool_data, factor_panel,
+        shared_cache=shared_cache, refresh=args.refresh,
+    )
+    for code, err in failed:
+        log.warning("Skipped %s: %s", code, err)
 
     if not per_stock:
         log.error("No stocks could be backtested.")
