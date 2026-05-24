@@ -1,0 +1,386 @@
+"""HTML report for A/B test results.
+
+Layout (top → bottom):
+  1. Metadata banner (arm names, differing fields, base hash, per-arm counts).
+  2. Aggregate diff table over common stocks.
+  3. Sharpe scatter (A.sharpe x B.sharpe per common stock).
+  4. Sharpe diff histogram (B.sharpe - A.sharpe).
+  5. Per-stock cards (3-series equity chart + side-by-side metric table).
+  6. Failure detail + full effective_cfg dumps (folded).
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pandas as pd
+import yaml
+from pyecharts import options as opts
+from pyecharts.charts import Bar, Line, Scatter
+
+from stockpool.ab.runner import ABResult, ArmResult
+from stockpool.backtest_composite import EquityResult
+from stockpool.backtest_report import _CSS
+
+_METRIC_DEFS = [
+    ("total_return",        "Total return",        True,  "pct"),
+    ("annualized_return",   "Annualized return",   True,  "pct"),
+    ("sharpe",              "Sharpe",              True,  "num"),
+    ("max_drawdown",        "Max drawdown",        False, "pct"),
+    ("win_rate",            "Win rate",            True,  "pct"),
+    ("avg_trade_return_pct","Avg trade ret %",     True,  "raw"),
+    ("trade_count",         "Trade count",         None,  "int"),
+]
+
+
+def _fmt(val, kind: str) -> str:
+    if val is None:
+        return "—"
+    if kind == "pct":
+        return f"{val*100:+.2f}%"
+    if kind == "num":
+        return f"{val:+.3f}"
+    if kind == "raw":
+        return f"{val:+.2f}"
+    if kind == "int":
+        return str(int(val))
+    return str(val)
+
+
+def _arm_metrics(arm_result: ArmResult) -> dict[str, dict[str, float]]:
+    """Map code → metrics dict (the single-N dict from EquityResult)."""
+    out: dict[str, dict[str, float]] = {}
+    for code, _name, res in arm_result.per_stock:
+        N = next(iter(res.metrics))
+        out[code] = res.metrics[N]
+    return out
+
+
+def compute_diff_table(arm_a: ArmResult, arm_b: ArmResult) -> dict:
+    """Aggregate per-metric stats over stocks present in BOTH arms.
+
+    Returns a dict:
+      {
+        "common_stocks_count": int,
+        "common": list[str],
+        "rows": list[dict],   # one per metric
+      }
+    Each row: label / kind / higher_better / a_mean / a_median / b_mean /
+    b_median / diff_mean / a_wins / b_wins.
+    """
+    a_metrics = _arm_metrics(arm_a)
+    b_metrics = _arm_metrics(arm_b)
+    common = sorted(set(a_metrics) & set(b_metrics))
+
+    rows = []
+    for key, label, higher_better, kind in _METRIC_DEFS:
+        if not common:
+            rows.append({
+                "label": label, "kind": kind, "higher_better": higher_better,
+                "a_mean": None, "a_median": None,
+                "b_mean": None, "b_median": None,
+                "diff_mean": None, "a_wins": 0, "b_wins": 0,
+            })
+            continue
+        a_vals = [a_metrics[c].get(key) or 0.0 for c in common]
+        b_vals = [b_metrics[c].get(key) or 0.0 for c in common]
+        a_mean = sum(a_vals) / len(a_vals)
+        b_mean = sum(b_vals) / len(b_vals)
+        a_med = sorted(a_vals)[len(a_vals) // 2]
+        b_med = sorted(b_vals)[len(b_vals) // 2]
+        if higher_better is None:
+            a_wins = b_wins = 0
+        elif higher_better:
+            a_wins = sum(1 for a, b in zip(a_vals, b_vals) if a > b)
+            b_wins = sum(1 for a, b in zip(a_vals, b_vals) if b > a)
+        else:
+            a_wins = sum(1 for a, b in zip(a_vals, b_vals) if a < b)
+            b_wins = sum(1 for a, b in zip(a_vals, b_vals) if b < a)
+        rows.append({
+            "label": label, "kind": kind, "higher_better": higher_better,
+            "a_mean": a_mean, "a_median": a_med,
+            "b_mean": b_mean, "b_median": b_med,
+            "diff_mean": b_mean - a_mean,
+            "a_wins": a_wins, "b_wins": b_wins,
+        })
+    return {"common_stocks_count": len(common), "common": common, "rows": rows}
+
+
+def _diff_table_html(table: dict, arm_a_name: str, arm_b_name: str) -> str:
+    header = (
+        f"<tr><th>Metric</th>"
+        f"<th>{arm_a_name} mean</th><th>{arm_a_name} median</th>"
+        f"<th>{arm_b_name} mean</th><th>{arm_b_name} median</th>"
+        f"<th>Δ mean (B−A)</th>"
+        f"<th>{arm_a_name} wins</th><th>{arm_b_name} wins</th></tr>"
+    )
+    body_rows = []
+    for row in table["rows"]:
+        body_rows.append(
+            f"<tr><td>{row['label']}</td>"
+            f"<td>{_fmt(row['a_mean'], row['kind'])}</td>"
+            f"<td>{_fmt(row['a_median'], row['kind'])}</td>"
+            f"<td>{_fmt(row['b_mean'], row['kind'])}</td>"
+            f"<td>{_fmt(row['b_median'], row['kind'])}</td>"
+            f"<td><strong>{_fmt(row['diff_mean'], row['kind'])}</strong></td>"
+            f"<td>{row['a_wins']}</td><td>{row['b_wins']}</td></tr>"
+        )
+    return (
+        f"<table><thead>{header}</thead>"
+        f"<tbody>{''.join(body_rows)}</tbody></table>"
+    )
+
+
+def _sharpe_scatter(arm_a: ArmResult, arm_b: ArmResult) -> str:
+    a_metrics = _arm_metrics(arm_a)
+    b_metrics = _arm_metrics(arm_b)
+    common = sorted(set(a_metrics) & set(b_metrics))
+    if not common:
+        return "<p>No common stocks — scatter omitted.</p>"
+    points = [[a_metrics[c]["sharpe"], b_metrics[c]["sharpe"], c] for c in common]
+    vals = [p[0] for p in points] + [p[1] for p in points]
+    lo, hi = min(vals), max(vals)
+    if lo == hi:
+        hi = lo + 1e-6
+
+    sc = (
+        Scatter(init_opts=opts.InitOpts(width="100%", height="420px"))
+        .add_xaxis([p[0] for p in points])
+        .add_yaxis(
+            f"{arm_b.name} vs {arm_a.name}",
+            [p[1] for p in points],
+            label_opts=opts.LabelOpts(is_show=False),
+        )
+        .set_global_opts(
+            title_opts=opts.TitleOpts(
+                title=f"Sharpe scatter — above diagonal = {arm_b.name} wins",
+                pos_left="center",
+            ),
+            xaxis_opts=opts.AxisOpts(
+                name=f"{arm_a.name} Sharpe", min_=lo, max_=hi, type_="value",
+            ),
+            yaxis_opts=opts.AxisOpts(
+                name=f"{arm_b.name} Sharpe", min_=lo, max_=hi, type_="value",
+            ),
+            tooltip_opts=opts.TooltipOpts(trigger="item"),
+            legend_opts=opts.LegendOpts(pos_top="6%"),
+        )
+    )
+    sc.options["series"][0]["markLine"] = {
+        "symbol": "none",
+        "lineStyle": {"color": "#999", "type": "dashed"},
+        "data": [[{"coord": [lo, lo]}, {"coord": [hi, hi]}]],
+    }
+    return sc.render_embed()
+
+
+def _diff_histogram(arm_a: ArmResult, arm_b: ArmResult) -> str:
+    a_metrics = _arm_metrics(arm_a)
+    b_metrics = _arm_metrics(arm_b)
+    common = sorted(set(a_metrics) & set(b_metrics))
+    diffs = [b_metrics[c]["sharpe"] - a_metrics[c]["sharpe"] for c in common]
+    if not diffs:
+        return "<p>No common stocks — histogram omitted.</p>"
+
+    lo, hi = min(diffs), max(diffs)
+    if lo == hi:
+        hi = lo + 1e-6
+    n_bins = min(12, max(4, len(diffs) // 2 or 4))
+    width = (hi - lo) / n_bins
+    bins = [0] * n_bins
+    for d in diffs:
+        i = min(int((d - lo) / width), n_bins - 1)
+        bins[i] += 1
+    labels = [f"{lo + width*i:+.2f}" for i in range(n_bins)]
+
+    bar = (
+        Bar(init_opts=opts.InitOpts(width="100%", height="320px"))
+        .add_xaxis(labels)
+        .add_yaxis(
+            f"{arm_b.name} − {arm_a.name} (Sharpe)", bins,
+            label_opts=opts.LabelOpts(is_show=False),
+        )
+        .set_global_opts(
+            title_opts=opts.TitleOpts(title="Sharpe diff distribution",
+                                      pos_left="center"),
+            xaxis_opts=opts.AxisOpts(name="Δ Sharpe"),
+            yaxis_opts=opts.AxisOpts(name="stocks"),
+            legend_opts=opts.LegendOpts(pos_top="6%"),
+        )
+    )
+    return bar.render_embed()
+
+
+def _ab_equity_chart(
+    a_result: EquityResult | None,
+    b_result: EquityResult | None,
+    a_name: str,
+    b_name: str,
+    title: str,
+) -> str:
+    ref = a_result if a_result is not None else b_result
+    if ref is None:
+        return ""
+    any_curve = next(iter(ref.curves.values()))
+    dates = pd.DatetimeIndex(any_curve["date"]).strftime("%Y-%m-%d").tolist()
+
+    line = Line(init_opts=opts.InitOpts(width="100%", height="420px")).add_xaxis(dates)
+    if a_result is not None:
+        N = next(iter(a_result.curves))
+        vals = [round(float(v), 4) for v in a_result.curves[N]["equity"].values]
+        line.add_yaxis(a_name, vals, is_smooth=True, is_symbol_show=False,
+                       label_opts=opts.LabelOpts(is_show=False))
+    if b_result is not None:
+        N = next(iter(b_result.curves))
+        vals = [round(float(v), 4) for v in b_result.curves[N]["equity"].values]
+        line.add_yaxis(b_name, vals, is_smooth=True, is_symbol_show=False,
+                       label_opts=opts.LabelOpts(is_show=False))
+    if ref.buy_and_hold is not None:
+        bh = [round(float(v), 4) for v in ref.buy_and_hold["equity"].values]
+        line.add_yaxis("Buy & Hold", bh, is_smooth=True, is_symbol_show=False,
+                       label_opts=opts.LabelOpts(is_show=False),
+                       linestyle_opts=opts.LineStyleOpts(type_="dashed", width=2))
+
+    line.set_global_opts(
+        title_opts=opts.TitleOpts(title=title, pos_left="center"),
+        xaxis_opts=opts.AxisOpts(is_scale=True,
+                                 axislabel_opts=opts.LabelOpts(rotate=30, font_size=10)),
+        yaxis_opts=opts.AxisOpts(is_scale=True, name="净值"),
+        tooltip_opts=opts.TooltipOpts(trigger="axis", axis_pointer_type="cross"),
+        legend_opts=opts.LegendOpts(pos_top="6%"),
+        datazoom_opts=[opts.DataZoomOpts(type_="inside"),
+                       opts.DataZoomOpts(type_="slider", pos_bottom="2%")],
+    )
+    line.options["grid"] = {"top": "18%", "bottom": "16%", "left": "8%", "right": "4%",
+                            "containLabel": True}
+    return line.render_embed()
+
+
+def _per_stock_cards(arm_a: ArmResult, arm_b: ArmResult) -> str:
+    a_map = {code: (name, res) for code, name, res in arm_a.per_stock}
+    b_map = {code: (name, res) for code, name, res in arm_b.per_stock}
+    all_codes = sorted(set(a_map) | set(b_map))
+    sections = []
+    for i, code in enumerate(all_codes):
+        a_entry = a_map.get(code)
+        b_entry = b_map.get(code)
+        name = (a_entry or b_entry)[0]
+        a_res = a_entry[1] if a_entry else None
+        b_res = b_entry[1] if b_entry else None
+        title = f"{code} {name}"
+        if a_res is None:
+            title += f" [Arm {arm_a.name} failed]"
+        if b_res is None:
+            title += f" [Arm {arm_b.name} failed]"
+        chart = _ab_equity_chart(a_res, b_res, arm_a.name, arm_b.name, title)
+        rows = []
+        for key, label, higher_better, kind in _METRIC_DEFS:
+            a_v = None if a_res is None else a_res.metrics[next(iter(a_res.metrics))].get(key)
+            b_v = None if b_res is None else b_res.metrics[next(iter(b_res.metrics))].get(key)
+            d = (b_v - a_v) if (a_v is not None and b_v is not None) else None
+            rows.append(
+                f"<tr><td>{label}</td>"
+                f"<td>{_fmt(a_v, kind)}</td>"
+                f"<td>{_fmt(b_v, kind)}</td>"
+                f"<td>{_fmt(d, kind)}</td></tr>"
+            )
+        table = (
+            f"<table><thead><tr><th>Metric</th>"
+            f"<th>{arm_a.name}</th><th>{arm_b.name}</th><th>Δ</th>"
+            f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        )
+        open_attr = "open" if i < 3 else ""
+        sections.append(
+            f"<details {open_attr}><summary>"
+            f"<span style='font-size:1.1em;font-weight:bold'>{title}</span>"
+            f"</summary><div class='chart-wrap'>{chart}</div>{table}</details>"
+        )
+    return "".join(sections)
+
+
+def _metadata_banner(ab_result: ABResult) -> str:
+    a, b = ab_result.arm_a, ab_result.arm_b
+    a_arm = ab_result.ab_cfg.arms[a.name]
+    b_arm = ab_result.ab_cfg.arms[b.name]
+    return (
+        f"<h1>A/B Test Report — {ab_result.run_date}</h1>"
+        f"<p class='meta'>Base config: {ab_result.ab_cfg.base_config} "
+        f"(hash: {ab_result.base_cfg.content_hash})</p>"
+        f"<div class='banner'>"
+        f"  <h3>Arm A: {a.name}</h3>"
+        f"  <pre>{yaml.safe_dump(a_arm.model_dump(), sort_keys=False)}</pre>"
+        f"  <p>{len(a.per_stock)} succeeded, {len(a.failed)} failed.</p>"
+        f"  <h3>Arm B: {b.name}</h3>"
+        f"  <pre>{yaml.safe_dump(b_arm.model_dump(), sort_keys=False)}</pre>"
+        f"  <p>{len(b.per_stock)} succeeded, {len(b.failed)} failed.</p>"
+        f"</div>"
+    )
+
+
+def _failure_detail(ab_result: ABResult) -> str:
+    def _format_one(arm: ArmResult) -> str:
+        if not arm.failed:
+            return f"<p>{arm.name}: no failures.</p>"
+        rows = "".join(
+            f"<li><code>{code}</code>: {err}</li>" for code, err in arm.failed
+        )
+        return f"<p>{arm.name}:</p><ul>{rows}</ul>"
+    return (
+        f"<details><summary>Failure detail</summary>"
+        f"{_format_one(ab_result.arm_a)}{_format_one(ab_result.arm_b)}"
+        f"</details>"
+    )
+
+
+def _full_cfg_dump(ab_result: ABResult) -> str:
+    a_yaml = yaml.safe_dump(ab_result.arm_a.effective_cfg.model_dump(), sort_keys=False)
+    b_yaml = yaml.safe_dump(ab_result.arm_b.effective_cfg.model_dump(), sort_keys=False)
+    return (
+        f"<details><summary>Full effective configs</summary>"
+        f"<h4>Arm A: {ab_result.arm_a.name}</h4><pre>{a_yaml}</pre>"
+        f"<h4>Arm B: {ab_result.arm_b.name}</h4><pre>{b_yaml}</pre>"
+        f"</details>"
+    )
+
+
+def render_ab_report(ab_result: ABResult, output_dir: str | Path) -> Path:
+    """Render the full A/B HTML report. Writes <date>.html and latest.html."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"{ab_result.run_date}.html"
+
+    banner = _metadata_banner(ab_result)
+    table = compute_diff_table(ab_result.arm_a, ab_result.arm_b)
+    table_html = _diff_table_html(table, ab_result.arm_a.name, ab_result.arm_b.name)
+    scatter = _sharpe_scatter(ab_result.arm_a, ab_result.arm_b)
+    histogram = _diff_histogram(ab_result.arm_a, ab_result.arm_b)
+    cards = _per_stock_cards(ab_result.arm_a, ab_result.arm_b)
+    failures = _failure_detail(ab_result)
+    cfg_dump = _full_cfg_dump(ab_result)
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+  <meta charset="utf-8">
+  <title>A/B Report · {ab_result.run_date}</title>
+  <style>{_CSS}
+    .banner {{ border: 1px solid #e6e6e6; padding: 1em; margin: 1em 0; }}
+    .banner pre {{ background: #f6f6f6; padding: 0.6em; overflow-x: auto; }}
+  </style>
+</head><body>
+  {banner}
+  <h2>Aggregate (over {table['common_stocks_count']} common stocks)</h2>
+  {table_html}
+  <h2>Sharpe scatter</h2>
+  <div class='chart-wrap'>{scatter}</div>
+  <h2>Sharpe diff distribution</h2>
+  <div class='chart-wrap'>{histogram}</div>
+  <h2>Per-stock comparison</h2>
+  {cards}
+  <h2>Failures &amp; reproducibility</h2>
+  {failures}
+  {cfg_dump}
+  <footer><p>Generated by stockpool ab.</p></footer>
+</body></html>"""
+    out_path.write_text(html, encoding="utf-8")
+    latest = output_dir / "latest.html"
+    latest.write_bytes(out_path.read_bytes())
+    return out_path

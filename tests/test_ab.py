@@ -431,3 +431,65 @@ def test_run_single_arm_unknown_name_raises(tmp_path, isolated_cache_two_stocks)
     ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
     with pytest.raises(KeyError):
         run_single_arm(ab_cfg, base_cfg, base_cfg.stocks, False, "no_such_arm")
+
+
+# ── Report smoke ────────────────────────────────────────────────────────────
+
+
+def test_render_ab_report_smoke(tmp_path, isolated_cache_two_stocks):
+    """End-to-end: run_ab + render_ab_report produces valid HTML."""
+    from stockpool.ab import run_ab, render_ab_report
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+    out_dir = tmp_path / "reports" / "ab"
+    out_path = render_ab_report(result, output_dir=out_dir)
+    assert out_path.exists()
+    assert out_path.stat().st_size > 2048
+    html = out_path.read_text(encoding="utf-8")
+    assert "single_engine" in html
+    assert "multi_lot_engine" in html
+    assert "605589" in html
+    assert "300750" in html
+    # latest.html copied
+    assert (out_dir / "latest.html").exists()
+
+
+def test_render_ab_report_handles_arm_with_no_successes(tmp_path,
+                                                        isolated_cache_two_stocks):
+    """If one arm has empty per_stock, the report still renders without crashing."""
+    from stockpool.ab import run_ab, render_ab_report
+    from stockpool.ab.runner import ArmResult
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+    # Synthetically empty arm A
+    result.arm_a = ArmResult(
+        name=result.arm_a.name,
+        effective_cfg=result.arm_a.effective_cfg,
+        per_stock=[],
+        failed=[("605589", "synthetic"), ("300750", "synthetic")],
+    )
+    out_path = render_ab_report(result, output_dir=tmp_path / "reports" / "ab")
+    html = out_path.read_text(encoding="utf-8")
+    # Either text variant of "0 succeeded" is acceptable
+    assert ("0 succeeded" in html) or ("0&nbsp;succeeded" in html)
+
+
+def test_compute_diff_table_uses_only_common_stocks(tmp_path,
+                                                     isolated_cache_two_stocks):
+    """Aggregate diff table aggregates over stocks present in BOTH arms."""
+    from stockpool.ab.report import compute_diff_table
+    from stockpool.ab.runner import ArmResult
+    from stockpool.ab import run_ab
+
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+
+    # Drop one stock from arm B
+    result.arm_b = ArmResult(
+        name=result.arm_b.name,
+        effective_cfg=result.arm_b.effective_cfg,
+        per_stock=result.arm_b.per_stock[:1],
+        failed=[("300750", "synthetic miss")],
+    )
+    table = compute_diff_table(result.arm_a, result.arm_b)
+    assert table["common_stocks_count"] == 1

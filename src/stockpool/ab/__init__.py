@@ -14,9 +14,8 @@ from stockpool.ab.config import (
     build_effective_cfg,
     load_ab_config,
 )
+from stockpool.ab.report import render_ab_report
 from stockpool.ab.runner import ABResult, ArmResult, run_ab, run_single_arm
-
-# render_ab_report import added by Task 7 when it lands.
 
 __all__ = [
     "ABConfig",
@@ -26,6 +25,7 @@ __all__ = [
     "ArmResult",
     "build_effective_cfg",
     "load_ab_config",
+    "render_ab_report",
     "run_ab",
     "run_single_arm",
 ]
