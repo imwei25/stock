@@ -418,39 +418,112 @@ class MLFactorConfig(BaseModel):
 
 ---
 
-## 6. 路线图
+## 6. 路线图(2026-05-24 更新)
 
-按"投入产出 + 互相依赖"排序的三阶段实施计划:
+> 本节是**唯一**反映项目当前状态的清单。任何 follow-up / 暂搁项都应该汇总在这里,而不是散落在各个 spec 的"Non-Goals"/"范围外"段。
+>
+> A/B 验证全部结果见 `docs/ab_validation_results.md`;运行手册见 `docs/ab_validation_runbook.md`。
 
-### 阶段 1 — F1 因子库扩展(~ 1-2 周)
-**先做的理由**:解锁后续所有方向。F2 的 LGB selector 没有充足候选因子就是空转;F3 的组合改进在不同因子集上结论可能反转。
+### ✅ 已完成(经 A/B 验证)
 
-**交付物**:
-1. `factors_analysis.py` 模块 + CLI 子命令
-2. `factors/custom.py`(industry_relative_strength_20、limit_up_count_20、turnover_zscore_60)
-3. `reports/factor_analysis/` HTML/JSON 模板
-4. 一份 `reports/factor_analysis/<日期>.html` 实跑结果作为基线
-5. 用 selection.json 跑一版 ml_factor 回测对照
+| 项目 | 关键 commit / spec | A/B verdict |
+|------|--------------------|-------------|
+| **F1 plan-1** — factor analysis 模块(`factors_analysis.py` + CLI `factors analyze` / `pick-by-ic` + pyecharts 报告) | spec `2026-05-23-factor-analysis-module.md` | — (无 A/B,工具性 PR) |
+| **F2 PR-A** — embargo + label_type 接口 + Lasso 子段化 | spec `2026-05-23-f2-pr-a-...`;`embargo_days` 默认 None=auto=horizon | **⚠️ tied (P2-1)** — Δsharpe=-0.034,无害,**默认保留** |
+| **F2 PR-B1** — LightGBMSelector + `selector.lightgbm.*` 子段 | spec `2026-05-23-f2-pr-b1-...` | **⚠️ tied (P1-1)** — LGB selector 单独 Δsharpe=-0.027 |
+| **F2 PR-B2** — LightGBMWeighter + WeighterConfig 子段化 + `contributions()` 多态 | spec `2026-05-23-f2-pr-b2-...` | **❌ regression (P1-2)** — Δreturn=-12.72%,LGB weighter 过拟合主因 |
+| **F2 默认回退**(commit `28a1584`,2026-05-24) | `selector.type` `lightgbm`→`lasso`,`weighter.type` `lightgbm`→`ic` | 由 P0-2 触发 |
+| **T1 A/B testing tool** — `stockpool ab` 子命令 + `ab/{config,runner,report}.py` + `backtest_runner.py` | spec `2026-05-24-ab-testing-design.md` | — (工具性 PR) |
+| **T1 fix** — `_decide_pool_sharing` 按 arm 需要 gate universe 注入(commit `3648d50`) | — | 由 P3-2 第一次跑出 Δ=0 触发 |
+| **P3-2 验证 + verdict** — `training_universe=all` 在 16 股上 Δsharpe=-0.243 / Δreturn=-14.32%,**保持 `pool` 默认** | `ab_validation_results.md` §3.7 | **❌ regression** |
 
-**验收 gate**:回测在新因子集上 sharpe ≥ 旧因子集 sharpe 的 80%(允许小幅退化作为多因子库长期价值的成本)。
+**当前 sweet spot 默认**(7 个 A/B 对照之上):
 
-### 阶段 2 — F2 模型升级(~ 2-3 周)
-**先做 embargo,后做 lightgbm**(两个独立 PR):
+```yaml
+strategy:
+  name: ml_factor
+  ml_factor:
+    panel_mode: pooled          # ✅ P3-1 真收益 (+0.23 sharpe)
+    training_universe: pool     # ❌ "all" 倒退 (-0.24 sharpe)
+    embargo_days: null          # ✅ auto=horizon,P2-1 tied 无害
+    selector: {type: lasso}     # ❌ lightgbm 倒退 (P0-2/P1-2)
+    weighter: {type: ic}        # ❌ lightgbm 倒退 (P0-2/P1-2)
+    share_pool_fit: true        # 与 pooled+pool 配合工作良好
+```
 
-1. **PR-A**:embargo + 配置子段化(lasso 子段化、label_type 新字段)+ 默认行为不变。验收:所有现有测试通过,新增 `test_embargo.py` 和 `test_label_type.py`。
-2. **PR-B**:LightGBM selector + weighter + 默认值切换到 lightgbm。验收:依赖隔离干净、`selector.type: lasso, weighter.type: ic` 回归测试 0 失败、合成数据上 OOS IC 提升。
+### 🚧 待做(按建议优先级)
 
-### 阶段 3 — F3 组合构建(~ 1-2 周)
-依赖前两阶段的因子和模型稳定,否则 max DD 改善判断不出来到底是 sizing 的功劳还是模型的功劳。
+#### P1: F3 — 组合构建与风险控制(原 §5)
 
-1. **PR-C**:sizing 配置 + vol_target 实现 + 兼容旧 `position_size`
-2. **PR-D**:risk_overlay max_dd_stop(单股版本)
-3. **PR-E**:测试套件 + 文档更新(CLAUDE.md + README.md 按规则同步)
+跨度比 F2 大,建议拆 3 个子 PR:
+
+| 子 PR | 交付物 | 估算 | A/B 验证 |
+|------|--------|------|---------|
+| **PR-C** — Sizing | `BacktestConfig.sizing` 子段(`type: fixed | vol_target`,默认 `vol_target`)+ vol-targeted position 实现 | 6-8 task | 单独 A/B:固定 vs vol_target sizing,看 max DD 收窄 |
+| **PR-D** — Risk overlay | `BacktestConfig.risk_overlay`(max DD 熔断 + cooldown + sector cap 单股版本)| 6-8 task | A/B:overlay on/off,看 max DD 与 trade count 变化 |
+| **PR-E** — Score smoothing | `MLFactorConfig.score_smoothing: none | ema`,默认 `none`(显式违反"新方案做 default"原则,因为延迟成本不确定) | 4-6 task | A/B:span 不同值,看 trade churn |
+
+依赖:不依赖任何待做项。可以独立启动。
+
+#### P2: F1 plan-2 — Custom factors + WQ101 ranking + 实跑 A/B
+
+F1 plan-1 末尾 deferred 的部分:
+
+- `factors/custom.py`(`industry_relative_strength_20`、`limit_up_count_20`、`turnover_zscore_60`)
+- 用 `factors analyze --universe all` 跑一次 WQ101 全量排名,选 top-20 写 `selection.json`
+- A/B 对照"老 6 因子" vs "新 selection.json",决定 ml_factor 默认 factors 列表是否扩
+
+**前置**:`fetch-universe` 已跑过(✅ 满足)
+
+**估算**:3-4 task(`custom.py` 因子实现 + 跑 ranking + 跑 A/B + 决定默认更新)
+
+#### P3: 工具 / 基础设施改进
+
+| 项目 | 描述 | 来自哪里 |
+|------|------|----------|
+| **A/B portfolio-level** | 当前 A/B 是 per-stock 各跑各 + 跨股聚合;portfolio-level 要求"每 strategy 一条组合净值",需要新 `PortfolioStrategy` ABC + portfolio engine | A/B spec §Non-Goals |
+| **A/B 统计显著性** | paired t-test / Wilcoxon / bootstrap CI。8-30 股样本太小,Pool B 联动扩到几百只再启 | A/B spec §Non-Goals |
+| **`composite_verdict` 参数子段化** | 把 `indicators` / `weights` / `verdicts` / `scoring` 从 `AppConfig` 顶层下沉到 `strategy.composite_verdict.*`。完成后 A/B 自动获得"对比两个 composite_verdict 配置"能力(目前 ArmOverride 拒绝顶层字段覆盖) | A/B spec §Non-Goals |
+| **A/B multi-arm (>2)** | 当前 schema 强制 `exactly 2 arms`。多 arm 需要重新设计 diff table / scatter / histogram | A/B spec §Non-Goals |
+| **LGB holdout + early stopping** | 当前 LGB walk-forward 无 holdout,依赖"refit 频率"做正则。引入 holdout 可能让 LGB 真正可用 | F2 PR-B1/B2 spec §范围外 |
+| **LGB selector/weighter 共享 booster** | 当前同时 LGB+LGB 时训 2 次。可共享 importance 通道避免重复训练 | F2 PR-B2 spec §3.12 |
+
+#### P4: F2 LGB 重启(待 P2/P3 之后)
+
+P0-2 判定 LGB 倒退,但**有条件可以重启**:
+
+- (a) 调严超参:`num_leaves=7-10`,`min_data_in_leaf=50+`,`num_iterations=100`
+- (b) 扩训练样本:`training_universe=all` 配合 LGB(单独切 universe 也倒退 -0.24,但配合调严的 LGB 可能展现非线性优势,需另跑 A/B 验证)
+- (c) 扩 cfg.stocks 池本身(16 → 50+),让 selection bias 不那么主导
+- (d) 引入 LGB holdout + early stopping(见 P3)
+
+启动 P4 的前提:P2 (F1 plan-2) 跑通 + 上述至少两条同时启用 + A/B 验证 sharpe ≥ baseline。**否则不要再尝试默认切 LGB**。
+
+### 🧊 暂搁(已验证倒退,需明确触发条件才重启)
+
+| 项目 | 触发条件 | 验证证据 |
+|------|---------|---------|
+| LGB+LGB 作为默认 | 见 P4 | P0-2 Δsharpe=-0.20,P1-2 Δreturn=-12.72% |
+| `training_universe=all` 作为默认 | (a) 配合 P2 扩股池 + 调参 LGB 后单独 A/B 验证 OR (b) 用户明确说"我的股池有强 selection bias" | P3-2 重跑 Δsharpe=-0.243 |
+
+### 跨阶段约束(2026-05-24 新增)
+
+**所有未来 PR 必须通过的 gate**:
+
+1. **任何改默认值的 PR** 必须随附一份用 `stockpool ab` 跑的 A/B 报告作为证据,verdict 至少不是 ❌ regression
+2. **任何新增组件**(新 selector / weighter / engine / sizing / overlay)必须在 spec 里写明"如何 A/B 验证它带来的收益"
+3. **A/B 工具自身的 follow-up**(见 P3 表格)优先级取决于实际堵塞:
+   - 真有人想跑 composite_verdict A/B → 解锁 composite_verdict 子段化
+   - 真有人想看显著性 → 加 t-test
+   - 真有人想跑 5 个 arm → 改 schema
+   - **没需求就不动**(避免过度工程)
+4. **`docs/improvement_ideas.md` 已被本路线图取代**;那个文件保留作为历史背景,不再更新
 
 ### 跨阶段维持事项
+
 - 每个 PR 走 `docs/superpowers/specs/` + `docs/superpowers/plans/` 流程(per 项目惯例)
-- 不引入新依赖时优先(F1、F3);引入 lightgbm 时单独 PR
-- 每个 PR 末附一份"前后对比"小报告(同一段历史,旧 config vs 新 config 的 5 个指标 + 净值图)
+- 不引入新依赖时优先(F3、F1 plan-2 都不需要新依赖)
+- 每个 PR 末附一份 A/B 对照报告(同一段历史,旧 config vs 新 config 的 7 个指标 + 净值散点)
 
 ---
 

@@ -1,4 +1,17 @@
-# Stockpool 提升方向
+# Stockpool 提升方向(历史笔记 — 已被取代)
+
+> ⚠️ **本文档已过时**(写于 2026-05 早期,F1/F2/A/B 工具落地之前)。
+> **当前路线图请看** `docs/strategy_improvement_2026.md` §6。
+> 本文保留作历史背景,不再更新。
+>
+> 大致状态对应:
+> - § 1 "信号质量 — 从规则到 ML" → 已通过 F2(`ml_factor` 策略 + Lasso/LGB selector + IC/LGB weighter)实装
+> - § 2 "回测可信度" → 已通过 backtesting framework + 成本 + multi-lot engine + A/B 工具实装
+> - § 3 "风险管理" → F3(待做,见新路线图 P1)
+> - § 4 "数据质量" → 部分实装(`validate_ohlcv`,但停牌/除权检测仍待做)
+> - § 5 "报告交互性" → 部分实装(报告懒加载、折叠),其余仍是 idea
+> - § 6 "股票池管理" → 已通过 Pool B(`recommend_pool.py`)部分实装
+> - § 7 "实盘接入" → 仍未做,保留为长远 idea
 
 ## 1. 信号质量 — 从规则到 ML
 
