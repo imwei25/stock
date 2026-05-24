@@ -261,7 +261,7 @@ def _make_cfg(tmp_path, strategy_name, panel_mode=None,
 def test_pool_plan_both_composite(tmp_path):
     from stockpool.ab.runner import _decide_pool_sharing
     cfgs = [_make_cfg(tmp_path, "composite_verdict")] * 2
-    plan = _decide_pool_sharing(cfgs, stocks=[])
+    plan = _decide_pool_sharing(cfgs)
     assert plan["load_universe"] is False
     assert plan["shared_factors"] is None
 
@@ -273,7 +273,7 @@ def test_pool_plan_ml_vs_composite(tmp_path):
                   training_universe="all"),
         _make_cfg(tmp_path, "composite_verdict"),
     ]
-    plan = _decide_pool_sharing(cfgs, stocks=[])
+    plan = _decide_pool_sharing(cfgs)
     assert plan["load_universe"] is True
     assert plan["shared_factors"] is None
 
@@ -287,7 +287,7 @@ def test_pool_plan_both_ml_pooled_all_same_factors(tmp_path):
         _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
                   training_universe="all", factors=factors),
     ]
-    plan = _decide_pool_sharing(cfgs, stocks=[])
+    plan = _decide_pool_sharing(cfgs)
     assert plan["load_universe"] is True
     assert plan["shared_factors"] == factors
 
@@ -300,7 +300,7 @@ def test_pool_plan_both_ml_pooled_all_different_factors(tmp_path):
         _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
                   training_universe="all", factors=["rsi_centered_14"]),
     ]
-    plan = _decide_pool_sharing(cfgs, stocks=[])
+    plan = _decide_pool_sharing(cfgs)
     assert plan["load_universe"] is True
     assert plan["shared_factors"] is None
 
@@ -311,7 +311,7 @@ def test_pool_plan_one_ml_per_stock_does_not_load_universe(tmp_path):
         _make_cfg(tmp_path, "ml_factor", panel_mode="per_stock"),
         _make_cfg(tmp_path, "composite_verdict"),
     ]
-    plan = _decide_pool_sharing(cfgs, stocks=[])
+    plan = _decide_pool_sharing(cfgs)
     assert plan["load_universe"] is False
 
 
@@ -409,11 +409,13 @@ def test_run_ab_per_stock_failure_isolated(tmp_path, isolated_cache_two_stocks,
     monkeypatch.setattr(br, "walk_forward_verdicts", _maybe_throw)
 
     result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
-    # At least one arm had at least one stock fail; total survivors > 0.
-    total_failed = len(result.arm_a.failed) + len(result.arm_b.failed)
-    total_done = len(result.arm_a.per_stock) + len(result.arm_b.per_stock)
-    assert total_failed >= 1
-    assert total_done >= 1
+    # First call (arm_a, 605589) throws; everything else succeeds.
+    assert len(result.arm_a.failed) == 1
+    assert result.arm_a.failed[0][0] == "605589"
+    assert len(result.arm_a.per_stock) == 1
+    assert result.arm_a.per_stock[0][0] == "300750"
+    assert len(result.arm_b.failed) == 0
+    assert len(result.arm_b.per_stock) == 2
 
 
 def test_run_single_arm_returns_arm_result(tmp_path, isolated_cache_two_stocks):

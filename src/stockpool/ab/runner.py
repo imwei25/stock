@@ -18,7 +18,7 @@ from stockpool.ab.config import ABConfig, ArmOverride, build_effective_cfg
 from stockpool.backtest_composite import EquityResult
 from stockpool.backtest_runner import backtest_stocks, prepare_pool
 from stockpool.config import AppConfig, Stock
-from stockpool.fetcher import load_universe_cache
+from stockpool.fetcher import fetch_daily, load_universe_cache
 from stockpool.strategy_factory import build_factor_panel
 
 log = logging.getLogger("stockpool")
@@ -42,7 +42,7 @@ class ArmResult:
 @dataclass
 class ABResult:
     """Outcome of a full A/B run."""
-    ab_cfg: object              # ABConfig — kept untyped here to avoid cycle
+    ab_cfg: ABConfig
     base_cfg: AppConfig
     arm_a: ArmResult
     arm_b: ArmResult
@@ -57,9 +57,7 @@ def _ml_uses_universe(cfg: AppConfig) -> bool:
     return ml.panel_mode == "pooled" and ml.training_universe == "all"
 
 
-def _decide_pool_sharing(
-    arm_cfgs: list[AppConfig], stocks: list[Stock],
-) -> dict:
+def _decide_pool_sharing(arm_cfgs: list[AppConfig]) -> dict:
     """Decide whether the universe cache and/or factor panel can be shared
     across the two arms.
 
@@ -114,7 +112,6 @@ def _prepare_pool_for_arm(
     if injected_universe is None and injected_factor_panel is None:
         return prepare_pool(arm_cfg, stocks, refresh)
 
-    from stockpool.fetcher import fetch_daily
     ml_cfg = arm_cfg.strategy.ml_factor
     pool_data: dict[str, pd.DataFrame] = (
         dict(injected_universe) if injected_universe is not None else {}
@@ -175,7 +172,7 @@ def run_ab(
     arm_items = list(ab_cfg.arms.items())
     arm_cfgs = [build_effective_cfg(base_cfg, arm) for _, arm in arm_items]
 
-    plan = _decide_pool_sharing(arm_cfgs, stocks) if share_pool else _no_share_plan()
+    plan = _decide_pool_sharing(arm_cfgs) if share_pool else _no_share_plan()
 
     shared_universe = None
     if plan["load_universe"]:
