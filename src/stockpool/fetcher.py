@@ -68,6 +68,34 @@ def _cache_path(cache_dir: str | Path, code: str) -> Path:
     return Path(cache_dir) / f"{code}_daily.parquet"
 
 
+def _source_marker_path(cache_dir: str | Path) -> Path:
+    return Path(cache_dir) / ".data_source"
+
+
+def check_source_change(cache_dir: str | Path, source: Source) -> bool:
+    """Return True if cached data was last written by a different source.
+
+    Returns False when no marker exists (first-time use — nothing to invalidate)
+    or when the marker matches ``source``. Mootdx/baostock/akshare disagree on
+    volume units and adjustment rules; mixing them in one parquet silently
+    corrupts liquidity / return calculations downstream, so any mismatch
+    means the existing cache for this directory must be discarded.
+    """
+    marker = _source_marker_path(cache_dir)
+    if not marker.exists():
+        return False
+    try:
+        prev = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return prev != source
+
+
+def update_source_marker(cache_dir: str | Path, source: Source) -> None:
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    _source_marker_path(cache_dir).write_text(source, encoding="utf-8")
+
+
 def validate_ohlcv(df: pd.DataFrame) -> list[str]:
     """Return data-quality warnings for a normalized OHLCV DataFrame.
 
@@ -88,7 +116,10 @@ def validate_ohlcv(df: pd.DataFrame) -> list[str]:
     if len(df) >= 2:
         diffs = df["date"].sort_values().diff().dropna()
         max_gap = int(diffs.dt.days.max())
-        if max_gap > 7:
+        # A 股春节最长可断 11 天(如 2024-02-08 → 2024-02-19),国庆+中秋
+        # 合并最长 11 天(2023);阈值放到 >14 才报,只剩真正的长期停牌
+        # 或数据缺口能触发。
+        if max_gap > 14:
             issues.append(f"最大日期间隔 {max_gap} 天(疑似长期停牌或数据缺失)")
 
     return issues
@@ -162,6 +193,14 @@ def fetch_daily(
     Uses local Parquet cache, only triggers incremental fetch when needed.
     """
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    if check_source_change(cache_dir, source):
+        log.warning(
+            "Data source changed (cache=%s → cfg=%s); discarding %s and refetching.",
+            _source_marker_path(cache_dir).read_text(encoding="utf-8").strip(),
+            source, code,
+        )
+        force_refresh = True
+    update_source_marker(cache_dir, source)
     cache_file = _cache_path(cache_dir, code)
 
     cached: pd.DataFrame | None = None
@@ -237,6 +276,9 @@ def fetch_index_daily(
     so we always replace the cache on a stale hit rather than appending.
     """
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    if check_source_change(cache_dir, source):
+        force_refresh = True
+    update_source_marker(cache_dir, source)
     cache_file = Path(cache_dir) / f"idx_{symbol}.parquet"
 
     cached: pd.DataFrame | None = None
@@ -314,6 +356,9 @@ def fetch_sector_daily(
 ) -> pd.DataFrame:
     """Return latest `history_days` daily bars for an industry sector board."""
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    if check_source_change(cache_dir, source):
+        force_refresh = True
+    update_source_marker(cache_dir, source)
     safe = sector_name.replace("/", "_").replace("\\", "_").replace(" ", "_")
     cache_file = Path(cache_dir) / f"sector_{safe}.parquet"
 
@@ -382,6 +427,17 @@ def fetch_universe(
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    # Resolve source-change once *before* spawning workers so all threads see
+    # the same force_refresh decision (avoids a race where the first worker
+    # updates the marker and later workers think the cache is still valid).
+    if check_source_change(cache_dir, source):
+        log.warning(
+            "Data source changed (cache=%s → cfg=%s); forcing full refresh of universe.",
+            _source_marker_path(cache_dir).read_text(encoding="utf-8").strip(),
+            source,
+        )
+        force_refresh = True
+    update_source_marker(cache_dir, source)
     out: dict[str, pd.DataFrame] = {}
     failures: list[tuple[str, str]] = []
 

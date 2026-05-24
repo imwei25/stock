@@ -181,7 +181,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 
 ## 测试
 
-337 个,`pytest tests/ -q` 一次跑完。按域分布:
+338 个,`pytest tests/ -q` 一次跑完。按域分布:
 
 | 文件 | 覆盖 |
 |---|---|

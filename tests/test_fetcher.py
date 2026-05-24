@@ -4,7 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stockpool.fetcher import fetch_daily, resample_to_weekly, validate_ohlcv
+from stockpool.fetcher import (
+    check_source_change,
+    fetch_daily,
+    resample_to_weekly,
+    update_source_marker,
+    validate_ohlcv,
+)
 
 
 def _make_akshare_df(start: str, periods: int) -> pd.DataFrame:
@@ -166,3 +172,83 @@ def test_validate_calendar_gap_flagged():
     })
     issues = validate_ohlcv(df)
     assert any("间隔" in w for w in issues)
+
+
+def test_validate_chinese_holiday_gap_not_flagged():
+    """Spring Festival / National Day routinely create 8-11 day gaps. Those
+    are normal A-share calendar behavior, not data quality issues."""
+    # 2026 春节: trading stops 2026-02-13 (Fri), resumes 2026-02-24 (Tue) — 11 days.
+    df = pd.DataFrame({
+        "date": pd.to_datetime([
+            "2026-02-11", "2026-02-12", "2026-02-13",
+            "2026-02-24", "2026-02-25", "2026-02-26",
+        ]),
+        "close": [10.0, 10.1, 10.2, 10.3, 10.4, 10.5],
+        "volume": [1_000_000] * 6,
+    })
+    issues = validate_ohlcv(df)
+    assert not any("间隔" in w for w in issues), (
+        f"11-day Spring Festival gap should NOT trigger; got {issues!r}"
+    )
+
+
+# --- source-change marker ---
+
+def test_check_source_change_no_marker(tmp_path):
+    """First-time use: no marker file → not a 'change', returns False."""
+    assert check_source_change(tmp_path, "baostock") is False
+
+
+def test_check_source_change_match(tmp_path):
+    update_source_marker(tmp_path, "baostock")
+    assert check_source_change(tmp_path, "baostock") is False
+
+
+def test_check_source_change_mismatch(tmp_path):
+    update_source_marker(tmp_path, "mootdx")
+    assert check_source_change(tmp_path, "baostock") is True
+
+
+def test_update_source_marker_writes_file(tmp_path):
+    update_source_marker(tmp_path, "mootdx")
+    marker = tmp_path / ".data_source"
+    assert marker.exists()
+    assert marker.read_text(encoding="utf-8").strip() == "mootdx"
+
+
+def test_update_source_marker_overwrites(tmp_path):
+    update_source_marker(tmp_path, "mootdx")
+    update_source_marker(tmp_path, "baostock")
+    assert (tmp_path / ".data_source").read_text(encoding="utf-8").strip() == "baostock"
+
+
+def test_fetch_daily_auto_refresh_on_source_change(tmp_path):
+    """If the cache was last filled by a different source, fetch_daily must
+    bypass the cache even when the caller didn't pass force_refresh."""
+    fake = _make_akshare_df("2026-01-02", 60)
+
+    # Seed cache via akshare (also sets marker = akshare).
+    with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake):
+        fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="akshare")
+
+    # Pin today so the cache is *not* stale on its own — only the source
+    # change should trigger the refetch.
+    fresh_today = pd.Timestamp("2026-01-02") + pd.offsets.BDay(59)
+
+    # Now ask for the same data via baostock. The baostock backend must be
+    # called even without force_refresh, because the cache was written by a
+    # different source.
+    baostock_df = _make_akshare_df("2026-01-02", 60).rename(columns={
+        "日期": "date", "开盘": "open", "收盘": "close",
+        "最高": "high", "最低": "low", "成交量": "volume",
+    })[["date", "open", "high", "low", "close", "volume"]]
+    baostock_df["date"] = pd.to_datetime(baostock_df["date"])
+
+    with patch("stockpool.fetcher._today", return_value=fresh_today), \
+         patch("stockpool.data_sources.baostock_backend.fetch_stock",
+               return_value=baostock_df) as mocked_bs, \
+         patch("stockpool.fetcher.ak.stock_zh_a_hist") as mocked_ak:
+        fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="baostock")
+
+    assert mocked_bs.called, "baostock backend should be invoked when source changes"
+    assert not mocked_ak.called, "akshare should NOT be called when source=baostock"

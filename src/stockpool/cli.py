@@ -24,6 +24,7 @@ from stockpool.backtest_report import render_backtest_report
 from stockpool.backtest_runner import backtest_stocks, prepare_pool as _prepare_ml_pool
 from stockpool.config import AppConfig, load_config
 from stockpool.fetcher import (
+    check_source_change,
     fetch_daily,
     fetch_index_daily,
     fetch_sector_daily,
@@ -330,8 +331,11 @@ def cmd_fetch_universe(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     _setup_logging(Path(cfg.report.output_dir) / date.today().isoformat())
 
-    log.info("Listing A-share universe via %s ...", args.source)
-    listing = list_universe(source=args.source)
+    # Listing the whole A-share universe is only implemented for mootdx
+    # (baostock/akshare lack a clean equivalent), but the per-stock K-line
+    # pull should follow cfg.data.source unless the user overrode it on CLI.
+    log.info("Listing A-share universe via mootdx ...")
+    listing = list_universe(source="mootdx")
     log.info("Universe size: %d stocks", len(listing))
 
     if args.limit > 0:
@@ -339,17 +343,27 @@ def cmd_fetch_universe(args: argparse.Namespace) -> int:
         log.info("--limit %d → pulling first %d", args.limit, len(listing))
 
     codes = listing["code"].tolist()
-    listing_path = Path(cfg.data.cache_dir) / "universe.parquet"
     Path(cfg.data.cache_dir).mkdir(parents=True, exist_ok=True)
+    listing_path = Path(cfg.data.cache_dir) / "universe.parquet"
     listing.to_parquet(listing_path, index=False)
     log.info("Universe listing cached: %s", listing_path)
 
+    effective_source = args.source or cfg.data.source
+    force_refresh = args.refresh
+    if check_source_change(cfg.data.cache_dir, effective_source):
+        log.warning(
+            "Data source changed → forcing full refresh of universe cache "
+            "(use --refresh false has no effect here; mixing sources would "
+            "corrupt volume units and adjustment baselines)."
+        )
+        force_refresh = True
+    log.info("Fetching per-stock daily bars via %s ...", effective_source)
     result = fetch_universe(
         codes,
         history_days=cfg.data.history_days,
         cache_dir=cfg.data.cache_dir,
-        source=args.source,
-        force_refresh=args.refresh,
+        source=effective_source,
+        force_refresh=force_refresh,
         max_workers=args.workers,
     )
     log.info("Fetched %d/%d stocks successfully.", len(result), len(codes))
@@ -590,8 +604,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Bulk-fetch all A-shares (ex-ST/科创/北交) into the data cache (for ML training)",
     )
     p_fu.add_argument("--config", default="config.yaml", help="Path (default: config.yaml)")
-    p_fu.add_argument("--source", default="mootdx", choices=["mootdx"],
-                      help="Data source (currently only mootdx is supported)")
+    p_fu.add_argument(
+        "--source", default=None,
+        choices=["mootdx", "baostock", "akshare"],
+        help="Override cfg.data.source for the per-stock fetch step. "
+             "Default: use cfg.data.source. The universe *listing* always "
+             "uses mootdx (only impl).",
+    )
     p_fu.add_argument("--workers", type=int, default=8, help="Parallel threads (default 8)")
     p_fu.add_argument("--refresh", action="store_true", help="Bypass cache, refetch all")
     p_fu.add_argument("--limit", type=int, default=0,
