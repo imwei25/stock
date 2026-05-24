@@ -313,3 +313,119 @@ def test_pool_plan_one_ml_per_stock_does_not_load_universe(tmp_path):
     ]
     plan = _decide_pool_sharing(cfgs, stocks=[])
     assert plan["load_universe"] is False
+
+
+# ── Runner integration ──────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def isolated_cache_two_stocks(tmp_path, monkeypatch):
+    """Cache directory with two synthetic stocks ready to load."""
+    import numpy as np
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    for code, seed in [("605589", 7), ("300750", 19)]:
+        rng = np.random.default_rng(seed)
+        n = 220
+        returns = rng.normal(0.0005, 0.02, n)
+        close = 100.0 * np.cumprod(1 + returns)
+        df = __import__("pandas").DataFrame({
+            "date": __import__("pandas").date_range("2024-01-02", periods=n, freq="B"),
+            "open":  close * 0.998, "high": close * 1.005,
+            "low":   close * 0.995, "close": close,
+            "volume": rng.integers(500_000, 5_000_000, n).astype(float),
+        })
+        df.to_parquet(cache_dir / f"{code}_daily.parquet", index=False)
+
+    import pandas as pd
+    cache_last = pd.date_range("2024-01-02", periods=220, freq="B")[-1]
+    fresh_today = pd.Timestamp(cache_last) + pd.Timedelta(days=1)
+    monkeypatch.setattr("stockpool.fetcher._today", lambda: fresh_today)
+    return cache_dir
+
+
+def _ab_setup(tmp_path, cache_dir):
+    """Build an ab.yaml + base config wired to a synthetic cache."""
+    import yaml
+    raw = yaml.safe_load((PROJECT_ROOT / "config.yaml").read_text(encoding="utf-8"))
+    raw["data"]["cache_dir"] = str(cache_dir)
+    raw["data"]["history_days"] = 200
+    raw["report"]["output_dir"] = str(tmp_path / "reports")
+    raw["stocks"] = [
+        {"code": "605589", "name": "Alpha", "sector": ""},
+        {"code": "300750", "name": "Bravo", "sector": ""},
+    ]
+    base_path = tmp_path / "config.yaml"
+    base_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    ab_raw = {
+        "base_config": "config.yaml",
+        "arms": {
+            "single_engine": {
+                "strategy": {"name": "composite_verdict"},
+                "backtest": {"equity_curve_holding_days": [10], "engine": "single"},
+            },
+            "multi_lot_engine": {
+                "strategy": {"name": "composite_verdict"},
+                "backtest": {"equity_curve_holding_days": [10], "engine": "multi_lot"},
+            },
+        },
+    }
+    ab_path = tmp_path / "ab.yaml"
+    ab_path.write_text(yaml.safe_dump(ab_raw, sort_keys=False), encoding="utf-8")
+    ab_cfg = load_ab_config(ab_path)
+    base_cfg = load_config(base_path)
+    return ab_cfg, base_cfg
+
+
+def test_run_ab_smoke_two_composite_arms(tmp_path, isolated_cache_two_stocks):
+    from stockpool.ab import run_ab
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+    assert result.arm_a.name == "single_engine"
+    assert result.arm_b.name == "multi_lot_engine"
+    assert len(result.arm_a.per_stock) == 2
+    assert len(result.arm_b.per_stock) == 2
+    assert result.arm_a.failed == []
+    assert result.arm_b.failed == []
+
+
+def test_run_ab_per_stock_failure_isolated(tmp_path, isolated_cache_two_stocks,
+                                           monkeypatch):
+    """Force one stock's walk_forward_verdicts to crash; ABResult still returns,
+    crash recorded in `failed`."""
+    from stockpool.ab import run_ab
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+
+    from stockpool import backtest_runner as br
+    real_wf = br.walk_forward_verdicts
+    state = {"calls": 0}
+    def _maybe_throw(daily, *a, **kw):
+        state["calls"] += 1
+        # First call (first arm, first stock) throws once
+        if state["calls"] == 1:
+            raise RuntimeError("simulated crash")
+        return real_wf(daily, *a, **kw)
+    monkeypatch.setattr(br, "walk_forward_verdicts", _maybe_throw)
+
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+    # At least one arm had at least one stock fail; total survivors > 0.
+    total_failed = len(result.arm_a.failed) + len(result.arm_b.failed)
+    total_done = len(result.arm_a.per_stock) + len(result.arm_b.per_stock)
+    assert total_failed >= 1
+    assert total_done >= 1
+
+
+def test_run_single_arm_returns_arm_result(tmp_path, isolated_cache_two_stocks):
+    from stockpool.ab import run_single_arm
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_single_arm(ab_cfg, base_cfg, base_cfg.stocks, False, "multi_lot_engine")
+    assert result.name == "multi_lot_engine"
+    assert len(result.per_stock) == 2
+
+
+def test_run_single_arm_unknown_name_raises(tmp_path, isolated_cache_two_stocks):
+    from stockpool.ab import run_single_arm
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    with pytest.raises(KeyError):
+        run_single_arm(ab_cfg, base_cfg, base_cfg.stocks, False, "no_such_arm")

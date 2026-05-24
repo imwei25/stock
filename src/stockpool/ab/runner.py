@@ -10,9 +10,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import date
 
+import pandas as pd
+
+from stockpool.ab.config import ABConfig, ArmOverride, build_effective_cfg
 from stockpool.backtest_composite import EquityResult
+from stockpool.backtest_runner import backtest_stocks, prepare_pool
 from stockpool.config import AppConfig, Stock
+from stockpool.fetcher import load_universe_cache
+from stockpool.strategy_factory import build_factor_panel
 
 log = logging.getLogger("stockpool")
 
@@ -79,3 +86,143 @@ def _decide_pool_sharing(
 
 def _no_share_plan() -> dict:
     return {"load_universe": False, "shared_factors": None}
+
+
+def _prepare_pool_for_arm(
+    arm_cfg: AppConfig,
+    stocks: list[Stock],
+    refresh: bool,
+    injected_universe: dict[str, pd.DataFrame] | None,
+    injected_factor_panel: dict | None,
+) -> tuple[dict[str, pd.DataFrame] | None, dict | None]:
+    """Per-arm pool prep with optional shared inputs from run_ab.
+
+    If ``injected_universe`` is provided, skip ``load_universe_cache`` and
+    use it directly (merging per-stock fetches on top, same as ``prepare_pool``).
+    If ``injected_factor_panel`` is provided, skip ``build_factor_panel``.
+
+    For non-ml_factor or non-pooled arms, returns ``(None, None)`` — same as
+    ``prepare_pool``.
+    """
+    if (
+        arm_cfg.strategy.name != "ml_factor"
+        or arm_cfg.strategy.ml_factor.panel_mode != "pooled"
+    ):
+        return None, None
+
+    # If neither shared input is provided, delegate entirely to prepare_pool.
+    if injected_universe is None and injected_factor_panel is None:
+        return prepare_pool(arm_cfg, stocks, refresh)
+
+    from stockpool.fetcher import fetch_daily
+    ml_cfg = arm_cfg.strategy.ml_factor
+    pool_data: dict[str, pd.DataFrame] = (
+        dict(injected_universe) if injected_universe is not None else {}
+    )
+    if injected_universe is None and ml_cfg.training_universe == "all":
+        pool_data = load_universe_cache(
+            arm_cfg.data.cache_dir, arm_cfg.data.history_days,
+        )
+
+    for s in stocks:
+        try:
+            pool_data[s.code] = fetch_daily(
+                s.code, arm_cfg.data.history_days, arm_cfg.data.cache_dir,
+                force_refresh=refresh, source=arm_cfg.data.source,
+            )
+        except Exception as e:
+            log.warning("Pool preload skipped for %s: %s", s.code, e)
+
+    if injected_factor_panel is not None:
+        factor_panel = injected_factor_panel
+    else:
+        log.info("Building factor panel over %d stocks × %d factors ...",
+                 len(pool_data), len(ml_cfg.factors))
+        factor_panel = build_factor_panel(ml_cfg.factors, pool_data)
+    return pool_data, factor_panel
+
+
+def _run_arm(
+    arm_cfg: AppConfig,
+    arm_name: str,
+    stocks: list[Stock],
+    pool_data: dict | None,
+    factor_panel: dict | None,
+    refresh: bool,
+) -> ArmResult:
+    """Backtest every stock for one arm."""
+    log.info("Running arm %s ...", arm_name)
+    per_stock, failed = backtest_stocks(
+        arm_cfg, stocks, pool_data, factor_panel,
+        shared_cache={}, refresh=refresh,
+    )
+    log.info("Arm %s: %d done, %d failed", arm_name, len(per_stock), len(failed))
+    return ArmResult(
+        name=arm_name, effective_cfg=arm_cfg,
+        per_stock=per_stock, failed=failed,
+    )
+
+
+def run_ab(
+    ab_cfg: ABConfig,
+    base_cfg: AppConfig,
+    stocks: list[Stock],
+    refresh: bool,
+    *,
+    share_pool: bool = True,
+) -> ABResult:
+    """Run both arms; return an ABResult with exactly two ArmResults."""
+    arm_items = list(ab_cfg.arms.items())
+    arm_cfgs = [build_effective_cfg(base_cfg, arm) for _, arm in arm_items]
+
+    plan = _decide_pool_sharing(arm_cfgs, stocks) if share_pool else _no_share_plan()
+
+    shared_universe = None
+    if plan["load_universe"]:
+        try:
+            shared_universe = load_universe_cache(
+                base_cfg.data.cache_dir, base_cfg.data.history_days,
+            )
+            log.info("Shared universe loaded: %d stocks",
+                     len(shared_universe) if shared_universe else 0)
+        except Exception as e:
+            log.warning("Universe load failed (each arm will reload): %s", e)
+
+    shared_panel = None
+    arm_results: list[ArmResult] = []
+    for (name, _arm), arm_cfg in zip(arm_items, arm_cfgs):
+        pool_data, factor_panel = _prepare_pool_for_arm(
+            arm_cfg, stocks, refresh,
+            injected_universe=shared_universe,
+            injected_factor_panel=(shared_panel if plan["shared_factors"] else None),
+        )
+        if plan["shared_factors"] and shared_panel is None and factor_panel is not None:
+            shared_panel = factor_panel
+        arm_results.append(_run_arm(
+            arm_cfg, name, stocks, pool_data, factor_panel, refresh,
+        ))
+
+    return ABResult(
+        ab_cfg=ab_cfg, base_cfg=base_cfg,
+        arm_a=arm_results[0], arm_b=arm_results[1],
+        run_date=date.today().isoformat(),
+    )
+
+
+def run_single_arm(
+    ab_cfg: ABConfig,
+    base_cfg: AppConfig,
+    stocks: list[Stock],
+    refresh: bool,
+    arm_name: str,
+) -> ArmResult:
+    """Debug helper: run only one arm by name; no pool sharing."""
+    if arm_name not in ab_cfg.arms:
+        raise KeyError(f"arm {arm_name!r} not in {list(ab_cfg.arms)}")
+    arm = ab_cfg.arms[arm_name]
+    arm_cfg = build_effective_cfg(base_cfg, arm)
+    pool_data, factor_panel = _prepare_pool_for_arm(
+        arm_cfg, stocks, refresh,
+        injected_universe=None, injected_factor_panel=None,
+    )
+    return _run_arm(arm_cfg, arm_name, stocks, pool_data, factor_panel, refresh)
