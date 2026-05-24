@@ -315,6 +315,99 @@ def test_pool_plan_one_ml_per_stock_does_not_load_universe(tmp_path):
     assert plan["load_universe"] is False
 
 
+def test_run_ab_does_not_inject_universe_into_pool_arm(
+    tmp_path, isolated_cache_two_stocks, monkeypatch,
+):
+    """Regression test for the P3-2 bug (docs/ab_validation_results.md §3.7):
+
+    When arm A has training_universe=pool and arm B has training_universe=all,
+    run_ab must NOT inject the loaded all-A-share universe into arm A's
+    pool_data — otherwise arm A silently runs with the universe data,
+    making the A/B comparison degenerate (Δ=0)."""
+    import yaml
+    from stockpool.ab import run_ab
+    from stockpool.ab.config import load_ab_config
+    from stockpool.ab import runner as ab_runner
+    from stockpool.config import load_config
+
+    # Set up: ab.yaml with arm_a=pool, arm_b=all
+    cache_dir = isolated_cache_two_stocks
+    raw = yaml.safe_load((PROJECT_ROOT / "config.yaml").read_text(encoding="utf-8"))
+    raw["data"]["cache_dir"] = str(cache_dir)
+    raw["data"]["history_days"] = 200
+    raw["report"]["output_dir"] = str(tmp_path / "reports")
+    raw["stocks"] = [
+        {"code": "605589", "name": "Alpha", "sector": ""},
+        {"code": "300750", "name": "Bravo", "sector": ""},
+    ]
+    base_path = tmp_path / "config.yaml"
+    base_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    # Need universe.parquet so load_universe_cache doesn't crash.
+    import pandas as pd
+    pd.DataFrame({"code": ["605589", "300750"], "name": ["a", "b"], "market": ["SZ", "SZ"]}).to_parquet(
+        cache_dir / "universe.parquet", index=False,
+    )
+
+    ab_raw = {
+        "base_config": "config.yaml",
+        "arms": {
+            "pool_arm": {
+                "strategy": {
+                    "name": "ml_factor",
+                    "ml_factor": {
+                        "panel_mode": "pooled",
+                        "training_universe": "pool",
+                        "selector": {"type": "lasso"},
+                        "weighter": {"type": "ic"},
+                    },
+                },
+                "backtest": {"equity_curve_holding_days": [10]},
+            },
+            "all_arm": {
+                "strategy": {
+                    "name": "ml_factor",
+                    "ml_factor": {
+                        "panel_mode": "pooled",
+                        "training_universe": "all",
+                        "selector": {"type": "lasso"},
+                        "weighter": {"type": "ic"},
+                    },
+                },
+                "backtest": {"equity_curve_holding_days": [10]},
+            },
+        },
+    }
+    ab_path = tmp_path / "ab.yaml"
+    ab_path.write_text(yaml.safe_dump(ab_raw, sort_keys=False), encoding="utf-8")
+
+    # Capture which arms received injected_universe.
+    real_prep = ab_runner._prepare_pool_for_arm
+    captured: list[tuple[str, bool]] = []
+
+    def _spy(arm_cfg, stocks, refresh, injected_universe, injected_factor_panel):
+        # Identify arm by its training_universe (only field we vary here).
+        tu = arm_cfg.strategy.ml_factor.training_universe
+        captured.append((tu, injected_universe is not None))
+        return real_prep(arm_cfg, stocks, refresh, injected_universe, injected_factor_panel)
+
+    monkeypatch.setattr(ab_runner, "_prepare_pool_for_arm", _spy)
+
+    ab_cfg = load_ab_config(ab_path)
+    base_cfg = load_config(base_path)
+    run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+
+    # The pool arm must NOT have received an injected_universe.
+    # The all arm SHOULD have received one.
+    by_arm = dict(captured)
+    assert by_arm["pool"] is False, (
+        f"pool arm should not get injected universe, got {by_arm}"
+    )
+    assert by_arm["all"] is True, (
+        f"all arm should get injected universe, got {by_arm}"
+    )
+
+
 # ── Runner integration ──────────────────────────────────────────────────────
 
 

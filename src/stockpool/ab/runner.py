@@ -188,9 +188,15 @@ def run_ab(
     shared_panel = None
     arm_results: list[ArmResult] = []
     for (name, _arm), arm_cfg in zip(arm_items, arm_cfgs):
+        # Only inject the shared universe into arms that actually want it.
+        # Without this gate, an arm with training_universe=pool gets the
+        # other arm's all-A-share data dumped into its pool_data, silently
+        # converting it into a training_universe=all run. See P3-2 bug
+        # in docs/ab_validation_results.md §3.7.
+        arm_wants_universe = _ml_uses_universe(arm_cfg)
         pool_data, factor_panel = _prepare_pool_for_arm(
             arm_cfg, stocks, refresh,
-            injected_universe=shared_universe,
+            injected_universe=(shared_universe if arm_wants_universe else None),
             injected_factor_panel=(shared_panel if plan["shared_factors"] else None),
         )
         if plan["shared_factors"] and shared_panel is None and factor_panel is not None:
