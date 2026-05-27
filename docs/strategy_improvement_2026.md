@@ -456,16 +456,20 @@ backtest:
 
 ### 🚧 待做(按建议优先级)
 
-#### P1: F3 — 组合构建与风险控制(原 §5)
+#### P1: Portfolio framework(取代原 F3 PR-D / PR-E,见 spec 2026-05-24)
 
-跨度比 F2 大,建议拆 3 个子 PR:
+2026-05-24 决策:撤销单股语境下的 PR-D risk overlay(sector cap 退化、DD 熔断与"比较信号"目的脱节),推后 PR-E score smoothing 到 portfolio 框架落地后。改做 portfolio 级回测 + AB 框架,4 PR 渐进交付。详见 `docs/superpowers/specs/2026-05-24-portfolio-framework-design.md`。
 
-| 子 PR | 交付物 | 估算 | A/B 验证 |
-|------|--------|------|---------|
-| **PR-D** — Risk overlay | `BacktestConfig.risk_overlay`(max DD 熔断 + cooldown + sector cap 单股版本)| 6-8 task | A/B:overlay on/off,看 max DD 与 trade count 变化 |
-| **PR-E** — Score smoothing | `MLFactorConfig.score_smoothing: none | ema`,默认 `none`(显式违反"新方案做 default"原则,因为延迟成本不确定) | 4-6 task | A/B:span 不同值,看 trade churn |
+| 子 PR | 交付物 | 估算 | 状态 |
+|------|--------|------|------|
+| **PR-1** 核心骨架 (MVP) | `portfolio/{strategy,scoring,engine,result,report}.py` + `PortfolioBacktestConfig` schema + `stockpool portfolio-backtest` CLI(universe=cfg.stocks,无 eligibility/行业 cap/ensemble) | 8-10 task | ✅ 完成 (plan: `2026-05-27-portfolio-pr1-skeleton.md`) |
+| **PR-2** Universe + Eligibility + 行业 cap | 切到 `load_universe_cache` + `EligibilityFilter` + 行业 cap 贪心 | 5-7 task | ✅ 完成 (2026-05-27) |
+| **PR-3** Staggered ensemble | `StaggeredRunner` + 包络图 + per-offset 卡片 | 4-6 task | ✅ 完成 (2026-05-27) |
+| **PR-4** Portfolio AB | `portfolio_ab/` 子包 + `stockpool portfolio-ab` CLI + 双 arm 报告 + per-stock 贡献分解 | 7-9 task | ✅ 完成 (2026-05-27) |
 
-依赖:不依赖任何待做项。可以独立启动。
+**搁置**:~~PR-D Risk overlay~~(单股语境下退化)/ ~~PR-E Score smoothing~~(推后到 portfolio 框架后,作为 P3)。
+
+依赖:无外部依赖,可独立启动。
 
 #### P2: F1 plan-2 — Custom factors + WQ101 ranking + 实跑 A/B
 
@@ -483,7 +487,9 @@ F1 plan-1 末尾 deferred 的部分:
 
 | 项目 | 描述 | 来自哪里 |
 |------|------|----------|
-| **A/B portfolio-level** | 当前 A/B 是 per-stock 各跑各 + 跨股聚合;portfolio-level 要求"每 strategy 一条组合净值",需要新 `PortfolioStrategy` ABC + portfolio engine | A/B spec §Non-Goals |
+| ~~A/B portfolio-level~~ | 已纳入 P1 portfolio framework PR-4 | — |
+| **Per-stock risk overlay**(原 F3 PR-D) | 触发条件:per-stock backtest 真的需要 DD 熔断作为信号过滤(而非组合级风控);单股语境下 sector cap 退化 | 2026-05-24 portfolio spec §13.3 |
+| **Score smoothing (EMA)**(原 F3 PR-E,推后) | 触发条件:portfolio AB 跑通后观察 churn,如果调仓频繁吃手续费再启 | 2026-05-24 portfolio spec §2.2 |
 | **A/B 统计显著性** | paired t-test / Wilcoxon / bootstrap CI。8-30 股样本太小,Pool B 联动扩到几百只再启 | A/B spec §Non-Goals |
 | **`composite_verdict` 参数子段化** | 把 `indicators` / `weights` / `verdicts` / `scoring` 从 `AppConfig` 顶层下沉到 `strategy.composite_verdict.*`。完成后 A/B 自动获得"对比两个 composite_verdict 配置"能力(目前 ArmOverride 拒绝顶层字段覆盖) | A/B spec §Non-Goals |
 | **A/B multi-arm (>2)** | 当前 schema 强制 `exactly 2 arms`。多 arm 需要重新设计 diff table / scatter / histogram | A/B spec §Non-Goals |

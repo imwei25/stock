@@ -46,6 +46,15 @@ python -m stockpool ab --config ab.yaml
 python -m stockpool ab --config ab.yaml --arm <arm_name>
 # 强制每边独立 load universe / factor panel (escape hatch)
 python -m stockpool ab --config ab.yaml --no-share-pool
+
+# Portfolio backtest — 横截面 top-K 等权 + 周期性 rebalance + ensemble
+# 需先 portfolio_backtest.enabled: true
+python -m stockpool portfolio-backtest --config config.yaml [--refresh-scores]
+
+# Portfolio AB — 对比两套 portfolio 策略 (与 per-stock `ab` 平行)
+python -m stockpool portfolio-ab --config portfolio_ab.yaml
+# 单 arm 调试(stdout 只打印指标,不出 HTML)
+python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 ```
 
 ## 模块地图
@@ -55,6 +64,8 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 | `src/stockpool/cli.py` | 入口,定义 `run` / `backtest` / `fetch-universe` / `factors *` / `ab` 子命令 |
 | `src/stockpool/backtest_runner.py` | 共享给 `cli.cmd_backtest` 和 `ab.runner` 的两个 helper:`prepare_pool` (ml_factor 池 + factor_panel 预算) 和 `backtest_stocks` (per-stock 回测循环,失败隔离,返回 `(成功, 失败)` 元组) |
 | `src/stockpool/ab/` | A/B 测试子包: `config.py` (`ABConfig` / `ArmOverride` / `load_ab_config` / `build_effective_cfg`) + `runner.py` (`run_ab` / `run_single_arm` / `_decide_pool_sharing` + `ArmResult`/`ABResult`) + `report.py` (HTML 对比报告:banner / 聚合表 / Sharpe 散点 / Sharpe 差直方图 / per-stock 卡片) |
+| `src/stockpool/portfolio_ab/` | **Portfolio AB 子包** (PR-4): `config.py` (`PortfolioABConfig` / `PortfolioArmOverride` 仅允许覆盖 `strategy` 整段替换 + `portfolio_backtest` 字段级合并 / `load_portfolio_ab_config` / `build_effective_cfg` — content_hash 重算保证 score panel 缓存隔离) + `runner.py` (`ArmResult` / `ABResult` / `run_single_arm` / `run_portfolio_ab` — 共享 universe + sector_map + name_map,per-arm failure 隔离) + `report.py` (`render_portfolio_ab_report` — banner / 聚合指标 + Δ 表 / 双 arm 净值 overlay / per-stock 贡献分解 top 15 / 已交易 code 集合分析 only-A/only-B/both / 失败 arm 红 banner) |
+| `src/stockpool/portfolio/` | **Portfolio 框架** (PR-1/PR-2/PR-3): `strategy.py` (`PortfolioStrategy` ABC + `PrecomputedScoreStrategy`) + `scoring.py` (`precompute_scores_from_legacy` — 把 per-stock `Strategy.generate_signals` 拼成 T×N score 面板) + `engine.py` (`PortfolioEngine` — top-K 等权 + 周期 rebalance + T+1 + 行业 cap 贪心 + eligibility 过滤) + `eligibility.py` (`EligibilityFilter` — 流动性/ST/min_history_bars) + `ensemble.py` (`StaggeredRunner` + `EnsembleResult` — N 个 `start_offset` 串行跑,聚合 min/p25/median/p75/max envelope + 等权均值 ensemble curve) + `result.py` (`PortfolioBacktestResult`/`PortfolioTrade`) + `report.py` (单 arm HTML + ensemble HTML;`render_portfolio_report` / `render_ensemble_report`)。PR-2 起 universe = `load_universe_cache`(`universe.parquet` 不存在时回退 cfg.stocks),`sector_map` 来自 `load_or_build_industry_map`,行业 cap "未知" 全空时跳过 cap、否则 Unknown 桶正常计。PR-3 起 CLI `staggered_starts > 1` 自动走 `StaggeredRunner`(串行,engine_factory 闭包保证每 offset fresh state);N=1 退化回单 arm 路径。无 portfolio AB (PR-4) |
 | `src/stockpool/config.py` | Pydantic schema + YAML 加载;**配置变更必须更新这里** |
 | `src/stockpool/fetcher.py` | 公开 API + Parquet 缓存 + OHLCV 校验;按 `cfg.data.source` 派发后端;`fetch_universe`/`list_universe`/`load_universe_cache` 提供全市场批拉与读盘;`check_source_change`/`update_source_marker` 维护 `data/.data_source` 标记,源变化时自动 force_refresh |
 | `src/stockpool/data_sources/mootdx_backend.py` | 通达信 TCP 后端(默认)。股票/指数/**行业板块(88xxxx)**;含当日盘中,TDX 占位 bar 会被丢弃 |
@@ -150,6 +161,7 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 - `context` — `indices`(大盘指数列表,默认上证/深证成指)
 - `report` — `output_dir` / `keep_history` / `klines_to_show`
 - **`strategy`** — `name` (`composite_verdict` 默认 / `ml_factor`) + `ml_factor` 子配置(`factors` 或 **`factors_file`** / `horizon` / `train_window` / `refit_every` / `panel_mode` / **`training_universe`** / **`share_pool_fit`** / **`embargo_days`** / **`label_type`** / `selector.{lasso|lightgbm}` / `weighter` / `thresholds` / `*_verdicts`)。`factors_file` 指向 HTML picker 导出的 JSON,与 `factors` 列表二选一。**`training_universe`**: `pool`(默认,只用 cfg.stocks)/ `all`(全市场 cache,需先 `fetch-universe`;仅在 `panel_mode=pooled` 时生效)。**`share_pool_fit`**(默认 `true`,仅 `panel_mode=pooled` 生效):跨股共享 fit,缓存键 `(sig, year, month)`,同月内所有股、所有 refit_bar 复用同一 pipeline;训练集不再剔除 host,host 自己以 ~1/N 权重进入自己的训练。**`embargo_days`**(默认 `null` = auto = `horizon`,F2 PR-A 新增):walk-forward 训练集与测试集之间的额外间隔,消除 horizon 日前向收益的标签泄露;设 `0` 回到 pre-PR-A 行为。**`label_type`**(默认 `"return"`,F2 PR-A 接口位):训练标签变换 — `"return"` 已实装,`"vol_adjusted"` / `"cross_sec_rank"` 是占位 raise `NotImplementedError`,后续 PR 实装。**`selector.{lasso|lightgbm}`**(F2 PR-A 子段化 + PR-B1 加 LGB):`type` 默认 **`"lasso"`**(2026-05-24 从 `"lightgbm"` 回退,见 `docs/ab_validation_results.md`:LGB+LGB 在 16 股 × 500bar baseline 上 sharpe 退 0.2 / return 退 20%),`lasso.{alpha,max_iter,tol}` 或 `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state,top_k_factors,min_importance_ratio}` 子段二选一,顶层扁平字段被 Pydantic 拒绝。改 `selector` 任一字段后旧 ml_models pkl 自动失效。切到 `all` 或翻 `share_pool_fit`、改 `embargo_days` / `label_type` / `selector` 任一项后旧的 ml_models pkl 会因 sig 变化自动失效。**`weighter.{ic|ir|equal|lightgbm}`**(F2 PR-B2 子段化):`type` 默认 **`"ic"`**(同 2026-05-24 回退,见上),`ic.{use_rank,min_abs_ic}` / `ir.{n_chunks,use_rank,min_abs_ir}` / `equal` (无参) / `lightgbm.{num_leaves,min_data_in_leaf,learning_rate,num_iterations,max_depth,random_state}` 子段四选一,顶层扁平字段被 Pydantic 拒绝。LGB 仍可 opt-in,但需先调超参或扩股池验证。
+- **`portfolio_backtest`** — Portfolio 级回测(PR-1 新增,默认 `enabled: false` 关闭)。`portfolio.{top_k=20, rebalance_n_days=5, max_per_industry=5, initial_cash=1.0}` / `eligibility.{min_avg_amount_20d=5e7, exclude_st=true, min_history_bars=60}`(PR-2 起 engine 实际读取) / `staggered_starts=1`(PR-3 起 `>1` 自动走 ensemble)/ `score_cache_dir=data/portfolio_scores`(缓存键 = `cfg.content_hash`;改 yaml 任一字段失效)。CLI `portfolio-backtest` 在 `enabled=false` 时退出 2。PR-2 起:universe 自动从 `data/universe.parquet` + `load_universe_cache` 装 4000+ 票(无该文件回退 cfg.stocks 并 log warning);`industry_map` 通过 `load_or_build_industry_map(source="auto")` 装载(首次跑 baostock 慢);name_map 来自 universe.parquet 的 `name` 列;cfg.stocks 自动 merge 到 pool(保证应用池始终可投资)。PR-3 起 `staggered_starts > 1` 自动跑 N 个 offset(`{0, 1, ..., N-1}`)各一份回测,聚合成 envelope + ensemble mean → `reports/portfolio/<date>.html` 出包络图 + per-offset 折叠卡
 - **`recommend_pool`** — Pool B(全市场量化推荐池)。`enabled`(默认 `true`)/ `top_n`(30)/ `min_avg_amount_20d`(5e7 元;mootdx `vol*close*100`)/ `max_per_industry`(5;"未知" 桶在**所有股都未映射时**自动跳过 cap,否则正常计)/ `refresh`(`weekly`默认/`always`/`never`)/ `cache_dir`(`data/recommend_pool`)/ `industry_map_max_age_days`(30)/ **`industry_source`**(`auto` 默认 = baostock→akshare 链 / `baostock` / `akshare`)。**前置条件**:必须先跑 `python -m stockpool fetch-universe`;首次运行自动从所选 industry_source 拉映射(baostock ~5-10s,akshare ~1-2min)。**缓存键**含 `cfg.content_hash`,改 yaml 任一字段都失效
 - **A/B 测试**(独立配置文件 `ab.yaml`,主 `AppConfig` 不变):见 `docs/superpowers/specs/2026-05-24-ab-testing-design.md`。结构 `base_config: <path>` + 可选 `stocks_filter: [...]` (只能减) + `arms: {<name>: {strategy: {...}, backtest: {equity_curve_holding_days: [N], ...}}}` (恰好 2 个)。每个 arm 只能覆盖 `strategy` 段(整段替换)和 `backtest` 段(字段级合并,None 字段继承 base),其他顶层字段(`indicators`/`weights`/`verdicts`/`scoring`/`data`/`stocks`)继承 base。`equity_curve_holding_days` 强制单元素列表。ML 缓存通过 `effective_cfg.content_hash` 自动隔离,arm 间互不污染。`backtest.sizing` 是 F3 PR-C 起新支持的覆盖字段(整段替换,与 strategy 段语义对齐),用于比较 fixed vs vol_target sizing。
 
@@ -228,6 +240,18 @@ python -m stockpool ab --config ab.yaml --no-share-pool
 | `test_ml_dataset_labels.py` | forward_return / forward_return_panel 的 label_type 接口(只 "return" 已实装) |
 | `test_ml_strategy_embargo.py` | walk-forward embargo: 默认 auto=horizon,explicit 0 恢复旧行为,泄露 bar 被排除 |
 | `test_sizing.py` | FixedLotSizer / VolTargetLotSizer 数学 + fallback + build_lot_sizer 工厂 |
+| `test_portfolio_strategy.py` | `PrecomputedScoreStrategy` 语义:已知日期 / 缺失日期 / NaN 丢弃 / 限定 panel_data codes / 未排序面板 / ABC |
+| `test_portfolio_scoring.py` | `precompute_scores_from_legacy`:happy / per-stock 失败隔离 / 全失败返回空 / 缺 score_field 跳过 / 不截断 daily history |
+| `test_portfolio_engine.py` | PortfolioEngine:空面板 / 零成本恒价等权不变 / 现金守恒 / T+1 fill 在 open[t+1] / start_offset / 确定性 / rebalance diff / 末 bar 不执行 / 未知 code 过滤 / initial_cash 缩放 |
+| `test_portfolio_eligibility.py` | EligibilityFilter:min_history_bars / 流动性边界 / ST 排除 / 缺 name_map 不当 ST / date 截断 / 缺 volume 排除 / 阈值 0 跳过 / `_is_st` parametrize |
+| `test_portfolio_industry_cap.py` | `_select_top_k` 行业 cap:贪心正确性 / cap=None 不限 / sector_map 空时不限 / 全 unknown 跳过 cap / 部分 unknown 走 Unknown 桶 / 缺 open[t+1] 不计 cap / engine 集成 |
+| `test_cli_portfolio_backtest.py` | `python -m stockpool portfolio-backtest`:smoke (composite_verdict 出 HTML) + `enabled=false` 退出 2 + `--refresh-scores` 旁路缓存 + `universe.parquet` 自动扩 universe + `staggered_starts=3` 出 ensemble HTML |
+| `test_portfolio_ensemble.py` | `StaggeredRunner`:N=1 与单跑等价 / N=n_days 时 rebalance bar 集合 pairwise disjoint / ensemble = 等权均值数学等价 / envelope 列序 + 分位序 / aggregated_metrics 结构 / n_offsets<1 raises |
+| `test_portfolio_report_ensemble.py` | `render_ensemble_report`:HTML smoke (含 "Per-offset metrics" + "Ensemble net asset value") + 空 ensemble 渲 Empty 占位 |
+| `test_portfolio_ab_config.py` | PortfolioABConfig:arms != 2 拒 / extra=forbid / build_effective_cfg 整段替换 strategy + 字段合并 portfolio_backtest + 不动 base / 重算 content_hash 且可重现 |
+| `test_portfolio_ab_runner.py` | run_portfolio_ab happy + per-arm failure isolation + ArmResult empty-failed 不 crash |
+| `test_portfolio_ab_report.py` | render_portfolio_ab_report HTML smoke (含贡献分解 + 集合分析) + 失败 arm 红 banner + 0 arm 错误占位 |
+| `test_cli_portfolio_ab.py` | `python -m stockpool portfolio-ab`:happy / unknown arm 退 2 / `--arm` 调试模式只 stdout 不出 HTML / base `enabled=false` 退 2 |
 
 写测试时:**用合成 OHLCV、`monkeypatch` 掉 AKShare 和 `_today`**(`test_cli_backtest.py` 是参考)。
 
@@ -301,6 +325,7 @@ strategy:
 - **A/B 测试不能覆盖顶层 `indicators` / `weights` / `verdicts` / `scoring`**:`composite_verdict` 的参数还散在 `AppConfig` 顶层(历史遗留;`ml_factor` 已规整到 `strategy.ml_factor.*` 子段),A/B arm 暂时只允许覆盖 `strategy:` 和 `backtest:`。两个 `composite_verdict` arm 想比不同 `weights` → 当前只能改主 cfg 跑两次。Follow-up:把 `composite_verdict` 的参数下沉到 `strategy.composite_verdict.*` 子段,A/B 工具会自动获益(`ab/` 代码不动一行)
 - **A/B 不做 portfolio-level 回测**:每个 arm 仍是 per-stock 独立回测 + 跨股聚合统计(均值/中位/胜出数)。真正的 portfolio-level(策略在每根 bar 看到整个股池横截面,产出一条组合净值)需要新的 `PortfolioStrategy` ABC + portfolio engine,是独立 spec
 - **A/B 报告无统计显著性**:8-30 只股票样本太小,p 值不稳;聚合表只给均值/中位/差值/胜出计数。Pool B 联动扩到几百只股后再考虑加 paired t-test / Wilcoxon
+- **Portfolio framework PR-4 限制**:四个 PR 全部落地。`portfolio_backtest.enabled` 默认 false,需手动 opt-in。Staggered 第一版串行(没并行化,N=10 大约 N=1 的 10 倍耗时);portfolio AB 的 ArmOverride 仍只允许 `strategy:` 和 `portfolio_backtest:` 两段(其他顶层字段如 `data` / `weights` / `indicators` 想跨 arm 改还得改 base cfg 跑两次);两 arm 各自算各自的 score panel(per-arm content_hash 隔离),没做"同 hash 共享"优化。并行化与跨 arm 缓存共享都列在 spec §12 follow-up
 
 ## 改动后更新文档(CLAUDE.md + README.md)
 

@@ -329,6 +329,303 @@ def cmd_ab(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
+    """Portfolio-level backtest (PR-1 skeleton).
+
+    Universe = cfg.stocks (PR-2 will switch to load_universe_cache + eligibility).
+    Calls cfg.strategy's per-stock generate_signals to precompute a (T × N)
+    score panel, then runs PortfolioEngine to produce one equity curve.
+    """
+    from stockpool.industry_map import load_or_build_industry_map
+    from stockpool.portfolio.eligibility import EligibilityFilter
+    from stockpool.portfolio.engine import PortfolioEngine
+    from stockpool.portfolio.report import render_portfolio_report
+    from stockpool.portfolio.scoring import precompute_scores_from_legacy
+    from stockpool.portfolio.strategy import PrecomputedScoreStrategy
+
+    cfg = load_config(args.config)
+    if not cfg.portfolio_backtest.enabled:
+        log.error(
+            "portfolio_backtest.enabled=false in %s — set to true to opt in.",
+            args.config,
+        )
+        return 2
+
+    run_date = date.today().isoformat()
+    out_root = Path(cfg.report.output_dir) / "portfolio"
+    _setup_logging(out_root / run_date)
+    log.info("stockpool portfolio-backtest v%s for %s", __version__, run_date)
+
+    # ---- universe (PR-2) ----
+    # Prefer the full A-share cache (universe.parquet + load_universe_cache).
+    # Falls back to cfg.stocks with a warning when the universe cache is empty
+    # (e.g. user hasn't run fetch-universe yet).
+    cache_dir = Path(cfg.data.cache_dir)
+    universe_path = cache_dir / "universe.parquet"
+    name_map: dict[str, str] = {}
+    if universe_path.exists():
+        universe_df = pd.read_parquet(universe_path)
+        name_map = dict(zip(universe_df["code"], universe_df.get("name", universe_df["code"])))
+    pool_data = load_universe_cache(cache_dir, cfg.data.history_days)
+    if not pool_data:
+        log.warning(
+            "Universe cache is empty (run `stockpool fetch-universe` first to "
+            "unlock the full A-share universe). Falling back to cfg.stocks."
+        )
+        pool_data = {}
+        for s in cfg.stocks:
+            try:
+                pool_data[s.code] = fetch_daily(
+                    s.code, cfg.data.history_days, cfg.data.cache_dir,
+                    force_refresh=args.refresh, source=cfg.data.source,
+                )
+                name_map.setdefault(s.code, s.name)
+            except Exception as e:
+                log.warning("Skipped %s: %s", s.code, e)
+    else:
+        log.info("Universe cache: %d stocks", len(pool_data))
+        # cfg.stocks still merged in so any application-pinned code missing
+        # from the universe cache (e.g. 北交) is still tradeable.
+        for s in cfg.stocks:
+            if s.code not in pool_data:
+                try:
+                    pool_data[s.code] = fetch_daily(
+                        s.code, cfg.data.history_days, cfg.data.cache_dir,
+                        force_refresh=args.refresh, source=cfg.data.source,
+                    )
+                except Exception as e:
+                    log.warning("Skipped %s: %s", s.code, e)
+            name_map.setdefault(s.code, s.name)
+    if not pool_data:
+        log.error("No usable stock data; aborting.")
+        return 1
+
+    # ---- sector map (PR-2) ----
+    # Only meaningful if max_per_industry is set; load anyway for stability
+    # so report has the data even if cap is None.
+    sector_map = load_or_build_industry_map(cache_dir, source="auto")
+    log.info("Sector map: %d codes mapped", len(sector_map))
+    from stockpool.factors.context import set_sector_map
+    set_sector_map(sector_map)
+
+    # ---- ML factor panel (only for ml_factor + pooled) ----
+    factor_panel = None
+    if cfg.strategy.name == "ml_factor" and cfg.strategy.ml_factor.panel_mode == "pooled":
+        from stockpool.strategy_factory import build_factor_panel
+        log.info("Building factor panel over %d stocks × %d factors ...",
+                 len(pool_data), len(cfg.strategy.ml_factor.factors))
+        factor_panel = build_factor_panel(cfg.strategy.ml_factor.factors, pool_data)
+
+    shared_cache: dict = {}
+    legacy = build_strategy(
+        cfg,
+        pool_data=pool_data,
+        factor_panel=factor_panel,
+        shared_cache=shared_cache,
+    )
+
+    # Score-panel cache: keyed by cfg.content_hash. Spec §6.5 accepts the
+    # known suboptimality that changing top_k also invalidates (no partial
+    # hash) — first version trades cache hit rate for simplicity.
+    score_dir = Path(cfg.portfolio_backtest.score_cache_dir)
+    score_dir.mkdir(parents=True, exist_ok=True)
+    score_path = score_dir / f"{cfg.content_hash}.parquet"
+    if score_path.exists() and not args.refresh_scores:
+        log.info("Loading cached score panel: %s", score_path)
+        score_panel = pd.read_parquet(score_path)
+    else:
+        log.info("Precomputing score panel over %d stocks ...", len(pool_data))
+        score_panel = precompute_scores_from_legacy(legacy, pool_data)
+        if score_panel.empty:
+            log.error("Score panel is empty (all stocks failed).")
+            return 1
+        score_panel.to_parquet(score_path)
+        log.info("Score panel cached: %s", score_path)
+
+    from stockpool.backtesting.framework import TradeCosts
+    portfolio_strat = PrecomputedScoreStrategy(
+        score_panel, name=cfg.strategy.name,
+    )
+    eligibility = EligibilityFilter(
+        cfg.portfolio_backtest.eligibility, name_map=name_map,
+    )
+    costs = TradeCosts(
+        buy_cost=cfg.backtest.costs.buy_cost,
+        sell_cost=cfg.backtest.costs.sell_cost,
+    )
+
+    def _make_engine() -> PortfolioEngine:
+        # Fresh engine instance each call so staggered runs don't share
+        # internal state. PrecomputedScoreStrategy is stateless and safely
+        # reused.
+        return PortfolioEngine(
+            strategy=portfolio_strat,
+            portfolio_cfg=cfg.portfolio_backtest.portfolio,
+            costs=costs,
+            risk_free_rate=cfg.backtest.risk_free_rate,
+            eligibility=eligibility,
+            sector_map=sector_map,
+        )
+
+    n_offsets = cfg.portfolio_backtest.staggered_starts
+    if n_offsets > 1:
+        from stockpool.portfolio.ensemble import StaggeredRunner
+        from stockpool.portfolio.report import render_ensemble_report
+        log.info("Running staggered ensemble: %d offsets", n_offsets)
+        runner = StaggeredRunner(
+            engine_factory=_make_engine,
+            risk_free_rate=cfg.backtest.risk_free_rate,
+        )
+        ensemble = runner.run(pool_data, n_offsets=n_offsets)
+        log.info(
+            "Ensemble done: %d offsets, ensemble total_return=%+.3f",
+            ensemble.n_offsets,
+            ensemble.aggregated_metrics.get("ensemble", {}).get("total_return", 0.0),
+        )
+        out = render_ensemble_report(
+            ensemble, panel_data=pool_data,
+            run_date=run_date, output_dir=out_root,
+            config_hash=cfg.content_hash,
+            initial_equity=cfg.portfolio_backtest.portfolio.initial_cash,
+        )
+    else:
+        result = _make_engine().run(pool_data, start_offset=0)
+        log.info(
+            "Backtest done: %d bars, %d trades, total_return=%+.3f",
+            len(result.curve), len(result.trades),
+            result.metrics.get("total_return", 0.0),
+        )
+        out = render_portfolio_report(
+            result, panel_data=pool_data,
+            run_date=run_date, output_dir=out_root,
+            config_hash=cfg.content_hash,
+        )
+    log.info("Portfolio report written: %s", out)
+    log.info("Latest also at: %s", out_root / "latest.html")
+    return 0
+
+
+def cmd_portfolio_ab(args: argparse.Namespace) -> int:
+    """Portfolio-level A/B comparison (PR-4 of the portfolio framework spec).
+
+    Builds a shared universe + sector/name maps once, then runs both arms
+    against them (each arm gets its own score panel keyed by per-arm
+    content_hash). Failures are isolated per arm — the report still renders
+    if one side fails.
+    """
+    from stockpool.industry_map import load_or_build_industry_map
+    from stockpool.portfolio_ab import (
+        load_portfolio_ab_config,
+        render_portfolio_ab_report,
+        run_portfolio_ab,
+        run_single_arm,
+    )
+    from stockpool.portfolio_ab.config import build_effective_cfg
+
+    try:
+        ab_cfg = load_portfolio_ab_config(args.config)
+        base_path = (Path(args.config).parent / ab_cfg.base_config).resolve()
+        base_cfg = load_config(base_path)
+    except Exception:
+        log.exception("portfolio-ab config invalid")
+        return 2
+    if not base_cfg.portfolio_backtest.enabled:
+        log.error(
+            "base config %s has portfolio_backtest.enabled=false; "
+            "set to true to opt in.", base_path,
+        )
+        return 2
+
+    if args.arm and args.arm not in ab_cfg.arms:
+        log.error("--arm %r not in %s", args.arm, list(ab_cfg.arms))
+        return 2
+
+    run_date = date.today().isoformat()
+    out_root = Path(base_cfg.report.output_dir) / "portfolio_ab"
+    _setup_logging(out_root / run_date)
+    log.info("stockpool portfolio-ab v%s for %s", __version__, run_date)
+
+    # ---- shared universe (mirrors cmd_portfolio_backtest) ----
+    cache_dir = Path(base_cfg.data.cache_dir)
+    universe_path = cache_dir / "universe.parquet"
+    name_map: dict[str, str] = {}
+    if universe_path.exists():
+        universe_df = pd.read_parquet(universe_path)
+        name_map = dict(zip(universe_df["code"], universe_df.get("name", universe_df["code"])))
+    pool_data = load_universe_cache(cache_dir, base_cfg.data.history_days)
+    if not pool_data:
+        log.warning(
+            "Universe cache is empty; falling back to cfg.stocks. "
+            "Run `stockpool fetch-universe` first for the full A-share universe."
+        )
+        pool_data = {}
+        for s in base_cfg.stocks:
+            try:
+                pool_data[s.code] = fetch_daily(
+                    s.code, base_cfg.data.history_days, base_cfg.data.cache_dir,
+                    force_refresh=args.refresh, source=base_cfg.data.source,
+                )
+                name_map.setdefault(s.code, s.name)
+            except Exception as e:
+                log.warning("Skipped %s: %s", s.code, e)
+    else:
+        log.info("Universe cache: %d stocks", len(pool_data))
+        for s in base_cfg.stocks:
+            if s.code not in pool_data:
+                try:
+                    pool_data[s.code] = fetch_daily(
+                        s.code, base_cfg.data.history_days, base_cfg.data.cache_dir,
+                        force_refresh=args.refresh, source=base_cfg.data.source,
+                    )
+                except Exception as e:
+                    log.warning("Skipped %s: %s", s.code, e)
+            name_map.setdefault(s.code, s.name)
+    if not pool_data:
+        log.error("No usable stock data; aborting.")
+        return 1
+
+    sector_map = load_or_build_industry_map(cache_dir, source="auto")
+    log.info("Sector map: %d codes mapped", len(sector_map))
+    from stockpool.factors.context import set_sector_map
+    set_sector_map(sector_map)
+
+    if args.arm:
+        # Single-arm debug mode: stdout only, no HTML.
+        effective = build_effective_cfg(base_cfg, ab_cfg.arms[args.arm])
+        arm_result = run_single_arm(
+            args.arm, effective,
+            pool_data=pool_data, sector_map=sector_map, name_map=name_map,
+            refresh_scores=args.refresh_scores,
+        )
+        _print_portfolio_arm_stdout(arm_result)
+        return 0
+
+    result = run_portfolio_ab(
+        ab_cfg, base_cfg, pool_data=pool_data,
+        sector_map=sector_map, name_map=name_map,
+        refresh_scores=args.refresh_scores,
+    )
+    out = render_portfolio_ab_report(result, run_date=run_date, output_dir=out_root)
+    log.info("Portfolio AB report written: %s", out)
+    log.info("Latest also at: %s", out_root / "latest.html")
+    return 0
+
+
+def _print_portfolio_arm_stdout(arm_result) -> None:
+    print(f"=== Portfolio arm: {arm_result.name} ===")
+    if arm_result.failed:
+        print(f"FAILED: {arm_result.error}")
+        return
+    m = arm_result.primary_metrics
+    print(
+        f"  total_ret={m.get('total_return', 0.0):+.3f} "
+        f"ann={m.get('annualized_return', 0.0):+.3f} "
+        f"sharpe={m.get('sharpe') or 0.0:+.2f} "
+        f"max_dd={m.get('max_drawdown', 0.0):.3f} "
+        f"trades={m.get('trade_count', 0)}"
+    )
+
+
 def cmd_fetch_universe(args: argparse.Namespace) -> int:
     """Bulk-fetch all A-shares (ex-ST/科创/北交) into the data cache.
 
@@ -617,6 +914,30 @@ def main(argv: list[str] | None = None) -> int:
     p_ab.add_argument("--no-share-pool", action="store_true",
                       help="Force each arm to load its own universe / factor panel")
     p_ab.set_defaults(func=cmd_ab)
+
+    p_pb = sub.add_parser(
+        "portfolio-backtest",
+        help="Portfolio-level backtest (top-K equal-weight, periodic rebalance)",
+    )
+    p_pb.add_argument("--config", default="config.yaml")
+    p_pb.add_argument("--refresh", action="store_true",
+                      help="Bypass per-stock OHLCV cache, refetch all")
+    p_pb.add_argument("--refresh-scores", action="store_true",
+                      help="Bypass data/portfolio_scores cache, recompute scores")
+    p_pb.set_defaults(func=cmd_portfolio_backtest)
+
+    p_pab = sub.add_parser(
+        "portfolio-ab",
+        help="Portfolio-level A/B comparison of two strategy configs",
+    )
+    p_pab.add_argument("--config", default="portfolio_ab.yaml")
+    p_pab.add_argument("--refresh", action="store_true",
+                       help="Bypass per-stock OHLCV cache")
+    p_pab.add_argument("--refresh-scores", action="store_true",
+                       help="Bypass data/portfolio_scores cache for both arms")
+    p_pab.add_argument("--arm", default=None,
+                       help="Debug: run only one arm; prints metrics to stdout, no HTML")
+    p_pab.set_defaults(func=cmd_portfolio_ab)
 
     p_fu = sub.add_parser(
         "fetch-universe",

@@ -45,7 +45,55 @@ start reports/latest.html
 .venv/Scripts/python -m stockpool ab --config ab.yaml
 .venv/Scripts/python -m stockpool ab --config ab.yaml --arm <name>          # 只跑单边, 打印指标到 stdout
 .venv/Scripts/python -m stockpool ab --config ab.yaml --no-share-pool       # 强制每边独立 load 池
+
+# Portfolio backtest — 横截面 top-K 等权 + 周期 rebalance + T+1 (PR-1/PR-2/PR-3)
+# 需要在 config.yaml 设 portfolio_backtest.enabled: true
+# PR-2 起 universe 自动从 data/universe.parquet 装 4000+ 票 (无该文件回退 cfg.stocks)
+# PR-3 起 staggered_starts > 1 自动跑 N 个 offset 出 ensemble + 包络图
+.venv/Scripts/python -m stockpool portfolio-backtest --config config.yaml
+.venv/Scripts/python -m stockpool portfolio-backtest --refresh-scores       # 强制重算 score panel
+
+# Portfolio AB — 比较两套 portfolio 策略 (与 per-stock `ab` 平行)
+.venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab.yaml
+.venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <name>   # 调试单 arm, stdout 打印指标
 ```
+
+`portfolio_ab.yaml` 最小示例(模板见 `portfolio_ab.yaml.example`):
+
+```yaml
+base_config: config.yaml
+arms:
+  arm_lasso_ic:
+    strategy:
+      name: ml_factor
+      ml_factor: {selector: {type: lasso}, weighter: {type: ic}}
+  arm_composite:
+    strategy: {name: composite_verdict}
+    portfolio_backtest:
+      portfolio: {top_k: 15}        # 只改 top_k, 其他字段从 base 继承
+```
+
+每个 arm 只能覆盖 `strategy:`(整段替换)和 `portfolio_backtest:`(字段级合并),其他顶层字段(`stocks` / `data` / `indicators` / `weights` / `verdicts` 等)统统继承 base。两 arm 各算各的 score panel(per-arm content_hash 隔离)。输出 `reports/portfolio_ab/<日期>.html` + `latest.html`,含 banner + 聚合指标 + Δ + 双 arm 净值 overlay + per-stock 贡献分解 + 已交易 code 集合分析。
+
+`portfolio_backtest` 段最小示例:
+
+```yaml
+portfolio_backtest:
+  enabled: true                     # 默认 false (opt-in)
+  portfolio:
+    top_k: 20                       # 每次取分数前 K 等权
+    rebalance_n_days: 5             # 每 N 个 bar 调仓一次
+    max_per_industry: 5             # 同行业最多持仓数 (PR-2 起生效;null 关闭)
+    initial_cash: 1.0
+  eligibility:                      # 逐 bar 漏斗过滤 (PR-2 起生效)
+    min_avg_amount_20d: 5e7         # 最近 20 bar 均成交额下限 (close * volume * 100)
+    exclude_st: true                # 名称含 "ST" 排除
+    min_history_bars: 60            # 历史不足这么多 bar 的剔除
+  staggered_starts: 1               # >1 启用 staggered ensemble (PR-3): N 个 offset 串行各跑一份, 聚合成 envelope (min/p25/median/p75/max) + ensemble mean
+  score_cache_dir: data/portfolio_scores
+```
+
+输出 `reports/portfolio/<日期>.html` + `latest.html`(净值曲线 + 等权 B&H 基准 + 持仓数量时间线 + 指标表)。Score panel 按 `cfg.content_hash` 缓存到 `data/portfolio_scores/<hash>.parquet`,改 yaml 任一字段都失效。PR-2 起 sector map 通过 `load_or_build_industry_map(source="auto")` 加载(首次运行 baostock 拉,后续走 30 天 parquet 缓存)。
 
 ## 数据源 (`data.source`)
 

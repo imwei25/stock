@@ -549,3 +549,49 @@ def test_yaml_with_legacy_position_size_loads_with_warning(tmp_path):
         assert len(depr) == 1
     assert cfg.backtest.sizing.type == "fixed"
     assert cfg.backtest.sizing.fixed.size == 0.07
+
+
+# === Portfolio backtest schema (PR-1) ===
+
+def test_portfolio_backtest_defaults(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(_minimal_yaml()), encoding="utf-8")
+    cfg = load_config(cfg_file)
+    pb = cfg.portfolio_backtest
+    assert pb.enabled is False
+    assert pb.portfolio.top_k == 20
+    assert pb.portfolio.rebalance_n_days == 5
+    assert pb.portfolio.max_per_industry == 5
+    assert pb.portfolio.initial_cash == 1.0
+    assert pb.eligibility.min_avg_amount_20d == 5e7
+    assert pb.eligibility.exclude_st is True
+    assert pb.eligibility.min_history_bars == 60
+    assert pb.staggered_starts == 1
+    assert pb.score_cache_dir == "data/portfolio_scores"
+
+
+def test_portfolio_backtest_extra_forbid(tmp_path):
+    raw = _minimal_yaml()
+    raw["portfolio_backtest"] = {"enabled": True, "bogus": 1}
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_config(cfg_file)
+
+
+def test_portfolio_backtest_round_trip(tmp_path):
+    raw = _minimal_yaml()
+    raw["portfolio_backtest"] = {
+        "enabled": True,
+        "portfolio": {"top_k": 30, "rebalance_n_days": 10, "max_per_industry": None},
+        "eligibility": {"min_avg_amount_20d": 1e8, "exclude_st": False},
+        "staggered_starts": 3,
+    }
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    cfg = load_config(cfg_file)
+    assert cfg.portfolio_backtest.enabled is True
+    assert cfg.portfolio_backtest.portfolio.top_k == 30
+    assert cfg.portfolio_backtest.portfolio.max_per_industry is None
+    assert cfg.portfolio_backtest.eligibility.exclude_st is False
+    assert cfg.portfolio_backtest.staggered_starts == 3

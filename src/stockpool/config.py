@@ -474,6 +474,48 @@ class RecommendPoolConfig(BaseModel):
     industry_source: Literal["auto", "baostock", "akshare"] = "auto"
 
 
+class PortfolioRunConfig(BaseModel):
+    """Inner block under ``portfolio_backtest.portfolio`` — sizing/cadence.
+
+    Class is named ``PortfolioRunConfig`` (not ``PortfolioConfig`` per the
+    spec) to avoid an ambiguous local name; the YAML key remains ``portfolio:``.
+    """
+    model_config = ConfigDict(extra="forbid")
+    top_k: int = Field(default=20, ge=1, le=200)
+    rebalance_n_days: int = Field(default=5, ge=1)
+    max_per_industry: int | None = Field(default=5, ge=1)
+    initial_cash: float = Field(default=1.0, gt=0.0)
+
+
+class PortfolioEligibilityConfig(BaseModel):
+    """Dynamic eligibility filter (流动性 + ST + history).
+
+    Schema lands in PR-1 so user yaml never needs migration when PR-2 wires
+    the filter into the engine. PR-1's engine ignores these fields.
+    """
+    model_config = ConfigDict(extra="forbid")
+    min_avg_amount_20d: float = Field(default=5e7, ge=0.0)
+    exclude_st: bool = True
+    min_history_bars: int = Field(default=60, ge=1)
+
+
+class PortfolioBacktestConfig(BaseModel):
+    """Portfolio-level backtest config (new in PR-1).
+
+    Opt-in via ``enabled: true``. The dedicated ``stockpool portfolio-backtest``
+    CLI refuses to run if ``enabled=false`` (exit 2), so accidentally invoking
+    it on a per-stock-only yaml is a no-op rather than silent garbage.
+    """
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    portfolio: PortfolioRunConfig = Field(default_factory=PortfolioRunConfig)
+    eligibility: PortfolioEligibilityConfig = Field(
+        default_factory=PortfolioEligibilityConfig,
+    )
+    staggered_starts: int = Field(default=1, ge=1, le=20)
+    score_cache_dir: str = "data/portfolio_scores"
+
+
 class AppConfig(BaseModel):
     """Root config. `content_hash` is set post-load, not in YAML."""
     stocks: list[Stock]
@@ -487,6 +529,9 @@ class AppConfig(BaseModel):
     context: ContextConfig = Field(default_factory=ContextConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     recommend_pool: RecommendPoolConfig = Field(default_factory=RecommendPoolConfig)
+    portfolio_backtest: PortfolioBacktestConfig = Field(
+        default_factory=PortfolioBacktestConfig,
+    )
 
     content_hash: str = ""
 
