@@ -19,7 +19,7 @@ from stockpool.backtest_composite import EquityResult
 from stockpool.backtest_runner import backtest_stocks, prepare_pool
 from stockpool.config import AppConfig, Stock
 from stockpool.fetcher import fetch_daily, load_universe_cache
-from stockpool.strategy_factory import build_factor_panel
+from stockpool.strategy_factory import build_close_panel, load_or_build_factor_panel
 
 log = logging.getLogger("stockpool")
 
@@ -92,7 +92,7 @@ def _prepare_pool_for_arm(
     refresh: bool,
     injected_universe: dict[str, pd.DataFrame] | None,
     injected_factor_panel: dict | None,
-) -> tuple[dict[str, pd.DataFrame] | None, dict | None]:
+) -> tuple[dict[str, pd.DataFrame] | None, dict | None, pd.DataFrame | None]:
     """Per-arm pool prep with optional shared inputs from run_ab.
 
     If ``injected_universe`` is provided, skip ``load_universe_cache`` and
@@ -106,7 +106,7 @@ def _prepare_pool_for_arm(
         arm_cfg.strategy.name != "ml_factor"
         or arm_cfg.strategy.ml_factor.panel_mode != "pooled"
     ):
-        return None, None
+        return None, None, None
 
     # If neither shared input is provided, delegate entirely to prepare_pool.
     if injected_universe is None and injected_factor_panel is None:
@@ -132,11 +132,12 @@ def _prepare_pool_for_arm(
 
     if injected_factor_panel is not None:
         factor_panel = injected_factor_panel
+        close_panel = build_close_panel(pool_data)
     else:
-        log.info("Building factor panel over %d stocks × %d factors ...",
-                 len(pool_data), len(ml_cfg.factors))
-        factor_panel = build_factor_panel(ml_cfg.factors, pool_data)
-    return pool_data, factor_panel
+        factor_panel, close_panel = load_or_build_factor_panel(
+            ml_cfg.factors, pool_data, arm_cfg.data.cache_dir,
+        )
+    return pool_data, factor_panel, close_panel
 
 
 def _run_arm(
@@ -146,12 +147,13 @@ def _run_arm(
     pool_data: dict | None,
     factor_panel: dict | None,
     refresh: bool,
+    close_panel: pd.DataFrame | None = None,
 ) -> ArmResult:
     """Backtest every stock for one arm."""
     log.info("Running arm %s ...", arm_name)
     per_stock, failed = backtest_stocks(
         arm_cfg, stocks, pool_data, factor_panel,
-        shared_cache={}, refresh=refresh,
+        shared_cache={}, refresh=refresh, close_panel=close_panel,
     )
     log.info("Arm %s: %d done, %d failed", arm_name, len(per_stock), len(failed))
     return ArmResult(
@@ -194,7 +196,7 @@ def run_ab(
         # converting it into a training_universe=all run. See P3-2 bug
         # in docs/ab_validation_results.md §3.7.
         arm_wants_universe = _ml_uses_universe(arm_cfg)
-        pool_data, factor_panel = _prepare_pool_for_arm(
+        pool_data, factor_panel, close_panel = _prepare_pool_for_arm(
             arm_cfg, stocks, refresh,
             injected_universe=(shared_universe if arm_wants_universe else None),
             injected_factor_panel=(shared_panel if plan["shared_factors"] else None),
@@ -203,6 +205,7 @@ def run_ab(
             shared_panel = factor_panel
         arm_results.append(_run_arm(
             arm_cfg, name, stocks, pool_data, factor_panel, refresh,
+            close_panel=close_panel,
         ))
 
     return ABResult(
@@ -224,8 +227,11 @@ def run_single_arm(
         raise KeyError(f"arm {arm_name!r} not in {list(ab_cfg.arms)}")
     arm = ab_cfg.arms[arm_name]
     arm_cfg = build_effective_cfg(base_cfg, arm)
-    pool_data, factor_panel = _prepare_pool_for_arm(
+    pool_data, factor_panel, close_panel = _prepare_pool_for_arm(
         arm_cfg, stocks, refresh,
         injected_universe=None, injected_factor_panel=None,
     )
-    return _run_arm(arm_cfg, arm_name, stocks, pool_data, factor_panel, refresh)
+    return _run_arm(
+        arm_cfg, arm_name, stocks, pool_data, factor_panel, refresh,
+        close_panel=close_panel,
+    )

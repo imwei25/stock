@@ -20,15 +20,20 @@ from stockpool.backtest_composite import EquityResult, simulate_equity_curve, wa
 from stockpool.backtesting.sizing import build_lot_sizer
 from stockpool.config import AppConfig, Stock
 from stockpool.fetcher import fetch_daily, load_universe_cache
-from stockpool.strategy_factory import build_factor_panel, build_strategy, simulate_strategy_equity_curve
+from stockpool.strategy_factory import (
+    build_strategy,
+    load_or_build_factor_panel,
+    simulate_strategy_equity_curve,
+)
 
 log = logging.getLogger("stockpool")
 
 
 def prepare_pool(
     cfg: AppConfig, stocks: list[Stock], force_refresh: bool,
-) -> tuple[dict[str, pd.DataFrame] | None, dict | None]:
-    """Build (pool_data, factor_panel) for ml_factor strategies, or (None, None).
+    refresh_factor_panel: bool = False,
+) -> tuple[dict[str, pd.DataFrame] | None, dict | None, pd.DataFrame | None]:
+    """Build (pool_data, factor_panel, close_panel) for ml_factor or (None,None,None).
 
     Pool composition depends on ``cfg.strategy.ml_factor.training_universe``:
       * ``pool``: only ``cfg.stocks`` (legacy, ~10 stocks).
@@ -46,7 +51,7 @@ def prepare_pool(
         cfg.strategy.name != "ml_factor"
         or cfg.strategy.ml_factor.panel_mode != "pooled"
     ):
-        return None, None
+        return None, None, None
 
     ml_cfg = cfg.strategy.ml_factor
     pool_data: dict[str, pd.DataFrame] = {}
@@ -82,11 +87,11 @@ def prepare_pool(
     sector_map = load_or_build_industry_map(cfg.data.cache_dir, source="auto")
     set_sector_map(sector_map)
 
-    log.info("Building factor panel over %d stocks × %d factors ...",
-             len(pool_data), len(ml_cfg.factors))
-    factor_panel = build_factor_panel(ml_cfg.factors, pool_data)
-    log.info("Factor panel built: %d factors", len(factor_panel))
-    return pool_data, factor_panel
+    factor_panel, close_panel = load_or_build_factor_panel(
+        ml_cfg.factors, pool_data, cfg.data.cache_dir,
+        refresh=refresh_factor_panel,
+    )
+    return pool_data, factor_panel, close_panel
 
 
 def backtest_stocks(
@@ -96,6 +101,7 @@ def backtest_stocks(
     factor_panel: dict | None,
     shared_cache: dict,
     refresh: bool,
+    close_panel: pd.DataFrame | None = None,
 ) -> tuple[list[tuple[str, str, EquityResult]], list[tuple[str, str]]]:
     """Backtest each stock; return (successes, failures).
 
@@ -149,6 +155,7 @@ def backtest_stocks(
                     pool_data=pool_data if needs_pool else None,
                     current_stock_code=s.code,
                     factor_panel=factor_panel,
+                    close_panel=close_panel,
                     shared_cache=shared_cache,
                 )
                 result = simulate_strategy_equity_curve(

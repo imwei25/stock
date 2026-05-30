@@ -98,6 +98,7 @@ def _analyze_one(
     market_context: list[ContextSignal] | None = None,
     pool_data: dict[str, pd.DataFrame] | None = None,
     factor_panel: dict | None = None,
+    close_panel: pd.DataFrame | None = None,
     shared_cache: dict | None = None,
 ) -> StockAnalysis:
     """Full per-stock pipeline. Single failures are caught → verdict=neutral + warnings."""
@@ -148,7 +149,8 @@ def _analyze_one(
     try:
         strategy = build_strategy(
             cfg, pool_data=pool_data, current_stock_code=stock.code,
-            factor_panel=factor_panel, shared_cache=shared_cache,
+            factor_panel=factor_panel, close_panel=close_panel,
+            shared_cache=shared_cache,
         )
         latest = strategy.predict_latest(daily)
         verdict = latest.get("signal", "neutral")
@@ -233,7 +235,10 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     # For ml_factor in pooled mode, preload every stock's history once so
     # the strategy can build a panel at each refit point. Pool composition is
     # decided by ``training_universe``.
-    pool_data, factor_panel = _prepare_ml_pool(cfg, stocks, args.refresh)
+    pool_data, factor_panel, close_panel = _prepare_ml_pool(
+        cfg, stocks, args.refresh,
+        refresh_factor_panel=getattr(args, "refresh_factor_panel", False),
+    )
     # One shared cache for the whole backtest run — lets MLFactorStrategy
     # reuse the stacked (X, y) panel across stocks and share monthly fits.
     shared_cache: dict = {}
@@ -241,6 +246,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     per_stock, failed = backtest_stocks(
         cfg, stocks, pool_data, factor_panel,
         shared_cache=shared_cache, refresh=args.refresh,
+        close_panel=close_panel,
     )
     for code, err in failed:
         log.warning("Skipped %s: %s", code, err)
@@ -410,17 +416,19 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
 
     # ---- ML factor panel (only for ml_factor + pooled) ----
     factor_panel = None
+    close_panel = None
     if cfg.strategy.name == "ml_factor" and cfg.strategy.ml_factor.panel_mode == "pooled":
-        from stockpool.strategy_factory import build_factor_panel
-        log.info("Building factor panel over %d stocks × %d factors ...",
-                 len(pool_data), len(cfg.strategy.ml_factor.factors))
-        factor_panel = build_factor_panel(cfg.strategy.ml_factor.factors, pool_data)
+        from stockpool.strategy_factory import load_or_build_factor_panel
+        factor_panel, close_panel = load_or_build_factor_panel(
+            cfg.strategy.ml_factor.factors, pool_data, cfg.data.cache_dir,
+        )
 
     shared_cache: dict = {}
     legacy = build_strategy(
         cfg,
         pool_data=pool_data,
         factor_panel=factor_panel,
+        close_panel=close_panel,
         shared_cache=shared_cache,
     )
 
@@ -838,7 +846,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # For ml_factor in pooled mode the strategy needs every stock's history
     # to build cross-sectional factors at predict time. Pool composition is
     # decided by ``training_universe`` (pool vs full A-share cache).
-    pool_data, factor_panel = _prepare_ml_pool(cfg, stocks, args.refresh)
+    pool_data, factor_panel, close_panel = _prepare_ml_pool(cfg, stocks, args.refresh)
     shared_cache: dict = {}
 
     analyses: list[StockAnalysis] = []
@@ -850,6 +858,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 market_context=market_context,
                 pool_data=pool_data,
                 factor_panel=factor_panel,
+                close_panel=close_panel,
                 shared_cache=shared_cache,
             ))
         except Exception as e:
@@ -904,6 +913,8 @@ def main(argv: list[str] | None = None) -> int:
     p_bt = sub.add_parser("backtest", help="Composite-strategy equity-curve backtest")
     p_bt.add_argument("--config", default="config.yaml", help="Path (default: config.yaml)")
     p_bt.add_argument("--refresh", action="store_true", help="Bypass cache, refetch all")
+    p_bt.add_argument("--refresh-factor-panel", action="store_true",
+                      help="Bypass data/factor_panels/ cache, recompute factors")
     p_bt.add_argument("--stocks", default="", help="Only run listed codes (comma-separated)")
     p_bt.set_defaults(func=cmd_backtest)
 

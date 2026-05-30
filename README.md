@@ -29,6 +29,7 @@ start reports/latest.html
 .venv/Scripts/python -m stockpool run --stocks 605589,603986     # 只跑两只
 .venv/Scripts/python -m stockpool run --skip-trading-day-check   # 周末调试
 .venv/Scripts/python -m stockpool backtest                       # 回测所有股票
+.venv/Scripts/python -m stockpool backtest --refresh-factor-panel # 重算 ml_factor 因子面板缓存 (data/factor_panels/)
 .venv/Scripts/python -m stockpool fetch-universe                 # 拉全 A 股缓存 (训练用 + Pool B 必需)
 .venv/Scripts/python -m pytest                                   # 全套单元测试
 

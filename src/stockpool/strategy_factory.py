@@ -10,9 +10,15 @@ Decouples the CLI from concrete strategy classes:
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+from pathlib import Path
 from typing import Mapping
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 from stockpool.backtest_composite import EquityResult
 from stockpool.backtesting import (
@@ -33,6 +39,7 @@ def build_strategy(
     pool_data: Mapping[str, pd.DataFrame] | None = None,
     current_stock_code: str | None = None,
     factor_panel: Mapping[str, pd.DataFrame] | None = None,
+    close_panel: pd.DataFrame | None = None,
     shared_cache: dict | None = None,
 ) -> Strategy:
     """Construct the strategy referenced by ``cfg.strategy.name``.
@@ -66,15 +73,45 @@ def build_strategy(
             and pool_data
         ):
             factor_panel = build_factor_panel(cfg.strategy.ml_factor.factors, pool_data)
+        if (
+            close_panel is None
+            and cfg.strategy.ml_factor.panel_mode == "pooled"
+            and pool_data
+        ):
+            close_panel = build_close_panel(pool_data)
         return MLFactorStrategy(
             cfg=cfg.strategy.ml_factor,
             pool_data=pool_data,
             current_stock_code=current_stock_code,
             factor_panel=factor_panel,
+            close_panel=close_panel,
             cache_dir=cfg.data.cache_dir,
             shared_cache=shared_cache,
         )
     raise ValueError(f"unknown strategy: {name!r}")
+
+
+def build_close_panel(
+    pool_data: Mapping[str, pd.DataFrame],
+) -> pd.DataFrame:
+    """从 ``{code: daily_df}`` 装 T×N close 宽表(行 = union dates,列 = code)。
+
+    用于跨股训练时一次性算 forward-return labels,避免每个 refit_bar 重算。
+    与 ``build_factor_panel`` 内部使用同一份 OHLCV panel 构造逻辑。
+    """
+    if not pool_data:
+        return pd.DataFrame()
+    per_stock: dict[str, pd.Series] = {}
+    for code, df in pool_data.items():
+        d = df.copy()
+        d["date"] = pd.to_datetime(d["date"])
+        per_stock[code] = d.set_index("date").sort_index()["close"]
+    all_dates = sorted(set().union(*(s.index for s in per_stock.values())))
+    idx = pd.DatetimeIndex(all_dates, name="date")
+    return pd.DataFrame(
+        {code: s.reindex(idx) for code, s in per_stock.items()},
+        index=idx,
+    )
 
 
 def build_factor_panel(
@@ -106,6 +143,99 @@ def build_factor_panel(
             index=idx,
         )
     return compute_factor_panel(panel, factor_names)
+
+
+def _factor_panel_sig(
+    factor_names: list[str],
+    pool_data: Mapping[str, pd.DataFrame],
+) -> tuple[str, str]:
+    """Return (12-char sig, last_date_iso) identifying a (factor list, universe,
+    history range) tuple.
+
+    Universe = sorted code list. last_date = max of any stock's max date.
+    """
+    codes = sorted(pool_data.keys())
+    last_date = pd.Timestamp.min
+    for df in pool_data.values():
+        if len(df) > 0:
+            d = pd.to_datetime(df["date"]).max()
+            if d > last_date:
+                last_date = d
+    last_iso = "" if last_date is pd.Timestamp.min else last_date.date().isoformat()
+    blob = json.dumps(
+        {"factors": sorted(factor_names), "codes": codes, "last_date": last_iso},
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:12], last_iso
+
+
+def load_or_build_factor_panel(
+    factor_names: list[str],
+    pool_data: Mapping[str, pd.DataFrame],
+    cache_dir: str | Path,
+    refresh: bool = False,
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    """Disk-cached wrapper around ``build_factor_panel`` + ``build_close_panel``.
+
+    Cache layout:
+      ``<cache_dir>/factor_panels/<sig>/manifest.json``
+      ``<cache_dir>/factor_panels/<sig>/close.parquet``
+      ``<cache_dir>/factor_panels/<sig>/<factor_name>.parquet`` × N
+
+    Cache key (``sig``) hashes (sorted factor names, sorted universe codes,
+    last_date). Any change → fresh sig → recompute. There is no incremental
+    update: pushing last_date by one bar triggers a full rebuild.
+
+    Pass ``refresh=True`` to bypass the cache and overwrite.
+
+    Returns ``(factor_panel, close_panel)``.
+    """
+    if not pool_data:
+        return {}, pd.DataFrame()
+
+    sig, last_iso = _factor_panel_sig(factor_names, pool_data)
+    root = Path(cache_dir) / "factor_panels" / sig
+    manifest_path = root / "manifest.json"
+
+    if not refresh and manifest_path.exists():
+        try:
+            meta = json.loads(manifest_path.read_text(encoding="utf-8"))
+            close_path = root / "close.parquet"
+            paths = {n: root / f"{n}.parquet" for n in meta.get("factors", [])}
+            if close_path.exists() and all(p.exists() for p in paths.values()):
+                log.info("Factor panel cache hit: %s (sig=%s)", root, sig)
+                close_panel = pd.read_parquet(close_path)
+                factor_panel = {n: pd.read_parquet(p) for n, p in paths.items()}
+                return factor_panel, close_panel
+            log.warning("Factor panel manifest exists but parquets incomplete; rebuilding")
+        except Exception as e:
+            log.warning("Factor panel cache read failed (%s); rebuilding", e)
+
+    log.info("Building factor panel: %d factors × %d stocks (sig=%s)",
+             len(factor_names), len(pool_data), sig)
+    factor_panel = build_factor_panel(factor_names, pool_data)
+    close_panel = build_close_panel(pool_data)
+
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        close_panel.to_parquet(root / "close.parquet")
+        for name, wide in factor_panel.items():
+            wide.to_parquet(root / f"{name}.parquet")
+        manifest_path.write_text(
+            json.dumps({
+                "sig": sig,
+                "factors": list(factor_panel.keys()),
+                "n_codes": len(pool_data),
+                "last_date": last_iso,
+                "built_at": pd.Timestamp.now("UTC").isoformat(),
+            }, indent=2),
+            encoding="utf-8",
+        )
+        log.info("Factor panel cached: %s", root)
+    except Exception as e:
+        log.warning("Failed to write factor panel cache (%s); proceeding in-memory", e)
+
+    return factor_panel, close_panel
 
 
 def simulate_strategy_equity_curve(

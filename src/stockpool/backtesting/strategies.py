@@ -25,7 +25,7 @@ from stockpool.fetcher import resample_to_weekly
 from stockpool.indicators import add_all
 from stockpool.ml.dataset import (
     align_xy, build_factor_matrix, build_panel, forward_return,
-    slice_stock_factor_matrix,
+    forward_return_panel, slice_stock_factor_matrix, stack_panel_to_xy,
 )
 from stockpool.ml.pipeline import TwoStepPipeline
 from stockpool.ml.selectors import FactorSelector, LassoSelector, LightGBMSelector
@@ -328,6 +328,7 @@ class MLFactorStrategy(Strategy):
         pool_data: Mapping[str, pd.DataFrame] | None = None,
         current_stock_code: str | None = None,
         factor_panel: Mapping[str, pd.DataFrame] | None = None,
+        close_panel: pd.DataFrame | None = None,
         cache_dir: str | Path | None = None,
         shared_cache: dict | None = None,
     ):
@@ -339,6 +340,12 @@ class MLFactorStrategy(Strategy):
         # 不提供时,fall back 到 build_factor_matrix 单股退化 (cross-sec → 常数)。
         self._factor_panel: dict[str, pd.DataFrame] | None = (
             dict(factor_panel) if factor_panel is not None else None
+        )
+        # 可选: 预算好的 close 宽表 (T×N)。提供时,pooled mode 的 _try_fit
+        # 直接切 factor_panel + close_panel 拼训练集,跳过每个 refit_bar 的
+        # build_panel(pool, factors, horizon) 全量因子重算 (PR-1 速度优化)。
+        self._close_panel: pd.DataFrame | None = (
+            close_panel.copy() if close_panel is not None else None
         )
         self.buy_verdicts = set(cfg.buy_verdicts)
         self.sell_verdicts = set(cfg.sell_verdicts)
@@ -357,8 +364,8 @@ class MLFactorStrategy(Strategy):
         """Return a copy bound to a specific stock (used in pooled mode)."""
         return MLFactorStrategy(
             cfg=self.cfg, pool_data=self.pool_data, current_stock_code=code,
-            factor_panel=self._factor_panel, cache_dir=self._cache_dir,
-            shared_cache=self._shared_cache,
+            factor_panel=self._factor_panel, close_panel=self._close_panel,
+            cache_dir=self._cache_dir, shared_cache=self._shared_cache,
         )
 
     def _strategy_signature(self) -> str:
@@ -583,11 +590,18 @@ class MLFactorStrategy(Strategy):
             X_train_raw = X_full.iloc[train_start:label_end]
             y_train_raw = y_full.iloc[train_start:label_end]
             X_train, y_train = align_xy(X_train_raw, y_train_raw)
+        elif self._factor_panel is not None and self._close_panel is not None:
+            # Fast path (PR-1): slice precomputed factor + close panels by
+            # cutoff_date instead of rebuilding factors on the truncated pool
+            # at every refit_bar.
+            X_pool, y_pool = self._build_pooled_xy_from_panel(
+                daily_df, current_bar,
+            )
+            X_train, y_train = X_pool, y_pool
         else:
-            # In pooled mode `train_window` is the per-stock recency window:
-            # each pool stock contributes at most its last `train_window`
-            # post-warmup rows, then we concatenate. Total training rows
-            # ≈ train_window × (# stocks with usable history at current_date).
+            # Legacy path: rebuild factors from raw OHLCV at every refit.
+            # Kept for per_stock-mode tests and CLI paths that don't pre-build
+            # the close panel.
             pool = self._build_truncated_pool(daily_df, current_date, current_bar)
             X_pool, y_pool = build_panel(pool, cfg.factors, cfg.horizon)
             if len(X_pool) > 0 and cfg.train_window > 0:
@@ -616,6 +630,52 @@ class MLFactorStrategy(Strategy):
         if shared_key is not None:
             self._shared_cache[shared_key] = result  # type: ignore[index]
         return result
+
+    def _build_pooled_xy_from_panel(
+        self, daily_df: pd.DataFrame, current_bar: int,
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        """Fast pooled training-set builder (PR-1).
+
+        Slices the precomputed ``self._factor_panel`` (dict[name, T×N]) and
+        ``self._close_panel`` (T×N) by ``cutoff_date`` (same cutoff as
+        ``_build_truncated_pool``), computes forward-return labels once,
+        stacks to (stock, date) long format, then applies the per-stock
+        ``tail(train_window)`` window — same semantics as the legacy
+        ``build_panel`` path, but skips per-refit factor recomputation.
+
+        Non-sharing mode drops the host column from both panels so the host
+        contributes only via ``daily_df`` itself (today's open). For sharing
+        mode the host stays in the panel — matches ``_build_truncated_pool``.
+        """
+        assert self._factor_panel is not None and self._close_panel is not None
+        cfg = self.cfg
+        label_end = self._embargoed_label_end(current_bar)
+        host_slice_end = max(0, label_end + cfg.horizon)
+        cutoff_ts = pd.Timestamp(
+            daily_df["date"].iloc[host_slice_end - 1]
+            if host_slice_end > 0 else daily_df["date"].iloc[0]
+        )
+        sharing = self._is_sharing()
+        drop_host = (not sharing) and self._current_stock_code is not None
+
+        sliced_fp: dict[str, pd.DataFrame] = {}
+        for name, wide in self._factor_panel.items():
+            sub = wide.loc[wide.index <= cutoff_ts]
+            if drop_host and self._current_stock_code in sub.columns:
+                sub = sub.drop(columns=[self._current_stock_code])
+            sliced_fp[name] = sub
+        close_sub = self._close_panel.loc[self._close_panel.index <= cutoff_ts]
+        if drop_host and self._current_stock_code in close_sub.columns:
+            close_sub = close_sub.drop(columns=[self._current_stock_code])
+
+        fwd = forward_return_panel(close_sub, cfg.horizon)
+        X, y = stack_panel_to_xy(sliced_fp, fwd, dropna=True)
+        if len(X) > 0 and cfg.train_window > 0:
+            X = X.groupby(
+                level="stock", group_keys=False, sort=False,
+            ).tail(cfg.train_window)
+            y = y.loc[X.index]
+        return X, y
 
     def _build_truncated_pool(
         self, daily_df: pd.DataFrame, current_date, current_bar: int,

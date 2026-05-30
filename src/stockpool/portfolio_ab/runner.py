@@ -29,7 +29,7 @@ from stockpool.portfolio.result import PortfolioBacktestResult
 from stockpool.portfolio.scoring import precompute_scores_from_legacy
 from stockpool.portfolio.strategy import PrecomputedScoreStrategy
 from stockpool.portfolio_ab.config import PortfolioABConfig, build_effective_cfg
-from stockpool.strategy_factory import build_factor_panel, build_strategy
+from stockpool.strategy_factory import build_strategy, load_or_build_factor_panel
 
 log = logging.getLogger("stockpool")
 
@@ -102,18 +102,21 @@ def run_single_arm(
     try:
         # ML factor panel only if the arm's strategy actually needs it.
         factor_panel = None
+        close_panel = None
         if (
             effective_cfg.strategy.name == "ml_factor"
             and effective_cfg.strategy.ml_factor.panel_mode == "pooled"
         ):
-            factor_panel = build_factor_panel(
+            factor_panel, close_panel = load_or_build_factor_panel(
                 effective_cfg.strategy.ml_factor.factors, pool_data,
+                effective_cfg.data.cache_dir,
             )
         shared_cache: dict = {}
         legacy = build_strategy(
             effective_cfg,
             pool_data=pool_data,
             factor_panel=factor_panel,
+            close_panel=close_panel,
             shared_cache=shared_cache,
         )
 

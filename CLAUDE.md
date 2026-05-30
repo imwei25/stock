@@ -14,7 +14,7 @@ A 股技术信号分析工具:可插拔后端拉数据(mootdx/baostock/akshare) 
 python -m stockpool run --config config.yaml
 
 # 回测 (走样式综合策略 + 多 N 净值曲线)
-python -m stockpool backtest --config config.yaml [--stocks 605589]
+python -m stockpool backtest --config config.yaml [--stocks 605589] [--refresh-factor-panel]
 
 # 拉全市场 A 股缓存 (训练用,剔除 ST/科创/北交; 8 线程, mootdx 全量 ~1 分钟)
 # 默认按 cfg.data.source 拉每只票;--source 临时覆盖
@@ -82,7 +82,7 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 | `src/stockpool/factors_analysis_report.py` | pyecharts HTML 报告: 排名表 + IC 时序 + 相关性 heatmap + regime 拆分 |
 | `src/stockpool/panel.py` | **Panel** 数据结构 (T×N 宽表 dict) + `build_panel_from_cache` |
 | `src/stockpool/ml/` | **两步法 ML 组合**(dataset / Lasso 或 LightGBM selector / IC&IR&Equal&LightGBM weighter / TwoStepPipeline) |
-| `src/stockpool/strategy_factory.py` | 按 `cfg.strategy.name` 工厂构造策略 + ML 通用 simulate;ml_factor 注入 `cache_dir` 以启用日报路径的月度训练缓存;`build_factor_panel` 顶层助手用于 CLI 预算 |
+| `src/stockpool/strategy_factory.py` | 按 `cfg.strategy.name` 工厂构造策略 + ML 通用 simulate;ml_factor 注入 `cache_dir` 以启用日报路径的月度训练缓存;`build_factor_panel` + `build_close_panel` 顶层助手用于 CLI 预算(close_panel 用于 `_try_fit` 跳过每 refit 重算因子);`load_or_build_factor_panel` 落盘缓存,key = (sorted factors + sorted codes + last_date) sha256[:12],写 `data/factor_panels/<sig>/{manifest.json, close.parquet, <factor>.parquet × N}`;input 任一变化生成新 sig 重算 |
 | `src/stockpool/report.py` | 日报 HTML(含市场背景、板块上下文);`_optimize_html` 做 echarts lib 去重 + `<details>` 默认折叠 + 图表懒加载,降低首屏开销 |
 | `src/stockpool/backtest.py` | 单信号前瞻命中率 |
 | `src/stockpool/backtesting/` | **回测框架**(策略 ABC + 引擎),见下 |
@@ -197,6 +197,7 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 - `universe.parquet` — `fetch-universe` 写入的全 A 股清单 (code/name/market)
 - `stock_industry_map.parquet` — Pool B 用的 `code → 行业` 映射(akshare 东财板块,30 天有效期)
 - `recommend_pool/poolb_<content_hash>_<isoyear>w<NN>.parquet` — Pool B 本周排名缓存
+- `factor_panels/<sig>/{manifest.json, close.parquet, <factor>.parquet × N}` — ml_factor pooled mode 的因子面板 + close 宽表落盘缓存 (PR-2);sig hash 包含 factors / sorted codes / last_date,任一变化自动失效。回测命令加 `--refresh-factor-panel` 旁路
 - `.data_source` — 单行文本,记录上次写入该 cache_dir 的 source(`mootdx`/`baostock`/`akshare`);任何 `fetch_*` 启动时与 cfg.data.source 比对,不一致触发 force_refresh + 覆写
 
 报告:
@@ -230,6 +231,8 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 | `test_wq101.py` | 101 alpha 注册 + 元数据 + 计算无异常 + look-ahead 截断不变 |
 | `test_panel.py` | Panel 构造 + 截尾 + 缺失 / 错位对齐 |
 | `test_ml_strategy_panel.py` | factor_panel 注入 + with_stock 传播 + cross-sec 不退化 |
+| `test_ml_strategy_panel_fit_reuse.py` | 注入 close_panel 后 `_try_fit` 走快路径(不调 `build_panel`),快/慢路径 (X, y) 数值等价;未注入则自动回退;`with_stock` 传播 close_panel |
+| `test_factor_panel_cache.py` | `load_or_build_factor_panel` 落盘缓存:首次写 manifest + parquets / 二次命中不调 build_factor_panel / 改因子或股池触发新 sig / `refresh=True` 旁路 / 缓存内容与新建一致 / 空 pool 返回空 |
 | `test_config.py` | Pydantic 校验(含 `strategy` 段) |
 | `test_report_smoke.py` | 全链路 `cmd_run` 烟雾 |
 | `test_industry_map.py` | baostock + akshare 双源 mock,auto-fallback 链,parquet 缓存 / 过期 / failure-isolation |
