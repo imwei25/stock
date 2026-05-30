@@ -1,39 +1,62 @@
-# ab.yaml — sample A/B test configuration.
-#
-# Run: python -m stockpool ab --config ab.yaml
-#
-# Output: reports/ab/<date>.html + reports/ab/latest.html
-# Spec:   docs/superpowers/specs/2026-05-24-ab-testing-design.md
+# A/B: 原始 8 因子 vs pick-by-ic 选出的 20 因子
+# 两边都用同一套 selector/weighter (lasso + ic),只换因子列表,隔离变量。
+# training_universe=pool 让 16 只 cfg.stocks 自训自测,跑得快。
 
-# Path to the base AppConfig. Inherits stocks / data / indicators / context.
-# Resolved relative to this file's directory.
 base_config: config.yaml
 
-# Optional: subset of base.stocks to run on. Codes must exist in base.stocks.
-# Empty / omitted = run on the full base.stocks.
-# stocks_filter: ["605589", "300750"]
-
-# Exactly two arms. Key names are free-form and appear verbatim in the report.
 arms:
-  composite_default:
-    strategy:
-      name: composite_verdict
-    backtest:
-      # Required. Must be a length-1 list (A/B compares at one N per side).
-      equity_curve_holding_days: [10]
-      # Other backtest fields (engine, costs, position_size, ...) inherit
-      # from base.backtest if omitted.
-
-  ml_lgbm_top20:
+  baseline_8factors:
     strategy:
       name: ml_factor
       ml_factor:
-        # Either an explicit factor list, or factors_file pointing to a JSON
-        # produced by `stockpool factors pick` / `factors pick-by-ic`.
-        factors_file: reports/selection.json
-        selector: {type: lightgbm}
-        weighter: {type: lightgbm}
+        factors:
+          - momentum_20
+          - macd_hist
+          - rsi_centered_14
+          - ma_distance_20
+          - vol_ratio_5
+          - boll_position_20
+          - ma_slope_20_5
+          - kdj_j
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
         panel_mode: pooled
-        training_universe: all
+        training_universe: pool
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
     backtest:
-      equity_curve_holding_days: [10]
+      equity_curve_holding_days: [5]
+
+  picked_20factors:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: pool
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+    backtest:
+      equity_curve_holding_days: [5]

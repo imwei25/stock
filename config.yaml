@@ -23,7 +23,7 @@ data:
   # 数据源: mootdx(默认, 通达信 TCP, 含当日盘中) | baostock(无 token, 收盘后更新)
   #        | akshare(东财爬虫, 兜底, 不稳定)
   # 板块(行业)K 线始终走 akshare,因为另两家不直接提供。
-  source: baostock
+  source: mootdx
 
 context:
   indices:
@@ -140,15 +140,9 @@ strategy:
     # 要参与组合的因子(注册名见 stockpool.factors 内置列表)。
     # 加新因子: 在 factors/technical.py 写一个 Factor 子类 + @register("xxx"),
     # 然后把名字加到这个列表即可。
-    factors:
-      - momentum_20
-      - macd_hist
-      - rsi_centered_14
-      - ma_distance_20
-      - vol_ratio_5
-      - boll_position_20
-      - ma_slope_20_5
-      - kdj_j
+    # 用 `factors analyze` + `pick-by-ic` 选出的因子(top-20, max-corr=0.6, min-ir=0.05)
+    # 与 factors: [...] 二选一,factors_file 优先
+    factors_file: reports/baseline_selection.json
 
     horizon: 3                # 预测未来 N 日收益
     # train_window 是 "每只票最近多少 bars" 的语义:
