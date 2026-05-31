@@ -392,6 +392,28 @@ arms:                              # 恰好两个 arm,key 名自由
 
 老的 `backtest.position_size: 0.1` 仍能工作(自动迁移 + DeprecationWarning),但新代码请直接写 `sizing` 子段。
 
+### Tradability mask (paper B mask-first, opt-in)
+
+在 `config.yaml` 的 `strategy.ml_factor` 段开启:
+
+```yaml
+strategy:
+  name: ml_factor
+  ml_factor:
+    # ...其他字段
+    mask:
+      enabled: true   # 默认 false。开启后涨跌停/停牌/新上市股的 close 在因子滚动算子里被 NaN 化,训练标签做双向检查。
+```
+
+启用后训练样本数下降 ~1-3%,大样本上 Sharpe 预期提升 0.1-0.4(论文 B 在真实 A 股 2022-2024 报告 +0.44)。
+
+A/B 验证:
+```bash
+.venv/Scripts/python -m stockpool ab --config ab_mask.yaml   # 对比 baseline vs with_mask
+```
+
+缓存自动失效:翻 `enabled` 会触发 factor_panel + ml_models 重建。
+
 ## ⚠️ 免责声明
 
 本工具产出基于公开行情数据的技术指标计算,信号与打分仅供个人技术分析参考,
