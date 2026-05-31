@@ -105,3 +105,25 @@ def _limit_threshold(code: str) -> float:
     if code.startswith(("82", "83", "87", "43")):
         return 0.298  # 北交所 ±30%(项目 universe 不含,留兜底)
     return 0.098      # 主板沪深 ±10%
+
+
+def _listing_mask(close: pd.DataFrame, min_days: int = 252) -> pd.DataFrame:
+    """Mask=False 对每只股 panel 内"新上市后头 min_days 个交易日"。
+
+    成熟股(panel 起点就有 close)视为已经上市 >1 年,全程 True。
+    全 NaN 的股全程 False。
+    """
+    mask = pd.DataFrame(True, index=close.index, columns=close.columns)
+    for code in close.columns:
+        series = close[code]
+        first_valid = series.first_valid_index()
+        if first_valid is None:
+            mask[code] = False
+            continue
+        first_pos = close.index.get_loc(first_valid)
+        if first_pos == 0:
+            continue
+        end_pos = min(first_pos + min_days, len(close))
+        col_pos = mask.columns.get_loc(code)
+        mask.iloc[first_pos:end_pos, col_pos] = False
+    return mask
