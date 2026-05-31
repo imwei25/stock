@@ -458,8 +458,14 @@ class MLFactorStrategy(Strategy):
                 self._save_cached_pipeline(pipeline, quantiles, today)
 
         xi_row = X_full.iloc[[-1]]
-        if not bool(xi_row.notna().all(axis=1).iloc[0]):
+        # Partial NaN tolerance: impute missing factor values with 0 so a
+        # single long-warmup factor (e.g. alpha_037 with 200d rolling corr)
+        # can't gate the entire predict path. 0 is the neutral value for
+        # IC-weighted dot products. Skip only when every factor is NaN —
+        # there is nothing to predict from.
+        if not bool(xi_row.notna().any(axis=1).iloc[0]):
             return {"signal": "neutral", "score": float("nan")}
+        xi_row = xi_row.fillna(0.0)
         pred = float(pipeline.predict(xi_row).iloc[0])
         signal = _classify_by_quantile(pred, quantiles)
         triggers = _ml_factor_triggers(pipeline, xi_row, top_n=8)
@@ -524,7 +530,9 @@ class MLFactorStrategy(Strategy):
             score_value: float = float("nan")
             if pipeline is not None and quantiles is not None:
                 xi_row = X_full.iloc[[i]]
-                if bool(xi_row.notna().all(axis=1).iloc[0]):
+                # Partial NaN tolerance — see predict_latest for rationale.
+                if bool(xi_row.notna().any(axis=1).iloc[0]):
+                    xi_row = xi_row.fillna(0.0)
                     pred = float(pipeline.predict(xi_row).iloc[0])
                     score_value = pred
                     signal = _classify_by_quantile(pred, quantiles)

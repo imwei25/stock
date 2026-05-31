@@ -233,3 +233,69 @@ def test_quantile_thresholds_consistent():
         assert counts["strong_buy"] <= counts["buy"]
     if "strong_sell" in counts and "sell" in counts:
         assert counts["strong_sell"] <= counts["sell"]
+
+
+def test_predict_tolerates_partial_nan_in_factor_row(monkeypatch):
+    """Predict path imputes per-column NaN with 0 instead of rejecting the
+    whole row, so a single long-warmup factor (e.g. alpha_037's 200-bar
+    correlation) can't gate every predict — see handoff
+    2026-05-31-mask-ab-investigation.md Bug B."""
+    df = _synth_ohlcv(300, seed=99)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="equal"),
+    )
+    strat = MLFactorStrategy(cfg)
+
+    # Build the clean per-stock X via the strategy's own pipeline, then
+    # poison ~30% of post-warmup rows on one column to simulate a
+    # long-warmup factor that is NaN while everything else is valid.
+    original_build = strat._build_x_full
+
+    def _build_with_partial_nan(daily_df):
+        X = original_build(daily_df)
+        if len(X.columns) >= 1 and len(X) >= 250:
+            target_col = X.columns[0]
+            X = X.copy()
+            X.iloc[200:250, X.columns.get_loc(target_col)] = float("nan")
+        return X
+
+    monkeypatch.setattr(strat, "_build_x_full", _build_with_partial_nan)
+
+    sigs = strat.generate_signals(df)
+    poisoned = sigs.iloc[200:250]
+    # With partial NaN tolerance, post-warmup poisoned bars should still
+    # produce finite scores (impute=0 → predict) rather than NaN.
+    assert poisoned["score"].notna().any(), (
+        "predict path rejected every partially-NaN row — partial-NaN "
+        "tolerance fix is not active"
+    )
+
+
+def test_predict_returns_neutral_when_entire_row_is_nan(monkeypatch):
+    """Predict still bails when EVERY factor in a row is NaN — there's
+    nothing to impute around."""
+    df = _synth_ohlcv(300, seed=100)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="equal"),
+    )
+    strat = MLFactorStrategy(cfg)
+
+    original_build = strat._build_x_full
+
+    def _build_with_full_nan_row(daily_df):
+        X = original_build(daily_df)
+        if len(X) >= 250:
+            X = X.copy()
+            X.iloc[220:230, :] = float("nan")
+        return X
+
+    monkeypatch.setattr(strat, "_build_x_full", _build_with_full_nan_row)
+
+    sigs = strat.generate_signals(df)
+    fully_nan = sigs.iloc[220:230]
+    assert (fully_nan["signal"] == "neutral").all()
+    assert fully_nan["score"].isna().all()
