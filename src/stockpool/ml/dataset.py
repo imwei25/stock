@@ -217,19 +217,15 @@ def build_factor_matrix(
     panel = _df_to_singleton_panel(df)
     code = next(iter(panel["close"].columns))
 
-    mask: pd.DataFrame | None = None
     if mask_config is not None and mask_config.enabled:
-        from stockpool.panel import compute_tradability_mask
+        from stockpool.panel import compute_tradability_mask, apply_mask
         mask = compute_tradability_mask(panel, mask_config)
+        panel = apply_mask(panel, mask)
 
     cols: dict[str, pd.Series] = {}
     for name in factor_names:
         f = make_factor(name)
-        if mask is not None:
-            from stockpool.panel import apply_mask
-            wide = f.compute(apply_mask(panel, mask))
-        else:
-            wide = f.compute(panel)
+        wide = f.compute(panel)
         cols[f.name] = wide[code].reset_index(drop=True)
     out = pd.DataFrame(cols)
     out.index = pd.Index(df["date"].reset_index(drop=True), name="date")
