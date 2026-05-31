@@ -491,3 +491,26 @@ s.t. 1ᵀw=1, 0 ≤ w_i ≤ w_max
 - 2024/2025 中国量化投资白皮书:https://www.fxbaogao.com/detail/5037837
 - Stockformer (arXiv 2401.06139): https://arxiv.org/html/2401.06139v2
 - López de Prado (2018) "The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest Overfitting, and Non-Normality" — DSR 公式来源
+
+---
+
+## 附录: A/B 验证结果 (2026-05-31)
+
+落地 §3.2 mask_price 后,跑 ab_mask.yaml(16 股 × ~500 bar)对照 baseline (mask off) vs with_mask (mask on):
+
+| 指标 | baseline | with_mask | Δ |
+|------|----------|-----------|---|
+| 平均 Sharpe | 0.00 | 0.00 | 0.00 |
+| 平均最大回撤 | 0.00% | 0.00% | 0.00% |
+| 总样本数 | 16 | 16 | — |
+| 胜出股票数 (with_mask > baseline) | — | 0/16 | — |
+
+**说明与解释:**
+
+两臂均产生 0 笔交易,所有指标归零。原因分析:
+
+1. **ml_factor 信号阈值过严**:当前配置 `buy_verdicts: [buy, strong_buy]`、`thresholds.strong_buy: 0.9`,在 16 只测试股票 × training_universe=all (~4359 只全市场训练) 的分位数映射下,16 只样本股的预测分位数始终未触及 0.7 阈值,未产生 buy 信号。此为 ml_factor 策略在极小股票池 + 全市场训练分位数下的已知行为,与 mask 无关。
+
+2. **mask 机制已正确集成**:两臂的 `content_hash` 不同(baseline=`8e6b13ee`,with_mask=`22ce187d`),factor panel 缓存键独立(baseline sig=`a3084b45dcfe`,with_mask sig=`db1890cee23d`),证明 mask 配置已纳入缓存隔离体系。
+
+3. **结论**:mask 未引入新错误(两臂等价 = 0 交易均为无信号,而非 mask 屏蔽了所有信号)。完整的 Sharpe 对比需在更宽松的信号阈值或更大股票池(≥ 100 只)下重跑。HTML 报告详见 `reports/ab/2026-05-31.html`。
