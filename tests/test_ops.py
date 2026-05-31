@@ -45,8 +45,10 @@ def test_ts_sum_and_mean():
     assert s["a"].iloc[2] == 6.0  # 1+2+3
     m = ops.ts_mean(x, 3)
     assert m["a"].iloc[2] == 2.0
-    # warmup
-    assert s["a"].iloc[0:2].isna().all()
+    # min_periods relaxed to 60% of window; partial sums are valid from row 0
+    # (min_periods(3)=1, so 1 obs suffices)
+    assert s["a"].iloc[0] == pytest.approx(1.0)
+    assert s["a"].iloc[1] == pytest.approx(3.0)
 
 
 def test_ts_min_max_argmax_argmin():

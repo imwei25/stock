@@ -32,12 +32,18 @@ def delta(x: pd.DataFrame, d: int) -> pd.DataFrame:
     return x - x.shift(d)
 
 
+def _min_periods(d: int) -> int:
+    """放宽 min_periods 到 60% 窗口长度,使 mask=False 引入的 NaN 不会
+    整段杀掉因子值。``max(1, ...)`` 防 d<2 时退化。"""
+    return max(1, int(d * 0.6))
+
+
 def ts_sum(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=d).sum()
+    return x.rolling(d, min_periods=_min_periods(d)).sum()
 
 
 def ts_mean(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=d).mean()
+    return x.rolling(d, min_periods=_min_periods(d)).mean()
 
 
 def ts_min(x: pd.DataFrame, d: int) -> pd.DataFrame:
@@ -49,7 +55,7 @@ def ts_max(x: pd.DataFrame, d: int) -> pd.DataFrame:
 
 
 def ts_std(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=d).std(ddof=0)
+    return x.rolling(d, min_periods=_min_periods(d)).std(ddof=0)
 
 
 def ts_argmax(x: pd.DataFrame, d: int) -> pd.DataFrame:
