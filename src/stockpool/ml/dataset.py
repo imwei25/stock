@@ -36,8 +36,20 @@ from stockpool.factors.registry import make_factor
 def compute_factor_panel(
     panel: Mapping[str, pd.DataFrame],
     factor_names: Sequence[str],
+    *,
+    mask: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """在 OHLCV Panel 上算所有因子,返回 ``{name: T×N DataFrame}``。"""
+    """在 OHLCV Panel 上算所有因子,返回 ``{name: T×N DataFrame}``。
+
+    Args:
+        panel: OHLCV panel.
+        factor_names: 因子名列表。
+        mask: 可选 T × N bool。若提供,会在算因子前 ``apply_mask``,
+              mask=False 位置变 NaN,通过算子自然传播。default None → 旧行为不变。
+    """
+    if mask is not None:
+        from stockpool.panel import apply_mask
+        panel = apply_mask(panel, mask)
     out: dict[str, pd.DataFrame] = {}
     for name in factor_names:
         f = make_factor(name)
