@@ -67,15 +67,17 @@ def test_industry_relative_strength_basic():
 
 
 def test_industry_relative_strength_no_sector_map():
-    """Empty sector_map → entire output is NaN."""
+    """Empty sector_map → raise (rather than silently returning NaN that
+    would poison the factor_panel disk cache, since the cache sig hash
+    doesn't track sector_map state)."""
     from stockpool.factors.registry import make_factor
 
     prices = {"A": np.linspace(10, 12, 25), "B": np.linspace(10, 11, 25)}
     panel = _make_panel(prices)
 
     factor = make_factor("industry_relative_strength_20")
-    out = factor.compute(panel)
-    assert out.isna().all().all()
+    with pytest.raises(RuntimeError, match="sector_map"):
+        factor.compute(panel)
 
 
 def test_industry_relative_strength_singleton_sector():

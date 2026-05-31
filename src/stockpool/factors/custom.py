@@ -38,7 +38,16 @@ class IndustryRelativeStrengthFactor(Factor):
 
         sector_map = get_sector_map()
         if not sector_map:
-            return pd.DataFrame(np.nan, index=ret.index, columns=ret.columns)
+            # Empty sector_map produces an all-NaN factor, which silently
+            # poisons the factor_panel disk cache (the sig hash doesn't track
+            # sector_map state). Fail loud so callers must inject a real
+            # map via factors.context.set_sector_map before building.
+            raise RuntimeError(
+                "IndustryRelativeStrengthFactor requires a non-empty sector_map. "
+                "Call stockpool.factors.context.set_sector_map(...) before "
+                "computing this factor (e.g. via "
+                "stockpool.industry_map.load_or_build_industry_map)."
+            )
 
         # Label every column with its sector ("__unknown__" for codes not in map).
         sector_series = pd.Series(
