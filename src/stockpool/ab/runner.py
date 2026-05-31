@@ -136,6 +136,7 @@ def _prepare_pool_for_arm(
     else:
         factor_panel, close_panel = load_or_build_factor_panel(
             ml_cfg.factors, pool_data, arm_cfg.data.cache_dir,
+            mask_config=ml_cfg.mask,
         )
     return pool_data, factor_panel, close_panel
 

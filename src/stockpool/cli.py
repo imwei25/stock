@@ -421,6 +421,7 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
         from stockpool.strategy_factory import load_or_build_factor_panel
         factor_panel, close_panel = load_or_build_factor_panel(
             cfg.strategy.ml_factor.factors, pool_data, cfg.data.cache_dir,
+            mask_config=cfg.strategy.ml_factor.mask,
         )
 
     shared_cache: dict = {}

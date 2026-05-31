@@ -110,6 +110,7 @@ def run_single_arm(
             factor_panel, close_panel = load_or_build_factor_panel(
                 effective_cfg.strategy.ml_factor.factors, pool_data,
                 effective_cfg.data.cache_dir,
+                mask_config=effective_cfg.strategy.ml_factor.mask,
             )
         shared_cache: dict = {}
         legacy = build_strategy(
