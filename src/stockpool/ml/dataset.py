@@ -39,20 +39,15 @@ if TYPE_CHECKING:
 def compute_factor_panel(
     panel: Mapping[str, pd.DataFrame],
     factor_names: Sequence[str],
-    *,
-    mask: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
     """在 OHLCV Panel 上算所有因子,返回 ``{name: T×N DataFrame}``。
 
-    Args:
-        panel: OHLCV panel.
-        factor_names: 因子名列表。
-        mask: 可选 T × N bool。若提供,会在算因子前 ``apply_mask``,
-              mask=False 位置变 NaN,通过算子自然传播。default None → 旧行为不变。
+    **不对 panel 应用 tradability mask** — 时间序列因子(ts_corr/ts_rank/
+    argmin 等)应该看到真实价格(包括涨停日的 +9.9%),那本身是有用信号。
+    Mask 仅在标签 (``forward_return_panel``) 和模型训练样本筛选(通过
+    label NaN 自然 dropna)上生效。详见
+    ``docs/handoff/2026-05-31-mask-ab-investigation.md``。
     """
-    if mask is not None:
-        from stockpool.panel import apply_mask
-        panel = apply_mask(panel, mask)
     out: dict[str, pd.DataFrame] = {}
     for name in factor_names:
         f = make_factor(name)
@@ -200,8 +195,6 @@ def _df_to_singleton_panel(df: pd.DataFrame, code: str = "_self_") -> dict[str, 
 def build_factor_matrix(
     df: pd.DataFrame,
     factor_names: Sequence[str],
-    *,
-    mask_config: "MaskConfig | None" = None,
 ) -> pd.DataFrame:
     """Compute every named factor on one stock's ``df``, return T × F.
 
@@ -209,18 +202,15 @@ def build_factor_matrix(
     indneutralize) will return degenerate constants — use the pooled path
     (``build_panel`` / ``stack_panel_to_xy``) for those.
 
+    Panel 不应用 tradability mask — 时间序列因子需要真实价格(包括涨停日),
+    详见 ``compute_factor_panel`` docstring。
+
     Args:
         df: 单股 daily DataFrame(含 date + OHLCV 列)。
         factor_names: 因子名列表。
-        mask_config: 可选 MaskConfig,启用 single-stock tradability mask。
     """
     panel = _df_to_singleton_panel(df)
     code = next(iter(panel["close"].columns))
-
-    if mask_config is not None and mask_config.enabled:
-        from stockpool.panel import compute_tradability_mask, apply_mask
-        mask = compute_tradability_mask(panel, mask_config)
-        panel = apply_mask(panel, mask)
 
     cols: dict[str, pd.Series] = {}
     for name in factor_names:
@@ -311,13 +301,15 @@ def build_panel(
             index=idx,
         )
 
+    # 2) 算因子 — panel 不 mask 化(时间序列因子需要看真实价格)
+    fp = compute_factor_panel(panel, factor_names)
+
+    # 3) 算 forward-return,可选 mask 做双向标签检查
     mask: pd.DataFrame | None = None
     if mask_config is not None and mask_config.enabled:
         from stockpool.panel import compute_tradability_mask
         mask = compute_tradability_mask(panel, mask_config)
 
-    # 2) 算因子
-    fp = compute_factor_panel(panel, factor_names, mask=mask)
     fwd = forward_return_panel(panel["close"], horizon, mask=mask)
     X, y = stack_panel_to_xy(fp, fwd, dropna=True)
     return X, y

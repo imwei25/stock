@@ -14,12 +14,9 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
+from typing import Mapping
 
 import pandas as pd
-
-if TYPE_CHECKING:
-    from stockpool.config import MaskConfig
 
 log = logging.getLogger(__name__)
 
@@ -120,8 +117,6 @@ def build_close_panel(
 def build_factor_panel(
     factor_names: list[str],
     pool_data: Mapping[str, pd.DataFrame],
-    *,
-    mask_config: "MaskConfig | None" = None,
 ) -> dict[str, pd.DataFrame]:
     """从 ``{code: daily_df}`` 装一个 OHLCV Panel,在 Panel 上算所有因子,
     返回 ``{factor_name: T×N DataFrame}``。
@@ -129,11 +124,13 @@ def build_factor_panel(
     Look-ahead 安全:因子在第 i 行只用 ``[:i+1]`` 数据(由 Factor 契约保证),
     所以一次性预算整段历史不会泄露未来。
 
+    **不应用 tradability mask** — 时间序列因子需要看真实价格(包括涨停日)。
+    Mask 仅在标签 (``forward_return_panel``) 与训练样本筛选上生效,详见
+    ``compute_factor_panel`` docstring。
+
     Args:
         factor_names: 因子名列表。
         pool_data: ``{code: daily_df}``.
-        mask_config: 可选 MaskConfig。若 enabled=True,在算因子前对 panel 字段
-                     应用 tradability mask (close-side, paper B mask-first)。
     """
     from stockpool.ml.dataset import compute_factor_panel
 
@@ -154,24 +151,20 @@ def build_factor_panel(
             index=idx,
         )
 
-    mask: pd.DataFrame | None = None
-    if mask_config is not None and mask_config.enabled:
-        from stockpool.panel import compute_tradability_mask
-        mask = compute_tradability_mask(panel, mask_config)
-
-    return compute_factor_panel(panel, factor_names, mask=mask)
+    return compute_factor_panel(panel, factor_names)
 
 
 def _factor_panel_sig(
     factor_names: list[str],
     pool_data: Mapping[str, pd.DataFrame],
-    mask_config: "MaskConfig | None" = None,
 ) -> tuple[str, str]:
     """Return (12-char sig, last_date_iso) identifying a (factor list, universe,
     history range) tuple.
 
     Universe = sorted code list. last_date = max of any stock's max date.
-    Mask config is part of the key when enabled.
+
+    Mask config is **not** part of the key — factor panels are now mask-
+    independent (mask only affects labels downstream of factor computation).
     """
     codes = sorted(pool_data.keys())
     last_date = pd.Timestamp.min
@@ -181,15 +174,11 @@ def _factor_panel_sig(
             if d > last_date:
                 last_date = d
     last_iso = "" if last_date is pd.Timestamp.min else last_date.date().isoformat()
-    mask_dict = None
-    if mask_config is not None and mask_config.enabled:
-        mask_dict = mask_config.model_dump()
     blob = json.dumps(
         {
             "factors": sorted(factor_names),
             "codes": codes,
             "last_date": last_iso,
-            "mask": mask_dict,
         },
         sort_keys=True,
     ).encode("utf-8")
@@ -201,8 +190,6 @@ def load_or_build_factor_panel(
     pool_data: Mapping[str, pd.DataFrame],
     cache_dir: str | Path,
     refresh: bool = False,
-    *,
-    mask_config: "MaskConfig | None" = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     """Disk-cached wrapper around ``build_factor_panel`` + ``build_close_panel``.
 
@@ -212,9 +199,8 @@ def load_or_build_factor_panel(
       ``<cache_dir>/factor_panels/<sig>/<factor_name>.parquet`` × N
 
     Cache key (``sig``) hashes (sorted factor names, sorted universe codes,
-    last_date, mask_config when enabled). Any change → fresh sig → recompute.
-    There is no incremental update: pushing last_date by one bar triggers a
-    full rebuild.
+    last_date). Any change → fresh sig → recompute. There is no incremental
+    update: pushing last_date by one bar triggers a full rebuild.
 
     Pass ``refresh=True`` to bypass the cache and overwrite.
 
@@ -223,7 +209,7 @@ def load_or_build_factor_panel(
     if not pool_data:
         return {}, pd.DataFrame()
 
-    sig, last_iso = _factor_panel_sig(factor_names, pool_data, mask_config)
+    sig, last_iso = _factor_panel_sig(factor_names, pool_data)
     root = Path(cache_dir) / "factor_panels" / sig
     manifest_path = root / "manifest.json"
 
@@ -243,7 +229,7 @@ def load_or_build_factor_panel(
 
     log.info("Building factor panel: %d factors × %d stocks (sig=%s)",
              len(factor_names), len(pool_data), sig)
-    factor_panel = build_factor_panel(factor_names, pool_data, mask_config=mask_config)
+    factor_panel = build_factor_panel(factor_names, pool_data)
     close_panel = build_close_panel(pool_data)
 
     root.mkdir(parents=True, exist_ok=True)
@@ -258,11 +244,6 @@ def load_or_build_factor_panel(
             "last_date": last_iso,
             "built_at": pd.Timestamp.now("UTC").isoformat(),
         }
-        if mask_config is not None and mask_config.enabled:
-            manifest_dict["mask_enabled"] = True
-            manifest_dict["mask_threshold_main"] = mask_config.limit_up_threshold_main
-            manifest_dict["mask_threshold_chinext"] = mask_config.limit_up_threshold_chinext
-            manifest_dict["mask_min_listing_days"] = mask_config.min_listing_days
         manifest_path.write_text(
             json.dumps(manifest_dict, indent=2),
             encoding="utf-8",

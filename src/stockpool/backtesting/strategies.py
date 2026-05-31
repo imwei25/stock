@@ -484,7 +484,7 @@ class MLFactorStrategy(Strategy):
             X = wide.reindex(dates)
             X.index = pd.Index(daily_df["date"].reset_index(drop=True), name="date")
             return X
-        return build_factor_matrix(daily_df, self.cfg.factors, mask_config=self.cfg.mask)
+        return build_factor_matrix(daily_df, self.cfg.factors)
 
     def generate_signals(self, daily_df: pd.DataFrame) -> pd.DataFrame:
         cfg = self.cfg

@@ -76,15 +76,9 @@ def _decide_pool_sharing(arm_cfgs: list[AppConfig]) -> dict:
     ):
         f_a = list(arm_cfgs[0].strategy.ml_factor.factors)
         f_b = list(arm_cfgs[1].strategy.ml_factor.factors)
-        # Also require identical mask config — arms with different masks must
-        # build separate factor panels (mask changes the panel values).
-        mask_a = arm_cfgs[0].strategy.ml_factor.mask
-        mask_b = arm_cfgs[1].strategy.ml_factor.mask
-        masks_equal = (
-            (mask_a is None) == (mask_b is None)
-            and (mask_a is None or mask_a.model_dump() == mask_b.model_dump())
-        )
-        if f_a == f_b and masks_equal:
+        # Mask is no longer a sharing barrier — factor panels are mask-agnostic
+        # (mask only affects labels downstream of factor computation).
+        if f_a == f_b:
             shared_factors = f_a
 
     return {"load_universe": load_universe, "shared_factors": shared_factors}
@@ -144,7 +138,6 @@ def _prepare_pool_for_arm(
     else:
         factor_panel, close_panel = load_or_build_factor_panel(
             ml_cfg.factors, pool_data, arm_cfg.data.cache_dir,
-            mask_config=ml_cfg.mask,
         )
     return pool_data, factor_panel, close_panel
 

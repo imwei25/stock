@@ -117,7 +117,9 @@ def test_empty_pool_returns_empty(tmp_path):
     assert cp.empty
 
 
-def test_load_or_build_factor_panel_passes_mask_config(tmp_path):
+def test_load_or_build_factor_panel_no_mask_param(tmp_path):
+    """load_or_build_factor_panel 不再接受 mask_config —
+    factor panel 与 mask 解耦(2026-05-31 重构),mask 只影响标签层。"""
     from stockpool.strategy_factory import load_or_build_factor_panel
     from stockpool.config import MaskConfig
     import json
@@ -131,22 +133,29 @@ def test_load_or_build_factor_panel_passes_mask_config(tmp_path):
         "volume": [1000.0] * 30,
     })
     pool_data = {"600000": df}
-    cfg = MaskConfig(enabled=True, min_listing_days=0)
     fp, _ = load_or_build_factor_panel(
-        ["momentum_5"], pool_data, cache_dir=tmp_path, mask_config=cfg,
+        ["momentum_5"], pool_data, cache_dir=tmp_path,
     )
     assert "momentum_5" in fp
     panels_dir = tmp_path / "factor_panels"
     sig_dirs = list(panels_dir.iterdir())
     assert len(sig_dirs) == 1
     manifest = json.loads((sig_dirs[0] / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest.get("mask_enabled") is True
-    assert manifest.get("mask_threshold_main") == 0.098
+    # manifest 不再写 mask_* 字段
+    assert "mask_enabled" not in manifest
+    assert "mask_threshold_main" not in manifest
+    # mask_config kwarg 已移除 → 传它会 TypeError
+    with pytest.raises(TypeError, match="mask_config"):
+        load_or_build_factor_panel(
+            ["momentum_5"], pool_data, cache_dir=tmp_path,
+            mask_config=MaskConfig(enabled=True),
+        )
 
 
-def test_load_or_build_factor_panel_mask_changes_cache_sig(tmp_path):
+def test_load_or_build_factor_panel_mask_independent_sig(tmp_path):
+    """两次调用相同因子和股池 → 同一个 sig 目录(mask 状态无关,
+    因 mask 已不参与 factor_panel sig 计算)。"""
     from stockpool.strategy_factory import load_or_build_factor_panel
-    from stockpool.config import MaskConfig
     df = pd.DataFrame({
         "date": pd.date_range("2024-01-01", periods=30),
         "open": np.linspace(10, 11, 30),
@@ -156,13 +165,8 @@ def test_load_or_build_factor_panel_mask_changes_cache_sig(tmp_path):
         "volume": [1000.0] * 30,
     })
     pool_data = {"600000": df}
-    load_or_build_factor_panel(
-        ["momentum_5"], pool_data, cache_dir=tmp_path,
-        mask_config=MaskConfig(enabled=False),
-    )
-    load_or_build_factor_panel(
-        ["momentum_5"], pool_data, cache_dir=tmp_path,
-        mask_config=MaskConfig(enabled=True, min_listing_days=0),
-    )
+    load_or_build_factor_panel(["momentum_5"], pool_data, cache_dir=tmp_path)
+    load_or_build_factor_panel(["momentum_5"], pool_data, cache_dir=tmp_path)
     panels_dir = tmp_path / "factor_panels"
-    assert len(list(panels_dir.iterdir())) == 2
+    # 第二次是 cache hit,只有一个 sig 目录
+    assert len(list(panels_dir.iterdir())) == 1
