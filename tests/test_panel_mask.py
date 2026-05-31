@@ -118,3 +118,35 @@ def test_compute_mask_shape_matches_close():
     assert mask.shape == panel["close"].shape
     assert mask.index.equals(panel["close"].index)
     assert mask.columns.equals(panel["close"].columns)
+
+
+def test_apply_mask_nulls_correct_positions():
+    from stockpool.panel import apply_mask
+    idx = pd.date_range("2024-01-01", periods=4)
+    panel = {
+        "close": pd.DataFrame({"A": [10.0, 11.0, 12.0, 13.0]}, index=idx),
+        "open": pd.DataFrame({"A": [10.1, 11.1, 12.1, 13.1]}, index=idx),
+        "high": pd.DataFrame({"A": [10.5, 11.5, 12.5, 13.5]}, index=idx),
+        "low": pd.DataFrame({"A": [9.5, 10.5, 11.5, 12.5]}, index=idx),
+        "volume": pd.DataFrame({"A": [100.0, 200.0, 300.0, 400.0]}, index=idx),
+    }
+    mask = pd.DataFrame({"A": [True, False, True, False]}, index=idx)
+    out = apply_mask(panel, mask)
+    for field in ("open", "high", "low", "close", "volume"):
+        assert np.isnan(out[field].iloc[1, 0])
+        assert np.isnan(out[field].iloc[3, 0])
+        assert out[field].iloc[0, 0] == panel[field].iloc[0, 0]
+        assert out[field].iloc[2, 0] == panel[field].iloc[2, 0]
+
+
+def test_apply_mask_does_not_mutate_input():
+    from stockpool.panel import apply_mask
+    idx = pd.date_range("2024-01-01", periods=3)
+    panel = {
+        "close": pd.DataFrame({"A": [10.0, 11.0, 12.0]}, index=idx),
+        "volume": pd.DataFrame({"A": [100.0, 200.0, 300.0]}, index=idx),
+    }
+    mask = pd.DataFrame({"A": [True, False, True]}, index=idx)
+    _ = apply_mask(panel, mask)
+    assert panel["close"].iloc[1, 0] == 11.0
+    assert panel["volume"].iloc[1, 0] == 200.0

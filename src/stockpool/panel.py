@@ -162,3 +162,14 @@ def compute_tradability_mask(
     cond_listed = _listing_mask(close, min_days=config.min_listing_days)
 
     return cond_not_limit & cond_has_volume & cond_listed
+
+
+def apply_mask(
+    panel: Mapping[str, pd.DataFrame],
+    mask: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
+    """Return a new panel with mask=False positions set to NaN across all fields.
+
+    原 panel 不被修改 (``DataFrame.where`` 返回新对象)。
+    """
+    return {field: df.where(mask) for field, df in panel.items()}
