@@ -478,7 +478,7 @@ class MLFactorStrategy(Strategy):
             X = wide.reindex(dates)
             X.index = pd.Index(daily_df["date"].reset_index(drop=True), name="date")
             return X
-        return build_factor_matrix(daily_df, self.cfg.factors)
+        return build_factor_matrix(daily_df, self.cfg.factors, mask_config=self.cfg.mask)
 
     def generate_signals(self, daily_df: pd.DataFrame) -> pd.DataFrame:
         cfg = self.cfg
@@ -615,7 +615,8 @@ class MLFactorStrategy(Strategy):
             # Kept for per_stock-mode tests and CLI paths that don't pre-build
             # the close panel.
             pool = self._build_truncated_pool(daily_df, current_date, current_bar)
-            X_pool, y_pool = build_panel(pool, cfg.factors, cfg.horizon)
+            X_pool, y_pool = build_panel(pool, cfg.factors, cfg.horizon,
+                                         mask_config=cfg.mask)
             if len(X_pool) > 0 and cfg.train_window > 0:
                 X_pool = X_pool.groupby(
                     level="stock", group_keys=False, sort=False,

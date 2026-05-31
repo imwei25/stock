@@ -180,3 +180,100 @@ def test_build_factor_matrix_mask_main_board_limit_up():
     cfg = MaskConfig(enabled=True, min_listing_days=0)
     out = build_factor_matrix(df, ["momentum_5"], mask_config=cfg)
     assert np.isnan(out["momentum_5"].iloc[10])
+
+
+def test_ml_factor_strategy_mask_changes_sig():
+    """翻 cfg.mask.enabled → _strategy_signature 变化 → 旧 cache 失效。"""
+    from stockpool.config import MLFactorConfig
+    from stockpool.backtesting.strategies import MLFactorStrategy
+    cfg_no = MLFactorConfig.model_validate({
+        "factors": ["momentum_5"],
+        "mask": {"enabled": False},
+    })
+    cfg_yes = MLFactorConfig.model_validate({
+        "factors": ["momentum_5"],
+        "mask": {"enabled": True},
+    })
+    s_no = MLFactorStrategy(cfg_no)
+    s_yes = MLFactorStrategy(cfg_yes)
+    assert s_no._strategy_signature() != s_yes._strategy_signature()
+
+
+def test_ml_factor_strategy_pooled_path_uses_mask(monkeypatch):
+    """pooled `_try_fit` 内 build_panel 调用带上 mask_config=self.cfg.mask。"""
+    from stockpool.config import MLFactorConfig
+    from stockpool.backtesting.strategies import MLFactorStrategy
+    import stockpool.ml.dataset as ds
+
+    captured = {}
+    orig = ds.build_panel
+    def spy_build_panel(stocks_data, factor_names, horizon, *, mask_config=None):
+        captured["mask_config"] = mask_config
+        return orig(stocks_data, factor_names, horizon, mask_config=mask_config)
+    monkeypatch.setattr(
+        "stockpool.backtesting.strategies.build_panel", spy_build_panel
+    )
+
+    cfg = MLFactorConfig.model_validate({
+        "factors": ["momentum_5"],
+        "panel_mode": "pooled",
+        "horizon": 2,
+        "train_window": 20,
+        "min_train_samples": 5,
+        "refit_every": 5,
+        "share_pool_fit": False,
+        "mask": {"enabled": True, "min_listing_days": 0},
+    })
+    n = 50
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=n),
+        "open": np.linspace(10, 11, n),
+        "high": np.linspace(10.1, 11.1, n),
+        "low": np.linspace(9.9, 10.9, n),
+        "close": np.linspace(10, 11, n),
+        "volume": [1000.0] * n,
+    })
+    pool_data = {"600000": df, "600001": df.copy()}
+    strat = MLFactorStrategy(cfg, pool_data=pool_data, current_stock_code="600000")
+    _ = strat.generate_signals(df)
+    assert captured.get("mask_config") is not None
+    assert captured["mask_config"].enabled is True
+
+
+def test_ml_factor_strategy_per_stock_path_uses_mask(monkeypatch):
+    """per_stock 路径 build_factor_matrix 调用带 mask_config=self.cfg.mask。"""
+    from stockpool.config import MLFactorConfig
+    from stockpool.backtesting.strategies import MLFactorStrategy
+    import stockpool.ml.dataset as ds
+
+    captured = {}
+    orig = ds.build_factor_matrix
+    def spy_build_fm(df, factor_names, *, mask_config=None):
+        captured["mask_config"] = mask_config
+        return orig(df, factor_names, mask_config=mask_config)
+    monkeypatch.setattr(
+        "stockpool.backtesting.strategies.build_factor_matrix", spy_build_fm
+    )
+
+    cfg = MLFactorConfig.model_validate({
+        "factors": ["momentum_5"],
+        "panel_mode": "per_stock",
+        "horizon": 2,
+        "train_window": 20,
+        "min_train_samples": 5,
+        "refit_every": 5,
+        "mask": {"enabled": True, "min_listing_days": 0},
+    })
+    n = 50
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=n),
+        "open": np.linspace(10, 11, n),
+        "high": np.linspace(10.1, 11.1, n),
+        "low": np.linspace(9.9, 10.9, n),
+        "close": np.linspace(10, 11, n),
+        "volume": [1000.0] * n,
+    })
+    strat = MLFactorStrategy(cfg)
+    _ = strat.generate_signals(df)
+    assert captured.get("mask_config") is not None
+    assert captured["mask_config"].enabled is True
