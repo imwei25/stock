@@ -129,7 +129,7 @@ strategy:
 portfolio_backtest:
   enabled: true
   portfolio:
-    top_k: 20
+    top_k: 8
     rebalance_n_days: 5
     max_per_industry: 5
     initial_cash: 1.0
@@ -139,3 +139,22 @@ portfolio_backtest:
     min_history_bars: 60
   staggered_starts: 1
   score_cache_dir: "data/portfolio_scores"
+  # 解耦:训练池仍是 load_universe_cache (4358 票),portfolio universe
+  # 限定到这 16 票避免 precompute_scores 在 4358 票全跑时 segfault。
+  universe_codes:
+    - "605589"
+    - "603986"
+    - "000528"
+    - "603026"
+    - "603757"
+    - "603667"
+    - "002081"
+    - "000922"
+    - "001309"
+    - "300302"
+    - "002409"
+    - "301308"
+    - "600584"
+    - "688008"
+    - "688766"
+    - "300475"

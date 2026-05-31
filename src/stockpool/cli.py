@@ -414,7 +414,28 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     from stockpool.factors.context import set_sector_map
     set_sector_map(sector_map)
 
+    # ---- Decouple portfolio universe from training pool (optional) ----
+    # See PortfolioBacktestConfig.universe_codes. Default None = use full
+    # pool_data as both training and portfolio universe (legacy behavior).
+    portfolio_codes = cfg.portfolio_backtest.universe_codes
+    if portfolio_codes:
+        portfolio_pool_data = {c: pool_data[c] for c in portfolio_codes if c in pool_data}
+        missing = [c for c in portfolio_codes if c not in pool_data]
+        if missing:
+            log.warning(
+                "%d portfolio universe codes not in training pool (skipped): %s",
+                len(missing), missing[:5],
+            )
+        log.info(
+            "Portfolio universe decoupled: training pool=%d, portfolio universe=%d",
+            len(pool_data), len(portfolio_pool_data),
+        )
+    else:
+        portfolio_pool_data = pool_data
+
     # ---- ML factor panel (only for ml_factor + pooled) ----
+    # Always built on the full training pool so ml_factor with
+    # training_universe=all still sees all 4358 stocks.
     factor_panel = None
     close_panel = None
     if cfg.strategy.name == "ml_factor" and cfg.strategy.ml_factor.panel_mode == "pooled":
@@ -442,8 +463,11 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
         log.info("Loading cached score panel: %s", score_path)
         score_panel = pd.read_parquet(score_path)
     else:
-        log.info("Precomputing score panel over %d stocks ...", len(pool_data))
-        score_panel = precompute_scores_from_legacy(legacy, pool_data)
+        log.info(
+            "Precomputing score panel over %d stocks (portfolio universe) ...",
+            len(portfolio_pool_data),
+        )
+        score_panel = precompute_scores_from_legacy(legacy, portfolio_pool_data)
         if score_panel.empty:
             log.error("Score panel is empty (all stocks failed).")
             return 1
@@ -484,27 +508,27 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
             engine_factory=_make_engine,
             risk_free_rate=cfg.backtest.risk_free_rate,
         )
-        ensemble = runner.run(pool_data, n_offsets=n_offsets)
+        ensemble = runner.run(portfolio_pool_data, n_offsets=n_offsets)
         log.info(
             "Ensemble done: %d offsets, ensemble total_return=%+.3f",
             ensemble.n_offsets,
             ensemble.aggregated_metrics.get("ensemble", {}).get("total_return", 0.0),
         )
         out = render_ensemble_report(
-            ensemble, panel_data=pool_data,
+            ensemble, panel_data=portfolio_pool_data,
             run_date=run_date, output_dir=out_root,
             config_hash=cfg.content_hash,
             initial_equity=cfg.portfolio_backtest.portfolio.initial_cash,
         )
     else:
-        result = _make_engine().run(pool_data, start_offset=0)
+        result = _make_engine().run(portfolio_pool_data, start_offset=0)
         log.info(
             "Backtest done: %d bars, %d trades, total_return=%+.3f",
             len(result.curve), len(result.trades),
             result.metrics.get("total_return", 0.0),
         )
         out = render_portfolio_report(
-            result, panel_data=pool_data,
+            result, panel_data=portfolio_pool_data,
             run_date=run_date, output_dir=out_root,
             config_hash=cfg.content_hash,
         )
@@ -597,6 +621,25 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
     from stockpool.factors.context import set_sector_map
     set_sector_map(sector_map)
 
+    # Decouple training pool (= full pool_data) from portfolio universe
+    # (= optional explicit subset). When universe_codes is None, both are
+    # the same (legacy behavior). See PortfolioBacktestConfig.universe_codes.
+    portfolio_codes = base_cfg.portfolio_backtest.universe_codes
+    if portfolio_codes:
+        portfolio_pool_data = {c: pool_data[c] for c in portfolio_codes if c in pool_data}
+        missing = [c for c in portfolio_codes if c not in pool_data]
+        if missing:
+            log.warning(
+                "%d portfolio universe codes not in training pool (skipped): %s",
+                len(missing), missing[:5],
+            )
+        log.info(
+            "Portfolio universe decoupled: training pool=%d, portfolio universe=%d",
+            len(pool_data), len(portfolio_pool_data),
+        )
+    else:
+        portfolio_pool_data = None  # use full pool_data (legacy)
+
     if args.arm:
         # Single-arm debug mode: stdout only, no HTML.
         effective = build_effective_cfg(base_cfg, ab_cfg.arms[args.arm])
@@ -604,6 +647,7 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
             args.arm, effective,
             pool_data=pool_data, sector_map=sector_map, name_map=name_map,
             refresh_scores=args.refresh_scores,
+            portfolio_pool_data=portfolio_pool_data,
         )
         _print_portfolio_arm_stdout(arm_result)
         return 0
@@ -612,6 +656,7 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
         ab_cfg, base_cfg, pool_data=pool_data,
         sector_map=sector_map, name_map=name_map,
         refresh_scores=args.refresh_scores,
+        portfolio_pool_data=portfolio_pool_data,
     )
     out = render_portfolio_ab_report(result, run_date=run_date, output_dir=out_root)
     log.info("Portfolio AB report written: %s", out)

@@ -568,6 +568,21 @@ def test_portfolio_backtest_defaults(tmp_path):
     assert pb.eligibility.min_history_bars == 60
     assert pb.staggered_starts == 1
     assert pb.score_cache_dir == "data/portfolio_scores"
+    # universe_codes default = None → legacy behavior (portfolio universe
+    # = training pool)
+    assert pb.universe_codes is None
+
+
+def test_portfolio_backtest_universe_codes_loads_from_yaml(tmp_path):
+    raw = _minimal_yaml()
+    raw["portfolio_backtest"] = {
+        "enabled": True,
+        "universe_codes": ["600000", "000001", "300001"],
+    }
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    cfg = load_config(cfg_file)
+    assert cfg.portfolio_backtest.universe_codes == ["600000", "000001", "300001"]
 
 
 def test_portfolio_backtest_extra_forbid(tmp_path):

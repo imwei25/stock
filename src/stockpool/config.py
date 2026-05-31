@@ -534,6 +534,14 @@ class PortfolioBacktestConfig(BaseModel):
     )
     staggered_starts: int = Field(default=1, ge=1, le=20)
     score_cache_dir: str = "data/portfolio_scores"
+    # Portfolio universe override. ``None`` (default) → use the full training
+    # pool (``load_universe_cache`` of cache_dir) as portfolio universe too.
+    # When set to an explicit code list, training pool stays full (so
+    # ml_factor with ``training_universe=all`` still sees all 4358 stocks),
+    # but ``precompute_scores_from_legacy`` + portfolio engine only run over
+    # this subset. Use case: paper-B-style "train on 4000 stocks, pick top-K
+    # from 100-200 candidates" without OOM/segfault on full predict.
+    universe_codes: list[str] | None = None
 
 
 class AppConfig(BaseModel):

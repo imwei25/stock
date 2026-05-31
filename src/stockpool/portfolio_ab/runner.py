@@ -88,19 +88,34 @@ def run_single_arm(
     sector_map: Mapping[str, str],
     name_map: Mapping[str, str],
     refresh_scores: bool = False,
+    portfolio_pool_data: Mapping[str, pd.DataFrame] | None = None,
 ) -> ArmResult:
     """Execute one portfolio arm. Exceptions are caught and packed into ArmResult.
 
     Args:
         arm_name: human-readable arm name (for logs and the result label).
         effective_cfg: AppConfig produced by ``build_effective_cfg``.
-        pool_data: shared universe panel — both arms see the same data.
+        pool_data: **training pool** — used to build factor_panel and to
+            inject into MLFactorStrategy (so training_universe=all sees the
+            full set). Both arms share the same training pool.
         sector_map, name_map: shared lookups.
         refresh_scores: bypass the per-arm score-panel parquet cache.
+        portfolio_pool_data: **portfolio universe** — used for
+            precompute_scores_from_legacy and PortfolioEngine execution.
+            Defaults to ``pool_data`` (legacy behavior when not decoupled).
+            Setting this to a subset lets training stay on the full pool
+            while portfolio top-K only picks from this subset (avoids
+            OOM/segfault from precompute on full 4358-stock predict).
     """
-    log.info("[%s] running portfolio arm ...", arm_name)
+    if portfolio_pool_data is None:
+        portfolio_pool_data = pool_data
+    log.info(
+        "[%s] running portfolio arm (training pool=%d, portfolio universe=%d)",
+        arm_name, len(pool_data), len(portfolio_pool_data),
+    )
     try:
         # ML factor panel only if the arm's strategy actually needs it.
+        # Built on the *training* pool so training_universe=all sees full set.
         factor_panel = None
         close_panel = None
         if (
@@ -130,7 +145,8 @@ def run_single_arm(
             score_panel = pd.read_parquet(score_path)
         else:
             log.info("[%s] precomputing score panel ...", arm_name)
-            score_panel = precompute_scores_from_legacy(legacy, pool_data)
+            # Score only the portfolio universe (subset of training pool).
+            score_panel = precompute_scores_from_legacy(legacy, portfolio_pool_data)
             if score_panel.empty:
                 raise RuntimeError("score panel is empty — all stocks failed")
             score_panel.to_parquet(score_path)
@@ -161,11 +177,13 @@ def run_single_arm(
             runner = StaggeredRunner(
                 _factory, risk_free_rate=effective_cfg.backtest.risk_free_rate,
             )
-            ensemble = runner.run(pool_data, n_offsets=n_offsets)
+            # Engine runs over portfolio_pool_data (needs OHLCV of the stocks
+            # it actually trades, not the full training pool).
+            ensemble = runner.run(portfolio_pool_data, n_offsets=n_offsets)
             return ArmResult(
                 name=arm_name, effective_cfg=effective_cfg, ensemble=ensemble,
             )
-        single = _factory().run(pool_data, start_offset=0)
+        single = _factory().run(portfolio_pool_data, start_offset=0)
         return ArmResult(
             name=arm_name, effective_cfg=effective_cfg, single=single,
         )
@@ -188,11 +206,15 @@ def run_portfolio_ab(
     sector_map: Mapping[str, str],
     name_map: Mapping[str, str],
     refresh_scores: bool = False,
+    portfolio_pool_data: Mapping[str, pd.DataFrame] | None = None,
 ) -> ABResult:
     """Run both arms in sequence; return ``ABResult`` with both outcomes.
 
     Each arm is independent — if arm A throws, arm B still runs and the
     report still renders with a red banner for the failed side.
+
+    See ``run_single_arm`` for ``portfolio_pool_data`` semantics
+    (training pool vs portfolio universe decoupling).
     """
     arms: dict[str, ArmResult] = {}
     for arm_name, override in ab_cfg.arms.items():
@@ -209,5 +231,6 @@ def run_portfolio_ab(
             arm_name, effective,
             pool_data=pool_data, sector_map=sector_map, name_map=name_map,
             refresh_scores=refresh_scores,
+            portfolio_pool_data=portfolio_pool_data,
         )
     return ABResult(arms=arms)
