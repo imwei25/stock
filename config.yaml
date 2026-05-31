@@ -142,7 +142,7 @@ strategy:
     # 然后把名字加到这个列表即可。
     # 用 `factors analyze` + `pick-by-ic` 选出的因子(top-20, max-corr=0.6, min-ir=0.05)
     # 与 factors: [...] 二选一,factors_file 优先
-    factors_file: reports/baseline_selection.json
+    factors_file: reports/selection.json
 
     horizon: 3                # 预测未来 N 日收益
     # train_window 是 "每只票最近多少 bars" 的语义:

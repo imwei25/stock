@@ -1,0 +1,20 @@
+# Simplest portfolio AB test: two composite_verdict arms differing only in top_k.
+# Both arms see the same shared universe / sector / name maps.
+# Use: python -m stockpool portfolio-ab --config portfolio_ab_simple.yaml
+
+base_config: portfolio_ab_simple_base.yaml
+
+arms:
+  topk_3:
+    strategy:
+      name: composite_verdict
+    portfolio_backtest:
+      portfolio:
+        top_k: 3
+
+  topk_10:
+    strategy:
+      name: composite_verdict
+    portfolio_backtest:
+      portfolio:
+        top_k: 10
