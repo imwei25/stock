@@ -382,6 +382,38 @@ class MLFactorStrategy(Strategy):
             and bool(self.pool_data)
         )
 
+    def _build_ohlcv_from_pool_data(self) -> dict | None:
+        """Build a T×N OHLCV panel from ``self.pool_data`` for mask computation.
+
+        Reuses ``self._close_panel.index`` as the authoritative date axis
+        (so the resulting mask aligns 1:1 with the cached factor/close panels).
+        Returns ``None`` if pool_data or close_panel is missing.
+        Cached in ``self._shared_cache`` under a strategy-sig key.
+        """
+        if not self.pool_data or self._close_panel is None:
+            return None
+        cache_key = ("__ohlcv_for_mask__", self._strategy_signature())
+        if (
+            self._shared_cache is not None
+            and cache_key in self._shared_cache
+        ):
+            return self._shared_cache[cache_key]
+        per_stock: dict[str, pd.DataFrame] = {}
+        for code, df in self.pool_data.items():
+            d = df.copy()
+            d["date"] = pd.to_datetime(d["date"])
+            per_stock[code] = d.set_index("date").sort_index()
+        idx = self._close_panel.index
+        panel: dict[str, pd.DataFrame] = {}
+        for field in ("open", "high", "low", "close", "volume"):
+            panel[field] = pd.DataFrame(
+                {c: d[field].reindex(idx) for c, d in per_stock.items()},
+                index=idx,
+            )
+        if self._shared_cache is not None:
+            self._shared_cache[cache_key] = panel
+        return panel
+
     def _get_ipo_dates(self) -> dict | None:
         """Load IPO dates for ``_listing_mask`` (avoids first_valid_index
         heuristic that mis-flags mature stocks with short cache history).
@@ -706,7 +738,23 @@ class MLFactorStrategy(Strategy):
         hit = self._shared_cache.get(key)
         if hit is not None:
             return hit
-        fwd = forward_return_panel(self._close_panel, self.cfg.horizon)
+        # If mask enabled, build OHLCV from pool_data and compute label-side
+        # bidirectional mask. Same logic as build_panel's slow path so
+        # quantile fits match.
+        mask: pd.DataFrame | None = None
+        if (
+            self.cfg.mask.enabled
+            and self.pool_data
+        ):
+            ohlcv = self._build_ohlcv_from_pool_data()
+            if ohlcv:
+                from stockpool.panel import compute_tradability_mask
+                mask = compute_tradability_mask(
+                    ohlcv, self.cfg.mask, ipo_dates=self._get_ipo_dates(),
+                )
+        fwd = forward_return_panel(
+            self._close_panel, self.cfg.horizon, mask=mask,
+        )
         X, y = stack_panel_to_xy(self._factor_panel, fwd, dropna=True)
         # Original layout is (stock, date); swap so date is outer + sort so
         # ``.loc[:cutoff_ts]`` becomes a fast range cut on the leading level.
