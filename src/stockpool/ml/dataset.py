@@ -21,12 +21,15 @@ Look-ahead 安全: factor row ``t`` 只依赖 ``[:t+1]``;forward return 用未�
 """
 from __future__ import annotations
 
-from typing import Mapping, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 
 from stockpool.factors.registry import make_factor
+
+if TYPE_CHECKING:
+    from stockpool.config import MaskConfig
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -257,12 +260,20 @@ def build_panel(
     stocks_data: Mapping[str, pd.DataFrame],
     factor_names: Sequence[str],
     horizon: int,
+    *,
+    mask_config: "MaskConfig | None" = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Pool multi-stock data into a single (X, y) panel.
 
     把 ``{code: daily_df}`` 装成 OHLCV Panel → 在 Panel 上算所有因子 →
     stack 成长表 ``(stock, date) × F``。这样 cross-sectional 因子拿到的是完整
     横截面,与 WQ101 论文语义一致。
+
+    Args:
+        stocks_data: ``{code: daily_df}``.
+        factor_names: 因子名列表。
+        horizon: forward return 前瞻天数。
+        mask_config: 可选 MaskConfig,启用 tradability mask。
     """
     if not stocks_data:
         empty_idx = pd.MultiIndex.from_arrays([[], []], names=["stock", "date"])
@@ -286,9 +297,14 @@ def build_panel(
             index=idx,
         )
 
+    mask: pd.DataFrame | None = None
+    if mask_config is not None and mask_config.enabled:
+        from stockpool.panel import compute_tradability_mask
+        mask = compute_tradability_mask(panel, mask_config)
+
     # 2) 算因子
-    fp = compute_factor_panel(panel, factor_names)
-    fwd = forward_return_panel(panel["close"], horizon)
+    fp = compute_factor_panel(panel, factor_names, mask=mask)
+    fwd = forward_return_panel(panel["close"], horizon, mask=mask)
     X, y = stack_panel_to_xy(fp, fwd, dropna=True)
     return X, y
 

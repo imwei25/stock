@@ -107,3 +107,43 @@ def test_build_factor_panel_mask_enabled_changes_output():
     cfg = MaskConfig(enabled=True, min_listing_days=0)
     out = build_factor_panel(["momentum_5"], pool_data, mask_config=cfg)
     assert np.isnan(out["momentum_5"].iloc[10, 0])
+
+
+def test_build_panel_no_mask_unchanged():
+    from stockpool.ml.dataset import build_panel
+    n = 30
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=n),
+        "open": np.linspace(10, 11, n),
+        "high": np.linspace(10.1, 11.1, n),
+        "low": np.linspace(9.9, 10.9, n),
+        "close": np.linspace(10, 11, n),
+        "volume": [1000.0] * n,
+    })
+    stocks_data = {"600000": df}
+    X_a, y_a = build_panel(stocks_data, ["momentum_5"], horizon=2)
+    X_b, y_b = build_panel(stocks_data, ["momentum_5"], horizon=2, mask_config=None)
+    pd.testing.assert_frame_equal(X_a, X_b)
+    pd.testing.assert_series_equal(y_a, y_b)
+
+
+def test_build_panel_mask_drops_samples():
+    from stockpool.ml.dataset import build_panel
+    from stockpool.config import MaskConfig
+    n = 30
+    closes = np.linspace(10, 11, n).copy()
+    closes[15] = closes[14] * 1.099
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=n),
+        "open": closes,
+        "high": closes * 1.001,
+        "low": closes * 0.999,
+        "close": closes,
+        "volume": [1000.0] * n,
+    })
+    stocks_data = {"600000": df}
+    cfg_no = MaskConfig(enabled=False)
+    cfg_yes = MaskConfig(enabled=True, min_listing_days=0)
+    _, y_no = build_panel(stocks_data, ["momentum_5"], horizon=2, mask_config=cfg_no)
+    _, y_yes = build_panel(stocks_data, ["momentum_5"], horizon=2, mask_config=cfg_yes)
+    assert len(y_yes) < len(y_no)
