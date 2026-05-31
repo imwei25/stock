@@ -115,3 +115,54 @@ def test_empty_pool_returns_empty(tmp_path):
     fp, cp = load_or_build_factor_panel(["momentum_5"], {}, tmp_path)
     assert fp == {}
     assert cp.empty
+
+
+def test_load_or_build_factor_panel_passes_mask_config(tmp_path):
+    from stockpool.strategy_factory import load_or_build_factor_panel
+    from stockpool.config import MaskConfig
+    import json
+
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=30),
+        "open": np.linspace(10, 11, 30),
+        "high": np.linspace(10.1, 11.1, 30),
+        "low": np.linspace(9.9, 10.9, 30),
+        "close": np.linspace(10, 11, 30),
+        "volume": [1000.0] * 30,
+    })
+    pool_data = {"600000": df}
+    cfg = MaskConfig(enabled=True, min_listing_days=0)
+    fp, _ = load_or_build_factor_panel(
+        ["momentum_5"], pool_data, cache_dir=tmp_path, mask_config=cfg,
+    )
+    assert "momentum_5" in fp
+    panels_dir = tmp_path / "factor_panels"
+    sig_dirs = list(panels_dir.iterdir())
+    assert len(sig_dirs) == 1
+    manifest = json.loads((sig_dirs[0] / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest.get("mask_enabled") is True
+    assert manifest.get("mask_threshold_main") == 0.098
+
+
+def test_load_or_build_factor_panel_mask_changes_cache_sig(tmp_path):
+    from stockpool.strategy_factory import load_or_build_factor_panel
+    from stockpool.config import MaskConfig
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=30),
+        "open": np.linspace(10, 11, 30),
+        "high": np.linspace(10.1, 11.1, 30),
+        "low": np.linspace(9.9, 10.9, 30),
+        "close": np.linspace(10, 11, 30),
+        "volume": [1000.0] * 30,
+    })
+    pool_data = {"600000": df}
+    load_or_build_factor_panel(
+        ["momentum_5"], pool_data, cache_dir=tmp_path,
+        mask_config=MaskConfig(enabled=False),
+    )
+    load_or_build_factor_panel(
+        ["momentum_5"], pool_data, cache_dir=tmp_path,
+        mask_config=MaskConfig(enabled=True, min_listing_days=0),
+    )
+    panels_dir = tmp_path / "factor_panels"
+    assert len(list(panels_dir.iterdir())) == 2

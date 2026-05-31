@@ -165,11 +165,13 @@ def build_factor_panel(
 def _factor_panel_sig(
     factor_names: list[str],
     pool_data: Mapping[str, pd.DataFrame],
+    mask_config: "MaskConfig | None" = None,
 ) -> tuple[str, str]:
     """Return (12-char sig, last_date_iso) identifying a (factor list, universe,
     history range) tuple.
 
     Universe = sorted code list. last_date = max of any stock's max date.
+    Mask config is part of the key when enabled.
     """
     codes = sorted(pool_data.keys())
     last_date = pd.Timestamp.min
@@ -179,8 +181,16 @@ def _factor_panel_sig(
             if d > last_date:
                 last_date = d
     last_iso = "" if last_date is pd.Timestamp.min else last_date.date().isoformat()
+    mask_dict = None
+    if mask_config is not None and mask_config.enabled:
+        mask_dict = mask_config.model_dump()
     blob = json.dumps(
-        {"factors": sorted(factor_names), "codes": codes, "last_date": last_iso},
+        {
+            "factors": sorted(factor_names),
+            "codes": codes,
+            "last_date": last_iso,
+            "mask": mask_dict,
+        },
         sort_keys=True,
     ).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:12], last_iso
@@ -191,6 +201,8 @@ def load_or_build_factor_panel(
     pool_data: Mapping[str, pd.DataFrame],
     cache_dir: str | Path,
     refresh: bool = False,
+    *,
+    mask_config: "MaskConfig | None" = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     """Disk-cached wrapper around ``build_factor_panel`` + ``build_close_panel``.
 
@@ -200,8 +212,9 @@ def load_or_build_factor_panel(
       ``<cache_dir>/factor_panels/<sig>/<factor_name>.parquet`` × N
 
     Cache key (``sig``) hashes (sorted factor names, sorted universe codes,
-    last_date). Any change → fresh sig → recompute. There is no incremental
-    update: pushing last_date by one bar triggers a full rebuild.
+    last_date, mask_config when enabled). Any change → fresh sig → recompute.
+    There is no incremental update: pushing last_date by one bar triggers a
+    full rebuild.
 
     Pass ``refresh=True`` to bypass the cache and overwrite.
 
@@ -210,7 +223,7 @@ def load_or_build_factor_panel(
     if not pool_data:
         return {}, pd.DataFrame()
 
-    sig, last_iso = _factor_panel_sig(factor_names, pool_data)
+    sig, last_iso = _factor_panel_sig(factor_names, pool_data, mask_config)
     root = Path(cache_dir) / "factor_panels" / sig
     manifest_path = root / "manifest.json"
 
@@ -230,7 +243,7 @@ def load_or_build_factor_panel(
 
     log.info("Building factor panel: %d factors × %d stocks (sig=%s)",
              len(factor_names), len(pool_data), sig)
-    factor_panel = build_factor_panel(factor_names, pool_data)
+    factor_panel = build_factor_panel(factor_names, pool_data, mask_config=mask_config)
     close_panel = build_close_panel(pool_data)
 
     root.mkdir(parents=True, exist_ok=True)
@@ -238,14 +251,20 @@ def load_or_build_factor_panel(
         close_panel.to_parquet(root / "close.parquet")
         for name, wide in factor_panel.items():
             wide.to_parquet(root / f"{name}.parquet")
+        manifest_dict: dict = {
+            "sig": sig,
+            "factors": list(factor_panel.keys()),
+            "n_codes": len(pool_data),
+            "last_date": last_iso,
+            "built_at": pd.Timestamp.now("UTC").isoformat(),
+        }
+        if mask_config is not None and mask_config.enabled:
+            manifest_dict["mask_enabled"] = True
+            manifest_dict["mask_threshold_main"] = mask_config.limit_up_threshold_main
+            manifest_dict["mask_threshold_chinext"] = mask_config.limit_up_threshold_chinext
+            manifest_dict["mask_min_listing_days"] = mask_config.min_listing_days
         manifest_path.write_text(
-            json.dumps({
-                "sig": sig,
-                "factors": list(factor_panel.keys()),
-                "n_codes": len(pool_data),
-                "last_date": last_iso,
-                "built_at": pd.Timestamp.now("UTC").isoformat(),
-            }, indent=2),
+            json.dumps(manifest_dict, indent=2),
             encoding="utf-8",
         )
         log.info("Factor panel cached: %s", root)
