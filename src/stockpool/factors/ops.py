@@ -90,21 +90,34 @@ def ts_rank(x: pd.DataFrame, d: int) -> pd.DataFrame:
 
 
 def ts_product(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=d).apply(lambda s: float(np.prod(s.values)), raw=False)
+    return x.rolling(d, min_periods=_min_periods(d)).apply(
+        lambda s: float(np.nanprod(s)) if np.isfinite(np.nanprod(s)) else np.nan,
+        raw=True,
+    )
 
 
 def decay_linear(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    """加权移动平均,权重 d, d-1, ..., 1 归一化。WQ101 里的 ``decay_linear``。"""
-    weights = np.arange(1, d + 1, dtype=float)
-    weights /= weights.sum()
+    """加权移动平均,权重 1, 2, ..., d 归一化。WQ101 ``decay_linear``。
 
-    def _dot(a: np.ndarray) -> float:
-        if np.isnan(a).any():
+    NaN-safe:窗口内 NaN 位置同步从分子/分母剔除,余下权重重归一化。
+    全 NaN 窗口返回 NaN。
+    """
+    weights = np.arange(1, d + 1, dtype=float)
+
+    def _wmean(a: np.ndarray) -> float:
+        # Rolling may pass arrays shorter than d when min_periods < d;
+        # align weights to the tail of the full weight vector.
+        w_slice = weights[-len(a):]
+        valid = ~np.isnan(a)
+        if not valid.any():
             return np.nan
-        return float(np.dot(a, weights))
+        w = w_slice[valid]
+        v = a[valid]
+        return float(np.dot(v, w) / w.sum())
+
     # raw=True: 直接收 ndarray,绕过 pandas 在大宽表上构造 Series 时触发的
     # closure-cell 路径 bug (TypeError: 'cell' object is not callable)。
-    return x.rolling(d, min_periods=d).apply(_dot, raw=True)
+    return x.rolling(d, min_periods=_min_periods(d)).apply(_wmean, raw=True)
 
 
 def correlation(x: pd.DataFrame, y: pd.DataFrame, d: int) -> pd.DataFrame:
