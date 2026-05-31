@@ -547,7 +547,12 @@ class MLFactorStrategy(Strategy):
 
     def generate_signals(self, daily_df: pd.DataFrame) -> pd.DataFrame:
         cfg = self.cfg
-        cols = ["date", "open", "close", "signal", "score"]
+        # ``final_score`` mirrors ``score`` and is consumed by the portfolio
+        # scoring layer (``precompute_scores_from_legacy`` expects this column,
+        # default ``score_field="final_score"``); keeping the duplicate column
+        # avoids a portfolio-specific code path. Same convention as
+        # ``predict_latest`` which also exposes both.
+        cols = ["date", "open", "close", "signal", "score", "final_score"]
         n = len(daily_df)
         if n == 0:
             return pd.DataFrame(columns=cols)
@@ -599,6 +604,7 @@ class MLFactorStrategy(Strategy):
             rows.append({
                 "date": date_i, "open": open_i, "close": close_i,
                 "signal": signal, "score": score_value,
+                "final_score": score_value,
             })
 
         return pd.DataFrame(rows, columns=cols)

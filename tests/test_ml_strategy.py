@@ -38,7 +38,9 @@ def test_generate_signals_yields_expected_columns():
     )
     strat = MLFactorStrategy(cfg)
     sigs = strat.generate_signals(df)
-    assert list(sigs.columns) == ["date", "open", "close", "signal", "score"]
+    # `final_score` mirrors `score` so portfolio scoring (which reads
+    # `final_score` by default) works without a special code path.
+    assert list(sigs.columns) == ["date", "open", "close", "signal", "score", "final_score"]
     assert len(sigs) == len(df)
 
 
