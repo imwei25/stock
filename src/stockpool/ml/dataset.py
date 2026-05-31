@@ -198,20 +198,38 @@ def _df_to_singleton_panel(df: pd.DataFrame, code: str = "_self_") -> dict[str, 
 
 
 def build_factor_matrix(
-    df: pd.DataFrame, factor_names: Sequence[str],
+    df: pd.DataFrame,
+    factor_names: Sequence[str],
+    *,
+    mask_config: "MaskConfig | None" = None,
 ) -> pd.DataFrame:
     """Compute every named factor on one stock's ``df``, return T × F.
 
     Wraps ``df`` into a 1-stock panel; cross-sectional factors (rank,
     indneutralize) will return degenerate constants — use the pooled path
     (``build_panel`` / ``stack_panel_to_xy``) for those.
+
+    Args:
+        df: 单股 daily DataFrame(含 date + OHLCV 列)。
+        factor_names: 因子名列表。
+        mask_config: 可选 MaskConfig,启用 single-stock tradability mask。
     """
     panel = _df_to_singleton_panel(df)
     code = next(iter(panel["close"].columns))
+
+    mask: pd.DataFrame | None = None
+    if mask_config is not None and mask_config.enabled:
+        from stockpool.panel import compute_tradability_mask
+        mask = compute_tradability_mask(panel, mask_config)
+
     cols: dict[str, pd.Series] = {}
     for name in factor_names:
         f = make_factor(name)
-        wide = f.compute(panel)
+        if mask is not None:
+            from stockpool.panel import apply_mask
+            wide = f.compute(apply_mask(panel, mask))
+        else:
+            wide = f.compute(panel)
         cols[f.name] = wide[code].reset_index(drop=True)
     out = pd.DataFrame(cols)
     out.index = pd.Index(df["date"].reset_index(drop=True), name="date")
