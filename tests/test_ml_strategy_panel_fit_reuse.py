@@ -181,3 +181,75 @@ def test_with_stock_propagates_close_panel():
     strat_b = strat.with_stock("B")
     assert strat_b._close_panel is not None
     pd.testing.assert_frame_equal(strat_b._close_panel, close_panel)
+
+
+def test_prestack_cache_equivalent_to_per_call_stack():
+    """shared_cache 路径(``_ensure_pooled_xy_long`` 一次性 stack)与每次 refit
+    重新切片+stack 的旧路径在多个 cutoff 上产出 bitwise 相同的训练集。
+
+    防止后续重构悄悄破坏快/慢路径等价契约 (PR-3 引入)。
+    """
+    factors = ["momentum_5", "alpha_003"]
+    pool = _make_pool(n_bars=120)
+    factor_panel, close_panel = _make_panels(pool, factors)
+    cfg = _cfg(factors)
+
+    host_daily = pool["A"]
+    shared = {}
+    strat_fast = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="A",
+        factor_panel=factor_panel, close_panel=close_panel,
+        shared_cache=shared,
+    )
+    strat_legacy = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="A",
+        factor_panel=factor_panel, close_panel=close_panel,
+        shared_cache=None,
+    )
+
+    # 多个 cutoff 都应等价 —— 早段/中段/末段
+    for current_bar in (60, 90, 110):
+        X_f, y_f = strat_fast._build_pooled_xy_from_panel(host_daily, current_bar)
+        X_l, y_l = strat_legacy._build_pooled_xy_from_panel(host_daily, current_bar)
+        assert X_f.shape == X_l.shape, f"bar={current_bar}: {X_f.shape} vs {X_l.shape}"
+        assert set(X_f.index) == set(X_l.index)
+        X_f_s = X_f.sort_index(); X_l_s = X_l.sort_index()
+        pd.testing.assert_frame_equal(
+            X_f_s, X_l_s, check_like=True, atol=0.0, rtol=0.0,
+        )
+        pd.testing.assert_series_equal(
+            y_f.sort_index(), y_l.sort_index(),
+            check_names=False, atol=0.0, rtol=0.0,
+        )
+
+    # shared_cache 被 seed 了 pre-stacked panel
+    keys = [k for k in shared.keys() if isinstance(k, tuple) and k[0] == "__pooled_xy_long__"]
+    assert len(keys) == 1, f"expected 1 pre-stack cache entry, got {keys}"
+
+
+def test_prestack_cache_skips_redundant_stack_calls(monkeypatch):
+    """shared_cache 拿到 pre-stacked panel 后,后续 refit 不再调用 stack_panel_to_xy。"""
+    factors = ["momentum_5"]
+    pool = _make_pool(n_bars=120, n_stocks=4)
+    factor_panel, close_panel = _make_panels(pool, factors)
+    cfg = _cfg(factors)
+
+    shared = {}
+    strat = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="A",
+        factor_panel=factor_panel, close_panel=close_panel,
+        shared_cache=shared,
+    )
+
+    import stockpool.backtesting.strategies as mod
+    calls = {"n": 0}
+    real_stack = mod.stack_panel_to_xy
+    def spy(*a, **kw):
+        calls["n"] += 1
+        return real_stack(*a, **kw)
+    monkeypatch.setattr(mod, "stack_panel_to_xy", spy)
+
+    # 三次连续调用,不同 cutoff;stack 应只发生 1 次。
+    for bar in (60, 80, 100):
+        strat._build_pooled_xy_from_panel(pool["A"], bar)
+    assert calls["n"] == 1, f"expected 1 stack call, got {calls['n']}"

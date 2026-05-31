@@ -591,6 +591,18 @@ class MLFactorStrategy(Strategy):
             y_train_raw = y_full.iloc[train_start:label_end]
             X_train, y_train = align_xy(X_train_raw, y_train_raw)
         elif self._factor_panel is not None and self._close_panel is not None:
+            # Pre-check: if the pre-stacked long panel doesn't have enough
+            # rows up to the label cutoff date, the eventual X_train will be
+            # too small no matter what. Skip the slice + groupby + tail work.
+            # This short-circuits ~95% of early-bar attempts in long backtests.
+            pre = self._ensure_pooled_xy_long()
+            if pre is not None:
+                label_iloc = max(0, label_end - 1)
+                label_cutoff_ts = pd.Timestamp(daily_df["date"].iloc[label_iloc])
+                dates_level = pre[0].index.get_level_values("date")
+                n_up_to = int(dates_level.searchsorted(label_cutoff_ts, side="right"))
+                if n_up_to < cfg.min_train_samples:
+                    return None
             # Fast path (PR-1): slice precomputed factor + close panels by
             # cutoff_date instead of rebuilding factors on the truncated pool
             # at every refit_bar.
@@ -631,21 +643,57 @@ class MLFactorStrategy(Strategy):
             self._shared_cache[shared_key] = result  # type: ignore[index]
         return result
 
+    def _ensure_pooled_xy_long(self) -> tuple[pd.DataFrame, pd.Series] | None:
+        """Build (or fetch from shared_cache) the FULL pooled long-format
+        ``(X, y)`` once.
+
+        Returns ``(X, y)`` indexed by ``MultiIndex(date, stock)`` (date is the
+        outer level, sorted) — letting per-refit slicing become an O(log N)
+        ``.loc[:cutoff_ts]`` instead of re-stacking 20 wide panels each time.
+
+        Cached in ``self._shared_cache`` under a key derived from the strategy
+        signature so all stocks in one backtest share the same prebuilt panel.
+        Returns ``None`` when shared_cache or panels are unavailable — the
+        caller falls back to the legacy per-call stacking path.
+        """
+        if (
+            self._shared_cache is None
+            or self._factor_panel is None
+            or self._close_panel is None
+        ):
+            return None
+        sig = self._strategy_signature()
+        key = ("__pooled_xy_long__", sig)
+        hit = self._shared_cache.get(key)
+        if hit is not None:
+            return hit
+        fwd = forward_return_panel(self._close_panel, self.cfg.horizon)
+        X, y = stack_panel_to_xy(self._factor_panel, fwd, dropna=True)
+        # Original layout is (stock, date); swap so date is outer + sort so
+        # ``.loc[:cutoff_ts]`` becomes a fast range cut on the leading level.
+        X = X.swaplevel("stock", "date").sort_index()
+        y = y.swaplevel("stock", "date")
+        y = y.loc[X.index]
+        self._shared_cache[key] = (X, y)
+        return X, y
+
     def _build_pooled_xy_from_panel(
         self, daily_df: pd.DataFrame, current_bar: int,
     ) -> tuple[pd.DataFrame, pd.Series]:
-        """Fast pooled training-set builder (PR-1).
+        """Fast pooled training-set builder (PR-1 + PR-3).
 
-        Slices the precomputed ``self._factor_panel`` (dict[name, T×N]) and
-        ``self._close_panel`` (T×N) by ``cutoff_date`` (same cutoff as
-        ``_build_truncated_pool``), computes forward-return labels once,
-        stacks to (stock, date) long format, then applies the per-stock
-        ``tail(train_window)`` window — same semantics as the legacy
-        ``build_panel`` path, but skips per-refit factor recomputation.
+        PR-1 sliced ``self._factor_panel`` / ``self._close_panel`` per refit
+        and re-stacked. PR-3 hoists that stack into ``shared_cache``: the full
+        long-format ``(X, y)`` is built once and every refit just takes
+        ``.loc[:cutoff_ts]`` + optional host-row filter + per-stock
+        ``tail(train_window)``.
 
-        Non-sharing mode drops the host column from both panels so the host
-        contributes only via ``daily_df`` itself (today's open). For sharing
-        mode the host stays in the panel — matches ``_build_truncated_pool``.
+        Non-sharing mode drops the host's rows so the host contributes only
+        via ``daily_df`` itself (today's open). For sharing mode the host
+        stays in the panel — matches ``_build_truncated_pool``.
+
+        Falls back to per-call stacking when ``shared_cache`` is unavailable
+        (e.g. unit tests that construct a strategy without a shared cache).
         """
         assert self._factor_panel is not None and self._close_panel is not None
         cfg = self.cfg
@@ -658,6 +706,37 @@ class MLFactorStrategy(Strategy):
         sharing = self._is_sharing()
         drop_host = (not sharing) and self._current_stock_code is not None
 
+        pre = self._ensure_pooled_xy_long()
+        if pre is not None:
+            # Fast path uses labels from the FULL forward_return panel — so
+            # rows in (label_end - 1, label_end + horizon - 1] would carry
+            # forward returns computed from close PAST cutoff_ts (look-ahead).
+            # Slice by label_end - 1's date instead (= cutoff_ts - horizon in
+            # date terms): same observable-label window as the legacy path.
+            label_iloc = max(0, label_end - 1)
+            label_cutoff_ts = pd.Timestamp(daily_df["date"].iloc[label_iloc])
+            X_long, y_long = pre
+            X = X_long.loc[:label_cutoff_ts]
+            y = y_long.loc[X.index]
+            if drop_host:
+                stock_level = X.index.get_level_values("stock")
+                mask = stock_level != self._current_stock_code
+                X = X[mask]
+                y = y[mask]
+            if len(X) > 0 and cfg.train_window > 0:
+                X = X.groupby(
+                    level="stock", group_keys=False, sort=False,
+                ).tail(cfg.train_window)
+                y = y.loc[X.index]
+            # Match legacy contract: MultiIndex levels (stock, date). swaplevel
+            # is metadata-only — no data move — so the cost is negligible even
+            # on 1M-row training frames.
+            X = X.swaplevel("date", "stock")
+            y = y.swaplevel("date", "stock")
+            return X, y
+
+        # Legacy fallback: per-call slice + stack (used when shared_cache
+        # isn't provided, e.g. some single-stock unit tests).
         sliced_fp: dict[str, pd.DataFrame] = {}
         for name, wide in self._factor_panel.items():
             sub = wide.loc[wide.index <= cutoff_ts]
