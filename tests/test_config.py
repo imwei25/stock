@@ -595,3 +595,57 @@ def test_portfolio_backtest_round_trip(tmp_path):
     assert cfg.portfolio_backtest.portfolio.max_per_industry is None
     assert cfg.portfolio_backtest.eligibility.exclude_st is False
     assert cfg.portfolio_backtest.staggered_starts == 3
+
+
+# ---------------------------------------------------------------------------
+# Task 1: MaskConfig schema tests
+# ---------------------------------------------------------------------------
+
+def test_mask_config_defaults():
+    from stockpool.config import MaskConfig
+    cfg = MaskConfig()
+    assert cfg.enabled is False
+    assert cfg.limit_up_threshold_main == 0.098
+    assert cfg.limit_up_threshold_chinext == 0.198
+    assert cfg.limit_up_threshold_bse == 0.298
+    assert cfg.min_listing_days == 252
+
+
+def test_mask_config_extra_forbid():
+    from stockpool.config import MaskConfig
+    import pytest
+    with pytest.raises(ValidationError):
+        MaskConfig(unknown_field=1)
+
+
+def test_ml_factor_config_has_mask():
+    from stockpool.config import MLFactorConfig
+    cfg = MLFactorConfig()
+    assert cfg.mask.enabled is False
+
+
+def test_ml_factor_mask_loaded_from_yaml():
+    from stockpool.config import MLFactorConfig
+    cfg = MLFactorConfig.model_validate({
+        "mask": {"enabled": True, "min_listing_days": 100}
+    })
+    assert cfg.mask.enabled is True
+    assert cfg.mask.min_listing_days == 100
+    assert cfg.mask.limit_up_threshold_main == 0.098
+
+
+def test_ml_factor_content_hash_changes_with_mask(tmp_path):
+    from stockpool.config import load_config
+    import yaml
+    base = yaml.safe_load(open("config.yaml", encoding="utf-8"))
+    base["strategy"] = {"name": "ml_factor"}
+    f_a = tmp_path / "cfg_a.yaml"
+    f_a.write_text(yaml.safe_dump(base), encoding="utf-8")
+    cfg_a = load_config(f_a)
+
+    base["strategy"]["ml_factor"] = {"mask": {"enabled": True}}
+    f_b = tmp_path / "cfg_b.yaml"
+    f_b.write_text(yaml.safe_dump(base), encoding="utf-8")
+    cfg_b = load_config(f_b)
+
+    assert cfg_a.content_hash != cfg_b.content_hash

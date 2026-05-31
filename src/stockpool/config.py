@@ -345,6 +345,25 @@ class QuantileThresholds(BaseModel):
         return self
 
 
+class MaskConfig(BaseModel):
+    """Tradability mask for factor input quality (paper B mask-first).
+
+    When enabled, panel values at days when a stock hit limit-up/-down,
+    was suspended, or had been listed for <min_listing_days days are
+    nulled-out before factor computation. Training labels apply a
+    bidirectional check (day t and day t+horizon both unmasked).
+
+    See: docs/superpowers/specs/2026-05-31-tradability-mask-design.md
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    limit_up_threshold_main: float = Field(default=0.098, gt=0, lt=1)
+    limit_up_threshold_chinext: float = Field(default=0.198, gt=0, lt=1)
+    limit_up_threshold_bse: float = Field(default=0.298, gt=0, lt=1)
+    min_listing_days: int = Field(default=252, ge=0)
+
+
 class MLFactorConfig(BaseModel):
     """Settings for the two-step ML factor strategy.
 
@@ -406,6 +425,7 @@ class MLFactorConfig(BaseModel):
     buy_verdicts: list[str] = Field(default_factory=lambda: ["buy", "strong_buy"])
     sell_verdicts: list[str] = Field(default_factory=lambda: ["sell", "strong_sell"])
     refresh_verdicts: list[str] = Field(default_factory=lambda: ["strong_buy"])
+    mask: MaskConfig = Field(default_factory=MaskConfig)
 
     @model_validator(mode="after")
     def _load_factors_file(self) -> "MLFactorConfig":
