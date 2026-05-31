@@ -127,3 +127,38 @@ def _listing_mask(close: pd.DataFrame, min_days: int = 252) -> pd.DataFrame:
         col_pos = mask.columns.get_loc(code)
         mask.iloc[first_pos:end_pos, col_pos] = False
     return mask
+
+
+def _limit_threshold_for_config(code: str, config: "MaskConfig") -> float:
+    """Like ``_limit_threshold`` but reads thresholds from a ``MaskConfig``."""
+    if code.startswith(("300", "301", "688")):
+        return config.limit_up_threshold_chinext
+    if code.startswith(("82", "83", "87", "43")):
+        return config.limit_up_threshold_bse
+    return config.limit_up_threshold_main
+
+
+def compute_tradability_mask(
+    panel: Mapping[str, pd.DataFrame],
+    config: "MaskConfig",
+) -> pd.DataFrame:
+    """从 OHLCV panel 计算可交易性 mask(close-side, paper B mask-first)。
+
+    三条件 AND:
+      1. |close ret| < per-code 涨跌停阈值
+      2. volume > 0 (非停牌)
+      3. 上市天数 ≥ min_listing_days
+    """
+    close = panel["close"]
+    volume = panel["volume"]
+
+    thresholds = pd.Series(
+        {code: _limit_threshold_for_config(code, config) for code in close.columns}
+    )
+
+    ret = close / close.shift(1) - 1
+    cond_not_limit = ret.abs().lt(thresholds, axis=1)
+    cond_has_volume = volume > 0
+    cond_listed = _listing_mask(close, min_days=config.min_listing_days)
+
+    return cond_not_limit & cond_has_volume & cond_listed

@@ -53,3 +53,68 @@ def test_listing_mask_all_nan_stock_all_false():
     close = pd.DataFrame({"600000": [np.nan] * 100}, index=idx)
     mask = _listing_mask(close, min_days=252)
     assert not mask["600000"].any()
+
+
+def _make_panel(close_dict, volume_dict=None):
+    codes = list(close_dict.keys())
+    idx = pd.date_range("2024-01-01", periods=len(next(iter(close_dict.values()))))
+    close = pd.DataFrame(close_dict, index=idx)
+    if volume_dict is None:
+        volume = pd.DataFrame({c: [1000.0] * len(idx) for c in codes}, index=idx)
+    else:
+        volume = pd.DataFrame(volume_dict, index=idx)
+    return {
+        "open": close.copy(),
+        "high": close.copy(),
+        "low": close.copy(),
+        "close": close,
+        "volume": volume,
+    }
+
+
+def test_compute_mask_main_board_limit_up():
+    from stockpool.panel import compute_tradability_mask
+    from stockpool.config import MaskConfig
+    close_dict = {
+        "600000": [10.0, 10.99, 11.0, 11.01],
+        "300001": [10.0, 10.99, 11.0, 11.01],
+    }
+    panel = _make_panel(close_dict)
+    cfg = MaskConfig(enabled=True, min_listing_days=0)
+    mask = compute_tradability_mask(panel, cfg)
+    assert mask.loc[panel["close"].index[1], "600000"] == False
+    assert mask.loc[panel["close"].index[1], "300001"] == True
+
+
+def test_compute_mask_suspension_volume_zero():
+    from stockpool.panel import compute_tradability_mask
+    from stockpool.config import MaskConfig
+    close_dict = {"600000": [10.0, 10.05, 10.1, 10.15]}
+    volume_dict = {"600000": [1000.0, 0.0, 1000.0, 1000.0]}
+    panel = _make_panel(close_dict, volume_dict)
+    cfg = MaskConfig(enabled=True, min_listing_days=0)
+    mask = compute_tradability_mask(panel, cfg)
+    assert mask.loc[panel["close"].index[1], "600000"] == False
+
+
+def test_compute_mask_three_conditions_intersect():
+    from stockpool.panel import compute_tradability_mask
+    from stockpool.config import MaskConfig
+    close_dict = {"600000": [10.0, 10.05, 10.10, 10.15]}
+    panel = _make_panel(close_dict)
+    cfg = MaskConfig(enabled=True, min_listing_days=0)
+    mask = compute_tradability_mask(panel, cfg)
+    assert mask.iloc[0, 0] == False
+    assert mask.iloc[1:, 0].all()
+
+
+def test_compute_mask_shape_matches_close():
+    from stockpool.panel import compute_tradability_mask
+    from stockpool.config import MaskConfig
+    close_dict = {f"600{i:03d}": [10.0 + i * 0.01] * 50 for i in range(5)}
+    panel = _make_panel(close_dict)
+    cfg = MaskConfig(enabled=True, min_listing_days=0)
+    mask = compute_tradability_mask(panel, cfg)
+    assert mask.shape == panel["close"].shape
+    assert mask.index.equals(panel["close"].index)
+    assert mask.columns.equals(panel["close"].columns)
