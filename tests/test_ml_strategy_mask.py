@@ -54,3 +54,56 @@ def test_forward_return_panel_bidirectional_mask():
     assert np.isnan(y["A"].iloc[0])
     assert y["A"].iloc[1] == pytest.approx(2.0 / 11.0)
     assert np.isnan(y["A"].iloc[2])
+
+
+def test_build_factor_panel_no_mask_config_unchanged():
+    from stockpool.strategy_factory import build_factor_panel
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=30),
+        "open": np.linspace(10, 11, 30),
+        "high": np.linspace(10.1, 11.1, 30),
+        "low": np.linspace(9.9, 10.9, 30),
+        "close": np.linspace(10, 11, 30),
+        "volume": [1000.0] * 30,
+    })
+    pool_data = {"600000": df}
+    out_a = build_factor_panel(["momentum_5"], pool_data)
+    out_b = build_factor_panel(["momentum_5"], pool_data, mask_config=None)
+    pd.testing.assert_frame_equal(out_a["momentum_5"], out_b["momentum_5"])
+
+
+def test_build_factor_panel_mask_disabled_equivalent_to_no_config():
+    from stockpool.strategy_factory import build_factor_panel
+    from stockpool.config import MaskConfig
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=30),
+        "open": np.linspace(10, 11, 30),
+        "high": np.linspace(10.1, 11.1, 30),
+        "low": np.linspace(9.9, 10.9, 30),
+        "close": np.linspace(10, 11, 30),
+        "volume": [1000.0] * 30,
+    })
+    pool_data = {"600000": df}
+    out_a = build_factor_panel(["momentum_5"], pool_data, mask_config=MaskConfig(enabled=False))
+    out_b = build_factor_panel(["momentum_5"], pool_data, mask_config=None)
+    pd.testing.assert_frame_equal(out_a["momentum_5"], out_b["momentum_5"])
+
+
+def test_build_factor_panel_mask_enabled_changes_output():
+    from stockpool.strategy_factory import build_factor_panel
+    from stockpool.config import MaskConfig
+    n = 30
+    closes = np.linspace(10, 11, n).copy()
+    closes[10] = closes[9] * 1.099
+    df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=n),
+        "open": closes,
+        "high": closes * 1.001,
+        "low": closes * 0.999,
+        "close": closes,
+        "volume": [1000.0] * n,
+    })
+    pool_data = {"600000": df}
+    cfg = MaskConfig(enabled=True, min_listing_days=0)
+    out = build_factor_panel(["momentum_5"], pool_data, mask_config=cfg)
+    assert np.isnan(out["momentum_5"].iloc[10, 0])

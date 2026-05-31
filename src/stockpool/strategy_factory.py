@@ -14,9 +14,12 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from stockpool.config import MaskConfig
 
 log = logging.getLogger(__name__)
 
@@ -117,12 +120,20 @@ def build_close_panel(
 def build_factor_panel(
     factor_names: list[str],
     pool_data: Mapping[str, pd.DataFrame],
+    *,
+    mask_config: "MaskConfig | None" = None,
 ) -> dict[str, pd.DataFrame]:
     """从 ``{code: daily_df}`` 装一个 OHLCV Panel,在 Panel 上算所有因子,
     返回 ``{factor_name: T×N DataFrame}``。
 
     Look-ahead 安全:因子在第 i 行只用 ``[:i+1]`` 数据(由 Factor 契约保证),
     所以一次性预算整段历史不会泄露未来。
+
+    Args:
+        factor_names: 因子名列表。
+        pool_data: ``{code: daily_df}``.
+        mask_config: 可选 MaskConfig。若 enabled=True,在算因子前对 panel 字段
+                     应用 tradability mask (close-side, paper B mask-first)。
     """
     from stockpool.ml.dataset import compute_factor_panel
 
@@ -142,7 +153,13 @@ def build_factor_panel(
             {code: d[field].reindex(idx) for code, d in per_stock.items()},
             index=idx,
         )
-    return compute_factor_panel(panel, factor_names)
+
+    mask: pd.DataFrame | None = None
+    if mask_config is not None and mask_config.enabled:
+        from stockpool.panel import compute_tradability_mask
+        mask = compute_tradability_mask(panel, mask_config)
+
+    return compute_factor_panel(panel, factor_names, mask=mask)
 
 
 def _factor_panel_sig(
