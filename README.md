@@ -402,17 +402,37 @@ strategy:
   ml_factor:
     # ...其他字段
     mask:
-      enabled: true   # 默认 false。开启后涨跌停/停牌/新上市股的 close 在因子滚动算子里被 NaN 化,训练标签做双向检查。
+      enabled: true   # 默认 false。开启后训练标签对涨停/停牌/新股头 N 天做双向检查,
+                      # 通过 stack_panel_to_xy dropna 自然剔除这些样本(不破坏因子输入值)
 ```
 
-启用后训练样本数下降 ~1-3%,大样本上 Sharpe 预期提升 0.1-0.4(论文 B 在真实 A 股 2022-2024 报告 +0.44)。
+**关键**:`mask.enabled=true` 时 `MLFactorStrategy` 会自动调 `stockpool.ipo_dates.load_or_build_ipo_dates`
+拉一次全 A 股 IPO 日期(baostock,缓存到 `data/ipo_dates.parquet`,30 天有效期)。
+首次需要网络拉 ~3-5 秒;后续直接读盘。
 
-A/B 验证:
+启用后训练样本数下降 ~1-5%(取决于股池规模),大样本(训练池 = 全 A 股)上 Sharpe 预期提升 0.05-0.4(论文 B 在 4000+ 票 × 3 年 × 213 因子上报告 +0.44)。
+
+A/B 验证(per-stock):
 ```bash
-.venv/Scripts/python -m stockpool ab --config ab_mask.yaml   # 对比 baseline vs with_mask
+.venv/Scripts/python -m stockpool ab --config ab_mask.yaml   # 训练池 4358 + 应用池 16,实测 Δ Sharpe +0.07
 ```
 
-缓存自动失效:翻 `enabled` 会触发 factor_panel + ml_models 重建。
+Portfolio AB 验证(top-K 选股,更贴近 paper B 场景):
+```bash
+.venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab_mask.yaml
+# 训练池 4358 + portfolio universe 16(top-8 选股),实测 Δ Sharpe +0.04
+```
+
+`portfolio_ab_mask.yaml` 的关键字段:
+```yaml
+portfolio_backtest:
+  universe_codes:     # 解耦训练池与 portfolio universe
+    - "605589"        # ml_factor training_universe=all 仍走 load_universe_cache (4358 票)
+    - "603986"        # 但 precompute_scores + portfolio engine 仅在这个列表上跑
+    # ...             # 避免在 4358 票全跑时 precompute_scores segfault
+```
+
+缓存:翻 `mask.enabled` 会改变 `cfg.content_hash` 和 ml_model sig hash → 自动重训 + 重算 score_panel。`factor_panel` 不变(mask 不影响因子值)。
 
 ## ⚠️ 免责声明
 
