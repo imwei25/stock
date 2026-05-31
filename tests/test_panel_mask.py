@@ -26,6 +26,8 @@ def test_limit_threshold_bse():
     from stockpool.panel import _limit_threshold
     assert _limit_threshold("830001") == 0.298
     assert _limit_threshold("870001") == 0.298
+    assert _limit_threshold("820001") == 0.298
+    assert _limit_threshold("430001") == 0.298
 
 
 def test_listing_mask_mature_stock_all_true():
