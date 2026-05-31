@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from stockpool.config import MaskConfig
 
 log = logging.getLogger(__name__)
 
@@ -88,3 +91,17 @@ def assert_panel_valid(panel: Mapping[str, pd.DataFrame]) -> None:
             raise ValueError(f"panel field {k!r} index mismatch with close")
         if not v.columns.equals(ref.columns):
             raise ValueError(f"panel field {k!r} columns mismatch with close")
+
+
+def _limit_threshold(code: str) -> float:
+    """A 股按板块判定涨跌停幅度阈值。
+
+    返回值是"abs 当日 ret 超过它即视为涨/跌停日"的阈值。略小于规则上限
+    (0.098 < 0.10)是为了让真实涨停(实际 ret ≈ 0.099 因 round-to-cent)
+    也能被命中。
+    """
+    if code.startswith(("300", "301", "688")):
+        return 0.198  # 创业板 + 科创板 ±20%
+    if code.startswith(("82", "83", "87", "43")):
+        return 0.298  # 北交所 ±30%(项目 universe 不含,留兜底)
+    return 0.098      # 主板沪深 ±10%
