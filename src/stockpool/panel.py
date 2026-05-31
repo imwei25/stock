@@ -107,13 +107,47 @@ def _limit_threshold(code: str) -> float:
     return 0.098      # 主板沪深 ±10%
 
 
-def _listing_mask(close: pd.DataFrame, min_days: int = 252) -> pd.DataFrame:
+def _listing_mask(
+    close: pd.DataFrame,
+    min_days: int = 252,
+    ipo_dates: Mapping[str, pd.Timestamp] | None = None,
+) -> pd.DataFrame:
     """Mask=False 对每只股 panel 内"新上市后头 min_days 个交易日"。
 
-    成熟股(panel 起点就有 close)视为已经上市 >1 年,全程 True。
-    全 NaN 的股全程 False。
+    Args:
+        close: T × N close panel.
+        min_days: 上市后多少交易日内视为"新股"(对 panel 中的 mask=False)。
+        ipo_dates: 可选 ``{code: IPO 日期}`` 映射。**强烈推荐提供**,
+            通过 ``stockpool.ipo_dates.load_or_build_ipo_dates`` 获得。
+            若 None,退化到 first_valid_index 启发式 — 会把"缓存窗口短"
+            的成熟股错认成新上市股(panel union 早于该股缓存起点时触发),
+            并打 warning。
+
+    实现说明:
+        提供 ipo_dates 时,使用日历日近似(252 交易日 ≈ 366 自然日,
+        所以阈值 = ``IPO + min_days × 1.45 天``),无需精确交易日历。
     """
     mask = pd.DataFrame(True, index=close.index, columns=close.columns)
+
+    if ipo_dates is not None:
+        # 252 交易日 ≈ 366 自然日(含周末+节假日),用 1.45 系数近似
+        cal_days = int(min_days * 1.45)
+        for code in close.columns:
+            ipo = ipo_dates.get(code)
+            if ipo is None:
+                # 无 IPO 日期 → 保守假设成熟股(不 mask)
+                continue
+            cutoff = pd.Timestamp(ipo) + pd.Timedelta(days=cal_days)
+            col_pos = mask.columns.get_loc(code)
+            mask.iloc[close.index < cutoff, col_pos] = False
+        return mask
+
+    # 启发式回退 — 警告:可能误判成熟股
+    log.warning(
+        "_listing_mask: ipo_dates 未提供,回退到 first_valid_index 启发式。"
+        "缓存历史短的成熟股可能被误标为新上市。建议调用方传入"
+        " stockpool.ipo_dates.load_or_build_ipo_dates 的结果。"
+    )
     for code in close.columns:
         series = close[code]
         first_valid = series.first_valid_index()
@@ -141,6 +175,8 @@ def _limit_threshold_for_config(code: str, config: "MaskConfig") -> float:
 def compute_tradability_mask(
     panel: Mapping[str, pd.DataFrame],
     config: "MaskConfig",
+    *,
+    ipo_dates: Mapping[str, pd.Timestamp] | None = None,
 ) -> pd.DataFrame:
     """从 OHLCV panel 计算可交易性 mask(close-side, paper B mask-first)。
 
@@ -148,6 +184,13 @@ def compute_tradability_mask(
       1. |close ret| < per-code 涨跌停阈值
       2. volume > 0 (非停牌)
       3. 上市天数 ≥ min_listing_days
+
+    Args:
+        panel: OHLCV panel.
+        config: MaskConfig 实例。
+        ipo_dates: 可选 ``{code: IPO timestamp}``。强烈推荐传入(从
+            ``stockpool.ipo_dates.load_or_build_ipo_dates`` 取),否则
+            listing_mask 退化到 first_valid_index 启发式并打 warning。
     """
     close = panel["close"]
     volume = panel["volume"]
@@ -159,7 +202,9 @@ def compute_tradability_mask(
     ret = close / close.shift(1) - 1
     cond_not_limit = ret.abs().lt(thresholds, axis=1)
     cond_has_volume = volume > 0
-    cond_listed = _listing_mask(close, min_days=config.min_listing_days)
+    cond_listed = _listing_mask(
+        close, min_days=config.min_listing_days, ipo_dates=ipo_dates,
+    )
 
     return cond_not_limit & cond_has_volume & cond_listed
 

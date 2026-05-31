@@ -266,6 +266,7 @@ def build_panel(
     horizon: int,
     *,
     mask_config: "MaskConfig | None" = None,
+    ipo_dates: Mapping[str, pd.Timestamp] | None = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Pool multi-stock data into a single (X, y) panel.
 
@@ -278,6 +279,9 @@ def build_panel(
         factor_names: 因子名列表。
         horizon: forward return 前瞻天数。
         mask_config: 可选 MaskConfig,启用 tradability mask。
+        ipo_dates: 可选 ``{code: IPO timestamp}``,传给 listing_mask 防止
+            缓存历史短的成熟股被误标新上市;建议从
+            ``stockpool.ipo_dates.load_or_build_ipo_dates`` 加载。
     """
     if not stocks_data:
         empty_idx = pd.MultiIndex.from_arrays([[], []], names=["stock", "date"])
@@ -308,7 +312,7 @@ def build_panel(
     mask: pd.DataFrame | None = None
     if mask_config is not None and mask_config.enabled:
         from stockpool.panel import compute_tradability_mask
-        mask = compute_tradability_mask(panel, mask_config)
+        mask = compute_tradability_mask(panel, mask_config, ipo_dates=ipo_dates)
 
     fwd = forward_return_panel(panel["close"], horizon, mask=mask)
     X, y = stack_panel_to_xy(fp, fwd, dropna=True)

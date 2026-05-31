@@ -229,9 +229,10 @@ def test_ml_factor_strategy_pooled_path_uses_mask(monkeypatch):
 
     captured = {}
     orig = ds.build_panel
-    def spy_build_panel(stocks_data, factor_names, horizon, *, mask_config=None):
-        captured["mask_config"] = mask_config
-        return orig(stocks_data, factor_names, horizon, mask_config=mask_config)
+    def spy_build_panel(stocks_data, factor_names, horizon, **kwargs):
+        captured["mask_config"] = kwargs.get("mask_config")
+        captured["ipo_dates"] = kwargs.get("ipo_dates")
+        return orig(stocks_data, factor_names, horizon, **kwargs)
     monkeypatch.setattr(
         "stockpool.backtesting.strategies.build_panel", spy_build_panel
     )

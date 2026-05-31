@@ -57,6 +57,76 @@ def test_listing_mask_all_nan_stock_all_false():
     assert not mask["600000"].any()
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# _listing_mask with explicit ipo_dates (preferred path; fixes the
+# first_valid_index heuristic bug where mature stocks with shorter
+# cache windows got mis-flagged as newly listed).
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def test_listing_mask_ipo_dates_mature_stock_short_cache():
+    """成熟股(IPO 远早于 panel 起点)即使前几行 NaN(panel union 早于
+    该股缓存起点),有 ipo_dates 时仍全部 True。这正是修复 first_valid_index
+    启发式 bug 的关键场景。"""
+    from stockpool.panel import _listing_mask
+    idx = pd.date_range("2024-05-08", periods=500)
+    close = pd.DataFrame({
+        # 模拟"成熟股,缓存历史不齐":前 14 行 NaN
+        "600584": [np.nan] * 14 + list(np.linspace(10, 12, 486)),
+    }, index=idx)
+    ipo_dates = {"600584": pd.Timestamp("2003-08-26")}  # 长电科技实际 IPO
+    mask = _listing_mask(close, min_days=252, ipo_dates=ipo_dates)
+    assert mask["600584"].all()
+
+
+def test_listing_mask_ipo_dates_recent_ipo_within_panel():
+    """IPO 落在 panel 范围内 → 屏蔽 IPO 后约 366 自然日(≈252 交易日)以内。"""
+    from stockpool.panel import _listing_mask
+    idx = pd.date_range("2024-01-01", periods=500)
+    close = pd.DataFrame({"301308": list(np.linspace(10, 12, 500))}, index=idx)
+    ipo_dates = {"301308": pd.Timestamp("2024-03-15")}
+    mask = _listing_mask(close, min_days=252, ipo_dates=ipo_dates)
+    cutoff = pd.Timestamp("2024-03-15") + pd.Timedelta(days=int(252 * 1.45))
+    # cutoff 之前应该 mask=False
+    assert not mask["301308"].loc[idx < cutoff].any()
+    # cutoff 及之后 mask=True
+    assert mask["301308"].loc[idx >= cutoff].all()
+
+
+def test_listing_mask_ipo_dates_missing_code_assumes_mature():
+    """ipo_dates 里没有的 code → 不 mask(保守假设成熟股)。"""
+    from stockpool.panel import _listing_mask
+    idx = pd.date_range("2024-01-01", periods=100)
+    close = pd.DataFrame({
+        "600000": list(np.linspace(10, 12, 100)),
+        "999999": list(np.linspace(10, 12, 100)),
+    }, index=idx)
+    ipo_dates = {"600000": pd.Timestamp("2000-01-01")}
+    mask = _listing_mask(close, min_days=252, ipo_dates=ipo_dates)
+    assert mask["600000"].all()
+    assert mask["999999"].all()
+
+
+def test_listing_mask_ipo_dates_overrides_first_valid_index():
+    """直接对比启发式 vs ipo_dates:前者错误 mask 14+252 行,后者正确返回全 True。"""
+    from stockpool.panel import _listing_mask
+    idx = pd.date_range("2024-05-08", periods=500)
+    close = pd.DataFrame({
+        "600584": [np.nan] * 14 + list(np.linspace(10, 12, 486)),
+    }, index=idx)
+    # 启发式(无 ipo_dates):mask=False 应该有约 266 行
+    heuristic_mask = _listing_mask(close, min_days=252, ipo_dates=None)
+    n_false_heuristic = (~heuristic_mask["600584"]).sum()
+    assert n_false_heuristic > 200  # 大量被错误 mask
+
+    # 用真实 IPO 日期:0 个 mask=False
+    real_mask = _listing_mask(
+        close, min_days=252,
+        ipo_dates={"600584": pd.Timestamp("2003-08-26")},
+    )
+    assert (~real_mask["600584"]).sum() == 0
+
+
 def _make_panel(close_dict, volume_dict=None):
     codes = list(close_dict.keys())
     idx = pd.date_range("2024-01-01", periods=len(next(iter(close_dict.values()))))
@@ -120,6 +190,38 @@ def test_compute_mask_shape_matches_close():
     assert mask.shape == panel["close"].shape
     assert mask.index.equals(panel["close"].index)
     assert mask.columns.equals(panel["close"].columns)
+
+
+def test_compute_tradability_mask_accepts_ipo_dates_kwarg():
+    """compute_tradability_mask 接 ipo_dates → 透传给 _listing_mask。
+    对成熟股,带 ipo_dates 修复"缓存短"的误判。"""
+    from stockpool.panel import compute_tradability_mask
+    from stockpool.config import MaskConfig
+    idx = pd.date_range("2024-05-08", periods=500)
+    close_values = [np.nan] * 14 + list(np.linspace(10, 12, 486))
+    close_df = pd.DataFrame({"600584": close_values}, index=idx)
+    panel = {
+        "open": close_df.copy(),
+        "high": close_df.copy(),
+        "low": close_df.copy(),
+        "close": close_df,
+        "volume": pd.DataFrame({"600584": [1000.0] * 500}, index=idx),
+    }
+    cfg = MaskConfig(enabled=True, min_listing_days=252)
+
+    # No ipo_dates: heuristic mis-flags ~266 rows
+    mask_heuristic = compute_tradability_mask(panel, cfg)
+    n_false_heuristic = (~mask_heuristic["600584"]).sum()
+    assert n_false_heuristic > 200
+
+    # With real ipo_dates: only NaN-induced mask=False (rows 0-13 from
+    # NaN close + row 14 from NaN ret 第一日)
+    mask_real = compute_tradability_mask(
+        panel, cfg,
+        ipo_dates={"600584": pd.Timestamp("2003-08-26")},
+    )
+    n_false_real = (~mask_real["600584"]).sum()
+    assert n_false_real < 20  # 大幅减少
 
 
 def test_apply_mask_nulls_correct_positions():

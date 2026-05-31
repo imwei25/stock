@@ -382,6 +382,33 @@ class MLFactorStrategy(Strategy):
             and bool(self.pool_data)
         )
 
+    def _get_ipo_dates(self) -> dict | None:
+        """Load IPO dates for ``_listing_mask`` (avoids first_valid_index
+        heuristic that mis-flags mature stocks with short cache history).
+
+        Only loaded when mask is enabled + cache_dir is set. Cached in
+        ``shared_cache`` (process-local) so successive ``_try_fit`` calls
+        on different stocks reuse the same dict. Returns ``None`` if
+        unavailable — ``_listing_mask`` falls back to its heuristic.
+        """
+        if not self.cfg.mask.enabled or self._cache_dir is None:
+            return None
+        if self._shared_cache is not None and "__ipo_dates__" in self._shared_cache:
+            return self._shared_cache["__ipo_dates__"]
+        try:
+            from stockpool.ipo_dates import load_or_build_ipo_dates
+            dates = load_or_build_ipo_dates(self._cache_dir)
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to load IPO dates (%s); listing_mask will fall back "
+                "to first_valid_index heuristic", e,
+            )
+            dates = None
+        if self._shared_cache is not None:
+            self._shared_cache["__ipo_dates__"] = dates
+        return dates
+
     def _cache_path(self) -> Path | None:
         if self._cache_dir is None:
             return None
@@ -623,8 +650,11 @@ class MLFactorStrategy(Strategy):
             # Kept for per_stock-mode tests and CLI paths that don't pre-build
             # the close panel.
             pool = self._build_truncated_pool(daily_df, current_date, current_bar)
-            X_pool, y_pool = build_panel(pool, cfg.factors, cfg.horizon,
-                                         mask_config=cfg.mask)
+            X_pool, y_pool = build_panel(
+                pool, cfg.factors, cfg.horizon,
+                mask_config=cfg.mask,
+                ipo_dates=self._get_ipo_dates(),
+            )
             if len(X_pool) > 0 and cfg.train_window > 0:
                 X_pool = X_pool.groupby(
                     level="stock", group_keys=False, sort=False,
