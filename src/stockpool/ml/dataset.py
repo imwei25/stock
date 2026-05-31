@@ -61,6 +61,8 @@ def forward_return_panel(
     close: pd.DataFrame,
     horizon: int,
     label_type: str = "return",
+    *,
+    mask: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """T×N forward-return panel with configurable label transform.
 
@@ -71,11 +73,18 @@ def forward_return_panel(
             "return"          — close[t+h] / close[t] - 1 (legacy, default).
             "vol_adjusted"    — NotImplementedError (placeholder for future PR).
             "cross_sec_rank"  — NotImplementedError (placeholder for future PR).
+        mask: 可选 T × N bool。若提供做双向检查 — 要求 mask[t]=True ∧ mask[t+horizon]=True;
+              不满足的 t 位置 y 值变 NaN。
     """
     if horizon <= 0:
         raise ValueError(f"horizon must be > 0, got {horizon}")
     if label_type == "return":
-        return close.shift(-horizon) / close - 1.0
+        y = close.shift(-horizon) / close - 1.0
+        if mask is not None:
+            shifted = mask.shift(-horizon)
+            label_valid = mask & shifted.where(shifted.notna(), False).astype(bool)
+            y = y.where(label_valid)
+        return y
     if label_type in ("vol_adjusted", "cross_sec_rank"):
         raise NotImplementedError(
             f"label_type={label_type!r} is not implemented in PR-A; "
