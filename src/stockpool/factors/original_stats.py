@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
+import numpy as np
 import pandas as pd
 
 from stockpool.factors.base import Factor
@@ -160,4 +161,4 @@ class VolumeStdFactor(Factor):
         v = panel["volume"]
         mean = v.rolling(self.n).mean()
         std = v.rolling(self.n).std()
-        return std / mean.replace(0.0, pd.NA)
+        return std / mean.replace(0.0, np.nan)
