@@ -154,6 +154,28 @@ def build_factor_panel(
     return compute_factor_panel(panel, factor_names)
 
 
+def _fundamentals_latest_mtime(cache_dir: str | Path | None) -> str | None:
+    """Return the newest mtime among ``data/fundamentals_*.parquet`` as ISO string.
+
+    Used by :func:`load_or_build_factor_panel` to invalidate the factor panel cache
+    when fundamentals (which factor sigs don't track) are refreshed independently.
+
+    Returns ``None`` when ``cache_dir`` is ``None`` or no ``fundamentals_*.parquet``
+    files exist (treated as "no fundamentals to worry about" — cache remains valid).
+    """
+    if cache_dir is None:
+        return None
+    p = Path(cache_dir)
+    if not p.exists():
+        return None
+    parquets = list(p.glob("fundamentals_*.parquet"))
+    if not parquets:
+        return None
+    latest = max(f.stat().st_mtime for f in parquets)
+    import datetime
+    return datetime.datetime.fromtimestamp(latest).isoformat()
+
+
 def _factor_panel_sig(
     factor_names: list[str],
     pool_data: Mapping[str, pd.DataFrame],
@@ -219,11 +241,31 @@ def load_or_build_factor_panel(
             close_path = root / "close.parquet"
             paths = {n: root / f"{n}.parquet" for n in meta.get("factors", [])}
             if close_path.exists() and all(p.exists() for p in paths.values()):
-                log.info("Factor panel cache hit: %s (sig=%s)", root, sig)
-                close_panel = pd.read_parquet(close_path)
-                factor_panel = {n: pd.read_parquet(p) for n, p in paths.items()}
-                return factor_panel, close_panel
-            log.warning("Factor panel manifest exists but parquets incomplete; rebuilding")
+                # Fundamentals (baostock quarterly) live outside the factor sig
+                # — if they were refreshed since the cache was built, the
+                # cached factor values are stale → force a rebuild.
+                # A None→non-None transition (fundamentals appeared since
+                # build) also counts as stale.
+                cached_fund_date = meta.get("fundamentals_snapshot_date")
+                current_fund_date = _fundamentals_latest_mtime(cache_dir)
+                stale = False
+                if current_fund_date is not None:
+                    if cached_fund_date is None or current_fund_date > cached_fund_date:
+                        stale = True
+                if stale:
+                    log.info(
+                        "Factor panel cache stale: fundamentals refreshed since build "
+                        "(cached=%s, current=%s); rebuilding",
+                        cached_fund_date, current_fund_date,
+                    )
+                    # fall through to rebuild
+                else:
+                    log.info("Factor panel cache hit: %s (sig=%s)", root, sig)
+                    close_panel = pd.read_parquet(close_path)
+                    factor_panel = {n: pd.read_parquet(p) for n, p in paths.items()}
+                    return factor_panel, close_panel
+            else:
+                log.warning("Factor panel manifest exists but parquets incomplete; rebuilding")
         except Exception as e:
             log.warning("Factor panel cache read failed (%s); rebuilding", e)
 
@@ -243,6 +285,7 @@ def load_or_build_factor_panel(
             "n_codes": len(pool_data),
             "last_date": last_iso,
             "built_at": pd.Timestamp.now("UTC").isoformat(),
+            "fundamentals_snapshot_date": _fundamentals_latest_mtime(cache_dir),
         }
         manifest_path.write_text(
             json.dumps(manifest_dict, indent=2),

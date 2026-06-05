@@ -170,3 +170,118 @@ def test_load_or_build_factor_panel_mask_independent_sig(tmp_path):
     panels_dir = tmp_path / "factor_panels"
     # 第二次是 cache hit,只有一个 sig 目录
     assert len(list(panels_dir.iterdir())) == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 15: fundamentals refresh invalidates the factor_panel cache.
+# ---------------------------------------------------------------------------
+
+
+def test_fundamentals_latest_mtime_helper_none_cache_dir():
+    """Helper returns None for None cache_dir."""
+    from stockpool.strategy_factory import _fundamentals_latest_mtime
+    assert _fundamentals_latest_mtime(None) is None
+
+
+def test_fundamentals_latest_mtime_helper_no_files(tmp_path):
+    """Helper returns None when no fundamentals_*.parquet files exist."""
+    from stockpool.strategy_factory import _fundamentals_latest_mtime
+    # tmp_path is empty
+    assert _fundamentals_latest_mtime(tmp_path) is None
+
+
+def test_fundamentals_latest_mtime_helper_with_files(tmp_path):
+    """Helper returns ISO mtime when files exist."""
+    from stockpool.strategy_factory import _fundamentals_latest_mtime
+    # Write 2 dummy fundamentals parquet files
+    pd.DataFrame({"x": [1, 2, 3]}).to_parquet(tmp_path / "fundamentals_profit.parquet")
+    pd.DataFrame({"y": [4, 5, 6]}).to_parquet(tmp_path / "fundamentals_balance.parquet")
+    iso = _fundamentals_latest_mtime(tmp_path)
+    assert iso is not None
+    assert isinstance(iso, str)
+    # ISO datetime format
+    assert "T" in iso or " " in iso
+
+
+def test_factor_panel_manifest_includes_fundamentals_snapshot_date(tmp_path):
+    """New build writes fundamentals_snapshot_date to manifest (None if no fundamentals)."""
+    # minimal pool_data with momentum-friendly fixture
+    dates = pd.date_range("2024-01-01", periods=80, freq="B")
+    df = pd.DataFrame({
+        "date": dates,
+        "open": 100.0 + np.arange(80) * 0.1,
+        "high": 101.0 + np.arange(80) * 0.1,
+        "low": 99.0 + np.arange(80) * 0.1,
+        "close": 100.0 + np.arange(80) * 0.1,
+        "volume": 1e6,
+    })
+    pool_data = {"A": df, "B": df.copy()}
+
+    load_or_build_factor_panel(["momentum_20"], pool_data, tmp_path)
+
+    # Find written manifest
+    panels_dir = tmp_path / "factor_panels"
+    sigs = list(panels_dir.iterdir())
+    assert len(sigs) == 1
+    manifest = json.loads((sigs[0] / "manifest.json").read_text())
+    assert "fundamentals_snapshot_date" in manifest
+    # No fundamentals files in tmp_path → None
+    assert manifest["fundamentals_snapshot_date"] is None
+
+
+def test_factor_panel_cache_invalidated_when_fundamentals_newer(tmp_path):
+    """Cache hit, then fundamentals parquet appears with newer mtime → rebuild."""
+    import os
+    import time
+
+    dates = pd.date_range("2024-01-01", periods=80, freq="B")
+    df = pd.DataFrame({
+        "date": dates,
+        "open": 100.0 + np.arange(80) * 0.1,
+        "high": 101.0 + np.arange(80) * 0.1,
+        "low": 99.0 + np.arange(80) * 0.1,
+        "close": 100.0 + np.arange(80) * 0.1,
+        "volume": 1e6,
+    })
+    pool_data = {"A": df, "B": df.copy()}
+
+    # First build — cache empty, will write to disk
+    load_or_build_factor_panel(["momentum_20"], pool_data, tmp_path)
+
+    panels_dir = tmp_path / "factor_panels"
+    sigs = list(panels_dir.iterdir())
+    sig_dir = sigs[0]
+    manifest_path = sig_dir / "manifest.json"
+    manifest_before = json.loads(manifest_path.read_text())
+    built_at_before = manifest_before["built_at"]
+
+    # Now write a fundamentals parquet with a NEWER mtime
+    time.sleep(0.05)  # ensure mtime differs
+    fund_path = tmp_path / "fundamentals_profit.parquet"
+    pd.DataFrame({"x": [1, 2, 3]}).to_parquet(fund_path)
+    # Force mtime to be later than manifest's built_at by setting to now+1
+    new_time = time.time() + 1.0
+    os.utime(fund_path, (new_time, new_time))
+
+    # Second build — should detect newer fundamentals mtime and rebuild.
+    # Spy on build_factor_panel to confirm it's actually invoked again
+    # (built_at timestamps may collide at sub-ms resolution on fast machines).
+    calls = {"n": 0}
+    real_bfp = sf.build_factor_panel
+
+    def spy_fp(*a, **kw):
+        calls["n"] += 1
+        return real_bfp(*a, **kw)
+
+    import unittest.mock as _mock
+    with _mock.patch.object(sf, "build_factor_panel", spy_fp):
+        load_or_build_factor_panel(["momentum_20"], pool_data, tmp_path)
+
+    assert calls["n"] == 1, "rebuild must invoke build_factor_panel"
+
+    manifest_after = json.loads(manifest_path.read_text())
+    # New manifest should record the new fundamentals_snapshot_date (no longer None)
+    assert manifest_after["fundamentals_snapshot_date"] is not None
+    # Sanity: the snapshot date in the rebuilt manifest reflects the new mtime
+    # (was None before since no fundamentals files existed at first build).
+    assert manifest_before["fundamentals_snapshot_date"] is None
