@@ -42,6 +42,17 @@ from stockpool.factors.registry import (
 from stockpool.factors import technical  # noqa: F401
 from stockpool.factors import wq101  # noqa: F401
 from stockpool.factors import custom  # noqa: F401
+from stockpool.factors import original_stats  # noqa: F401
+from stockpool.factors import ewma  # noqa: F401
+from stockpool.factors import vwap_deviation  # noqa: F401
+from stockpool.factors import close_position  # noqa: F401
+from stockpool.factors import turnover_extra  # noqa: F401
+from stockpool.factors import acceleration  # noqa: F401
+from stockpool.factors import single_stock_vol  # noqa: F401
+from stockpool.factors import composite  # noqa: F401
+from stockpool.factors import rank_correlation  # noqa: F401
+from stockpool.factors import cross_sec_breadth  # noqa: F401
+from stockpool.factors import fundamentals  # noqa: F401
 
 __all__ = [
     "Factor",

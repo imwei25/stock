@@ -151,3 +151,21 @@ def test_factor_does_not_mutate_input():
     f = make_factor("momentum_3")
     _ = f.compute(df)
     pd.testing.assert_frame_equal(df, snapshot)
+
+
+def test_factor_count_in_expected_range():
+    """所有新因子族落地后,总数应在合理范围内。
+    防止漏注册或意外重名。
+
+    Task 14 实测: 注册了 165 个基础因子名(builtin/wq101/custom + 11 个新族)。
+    list_specs() 返回每个 @register 一条,不展开 variant 后缀。
+    range 取实测值 ± 缓冲,作为漏注册保护。"""
+    from stockpool.factors import list_specs
+    n = len(list_specs())
+    assert 140 <= n <= 220, f"factor count={n} outside expected [140, 220]"
+
+
+def test_new_type_fundamental_registered():
+    """新引入的 type 标签 'fundamental' 应出现在 all_types 里。"""
+    from stockpool.factors import all_types
+    assert "fundamental" in all_types()
