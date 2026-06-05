@@ -943,13 +943,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stockpool", description="A-share signal analyzer")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_run = sub.add_parser("run", help="Full pipeline: fetch → analyze → report")
     p_run.add_argument("--config", default="config.yaml", help="Path (default: config.yaml)")
     p_run.add_argument("--refresh", action="store_true", help="Bypass cache, refetch all")
+    p_run.add_argument("--refresh-fundamentals", action="store_true",
+                       help="强制重拉 baostock 财务数据(绕过 30 天缓存)")
     p_run.add_argument("--stocks", default="", help="Only run listed codes (comma-separated)")
     p_run.add_argument("--skip-trading-day-check", action="store_true",
                        help="Run even on non-trading days (debug)")
@@ -960,6 +962,8 @@ def main(argv: list[str] | None = None) -> int:
     p_bt.add_argument("--refresh", action="store_true", help="Bypass cache, refetch all")
     p_bt.add_argument("--refresh-factor-panel", action="store_true",
                       help="Bypass data/factor_panels/ cache, recompute factors")
+    p_bt.add_argument("--refresh-fundamentals", action="store_true",
+                      help="强制重拉 baostock 财务数据(绕过 30 天缓存)")
     p_bt.add_argument("--stocks", default="", help="Only run listed codes (comma-separated)")
     p_bt.set_defaults(func=cmd_backtest)
 
@@ -980,6 +984,8 @@ def main(argv: list[str] | None = None) -> int:
                       help="Bypass per-stock OHLCV cache, refetch all")
     p_pb.add_argument("--refresh-scores", action="store_true",
                       help="Bypass data/portfolio_scores cache, recompute scores")
+    p_pb.add_argument("--refresh-fundamentals", action="store_true",
+                      help="强制重拉 baostock 财务数据(绕过 30 天缓存)")
     p_pb.set_defaults(func=cmd_portfolio_backtest)
 
     p_pab = sub.add_parser(
@@ -1100,6 +1106,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_pick_ic.set_defaults(func=cmd_factors_pick_by_ic)
 
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
 
