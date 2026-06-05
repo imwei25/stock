@@ -25,7 +25,7 @@ python -m stockpool fetch-universe [--workers 8] [--limit 100] [--refresh] [--so
 python -m pytest tests/ -q
 
 # 因子管理 (浏览 / 筛选 / 选择)
-python -m stockpool factors list                          # 列全部 (~111 个)
+python -m stockpool factors list                          # 列全部 (~165 个 base, 含变体 ~280-320)
 python -m stockpool factors list --source wq101           # 按来源筛
 python -m stockpool factors list --type cross_sectional   # 按类型筛
 python -m stockpool factors show alpha_001                # 看单个因子的元数据
@@ -75,6 +75,18 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 | `src/stockpool/factors/` | **连续因子库**(Factor ABC + 注册表 + 内置技术因子 + **WQ101**) |
 | `src/stockpool/factors/ops.py` | **WQ 算子库** (ts_rank / rank / decay_linear / indneutralize / ...) |
 | `src/stockpool/factors/wq101.py` | **WorldQuant 101 Formulaic Alphas** 全套实现 (Alpha001..Alpha101) |
+| `src/stockpool/factors/original_stats.py` | rolling 直接统计量族(close_std/skew/kurt、volume_skew/kurt、range_std、volume_std),~25 变体 |
+| `src/stockpool/factors/ewma.py` | EWMA 平滑动量/波动/换手 族(halflife 参数化),~15 变体 |
+| `src/stockpool/factors/vwap_deviation.py` | VWAP 偏离族 (close 相对 vwap proxy),~20 变体 |
+| `src/stockpool/factors/close_position.py` | 收盘位置动量族 ((C-L)/(H-L)),~15 变体 |
+| `src/stockpool/factors/turnover_extra.py` | 短窗换手 z-score / 量比,补 custom.turnover_zscore_60 长窗,~12 变体 |
+| `src/stockpool/factors/acceleration.py` | 动量/换手二阶差分,捕获趋势变速,~9 变体 |
+| `src/stockpool/factors/single_stock_vol.py` | ATR / CCI / 振幅 / Parkinson / Garman-Klass 波动率,~20 变体 |
+| `src/stockpool/factors/composite.py` | rank/decay/scale 复合算子拼装,~12 变体 |
+| `src/stockpool/factors/rank_correlation.py` | 价格秩 × 成交量秩滚动相关 系列,~20 变体 |
+| `src/stockpool/factors/cross_sec_breadth.py` | 全市场宽度因子(>MA20 占比/涨停占比/横截面 std),~7 变体。⚠️ 涨停股算入分子,与 mask config 无关 |
+| `src/stockpool/factors/fundamentals.py` | 基本面因子(PE/PB/ROE/ROA/毛利率/净利率/营收 YOY),baostock 5 张季度表,严格 PIT |
+| `src/stockpool/fundamentals_loader.py` | baostock 5 张季度财务表 (profit/growth/balance/cash_flow/dupont) PIT 长期缓存,parquet 30 天 staleness |
 | `src/stockpool/factors_picker.py` | **HTML 因子选择器** + `factors` CLI 子命令 |
 | `src/stockpool/industry_map.py` | `code → 行业` 映射;多源(`auto` / `baostock` / `akshare`);缓存到 `data/stock_industry_map.parquet`,>30 天过期自动重拉。**mootdx 路径无效**:TDX 服务器对 `block_hy.dat` 返回 0 字节 |
 | `src/stockpool/ipo_dates.py` | `code → IPO 日期` 映射(baostock `query_stock_basic`,5500+ 股一次性,~3-5 秒);缓存 `data/ipo_dates.parquet` 30 天有效。当 `cfg.strategy.ml_factor.mask.enabled=true` 且 `cache_dir` 可用时,`MLFactorStrategy._get_ipo_dates` 自动加载并传给 `_listing_mask`,避免后者 `first_valid_index` 启发式把缓存窗口短的成熟股错认成新上市(panel union 早于该股缓存起点时会触发 bug,可使 mask=False 比例虚高到 50%)|
@@ -202,6 +214,7 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 - `universe.parquet` — `fetch-universe` 写入的全 A 股清单 (code/name/market)
 - `stock_industry_map.parquet` — Pool B 用的 `code → 行业` 映射(akshare 东财板块,30 天有效期)
 - `ipo_dates.parquet` — baostock `query_stock_basic` 的 `code → IPO 日期` 映射(5500+ 行,~30 KB);30 天有效期。`mask.enabled=true` 时 `MLFactorStrategy` 自动加载,传给 `_listing_mask` 替代有 bug 的 `first_valid_index` 启发式
+- `fundamentals_profit.parquet` / `fundamentals_growth.parquet` / `fundamentals_balance.parquet` / `fundamentals_cash_flow.parquet` / `fundamentals_dupont.parquet` — baostock 季度财务长期缓存,含 `code / pubDate / statDate / <fields...>` 列,30 天有效期
 - `recommend_pool/poolb_<content_hash>_<isoyear>w<NN>.parquet` — Pool B 本周排名缓存
 - `factor_panels/<sig>/{manifest.json, close.parquet, <factor>.parquet × N}` — ml_factor pooled mode 的因子面板 + close 宽表落盘缓存 (PR-2);sig hash 包含 factors / sorted codes / last_date,任一变化自动失效。回测命令加 `--refresh-factor-panel` 旁路
 - `.data_source` — 单行文本,记录上次写入该 cache_dir 的 source(`mootdx`/`baostock`/`akshare`);任何 `fetch_*` 启动时与 cfg.data.source 比对,不一致触发 force_refresh + 覆写
@@ -212,7 +225,7 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 
 ## 测试
 
-374 个,`pytest tests/ -q` 一次跑完。按域分布:
+615 个,`pytest tests/ -q` 一次跑完。按域分布:
 
 | 文件 | 覆盖 |
 |---|---|
@@ -265,6 +278,19 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 | `test_panel_mask.py` | `_limit_threshold` 板块映射 + `_listing_mask` 成熟/新股 + `compute_tradability_mask` 三条件 + `apply_mask` NaN-out 正确性 + IPO 日期路径(成熟股短缓存不误屏蔽 / panel 内新 IPO 正确屏蔽 / 缺 IPO 默认成熟) |
 | `test_ops_mask_nan_safe.py` | `ts_mean/sum/std/product` 放宽 `min_periods` + `decay_linear` NaN-safe 重归一化;全 valid 输入下数值不变 |
 | `test_ml_strategy_mask.py` | `compute_factor_panel` / `forward_return_panel` / `build_factor_panel` / `build_panel` / `build_factor_matrix` 各层 mask 参数语义 + MLFactorStrategy sig 变化 + pooled/per_stock spy 验证 |
+| `test_factors_original_stats.py` | rolling 直接统计因子注册 + 数值 + look-ahead |
+| `test_factors_ewma.py` | EWMA 平滑因子 halflife 解析 + 公式对照 |
+| `test_factors_vwap_deviation.py` | VWAP 偏离族注册 + 单调性 + 无 look-ahead |
+| `test_factors_close_position.py` | 收盘位置 ∈ [0,1]、涨停封板 range=0 NaN 守护 |
+| `test_factors_turnover_extra.py` | 短窗换手族、停牌日 volume=0 NaN 守护 |
+| `test_factors_acceleration.py` | 二阶差分公式对照 + 无 look-ahead |
+| `test_factors_single_stock_vol.py` | ATR/CCI/振幅/Parkinson 正性 + 无 look-ahead |
+| `test_factors_composite.py` | 复合算子拼装的注册 + 无 look-ahead |
+| `test_factors_rank_correlation.py` | 秩相关 ∈ [-1,1] + 无 look-ahead |
+| `test_factors_cross_sec_breadth.py` | 全市场标量广播 + 涨停股算入宽度分子(spec §6.1.2) |
+| `test_factors_fundamentals.py` | 关键 PIT 测试:pubDate 之前 NaN、pubDate 后 ffill、亏损 PE NaN |
+| `test_fundamentals_loader.py` | baostock mock + cache hit / stale / force_refresh / failure-fallback |
+| `test_cli_refresh_fundamentals.py` | `--refresh-fundamentals` argparse wiring on run/backtest/portfolio-backtest |
 
 写测试时:**用合成 OHLCV、`monkeypatch` 掉 AKShare 和 `_today`**(`test_cli_backtest.py` 是参考)。
 
@@ -284,7 +310,7 @@ Panel = `{"open"|"high"|"low"|"close"|"volume": T×N DataFrame}`,行 = date,列 
 **注册表**支持双轴元数据:
 - `sources`: `builtin` / `wq101` / `custom`
 - `types`: `momentum` / `reversal` / `trend` / `volatility` / `volume` /
-           `time_series` / `cross_sectional` / `industry_neutral`
+           `time_series` / `cross_sectional` / `industry_neutral` / `fundamental`
 
 **API**: `list_specs()` / `filter_specs(sources=, types=, match='any')` /
        `all_sources()` / `all_types()` / `make_factor(name)`.
@@ -302,6 +328,18 @@ Panel = `{"open"|"high"|"low"|"close"|"volume": T×N DataFrame}`,行 = date,列 
 - `Alpha056` 需要 `cap`(总市值),目前返回全 NaN
 - **预算因子面板**:`strategy_factory.build_strategy` 在 `panel_mode=pooled` 且有 `pool_data` 时,会调 `build_factor_panel`(顶层助手)预算一份 `{factor_name: T×N}` 并注入 `MLFactorStrategy(factor_panel=...)`。`generate_signals` 通过 `_build_x_full` 切出本股的 X(`slice_stock_factor_matrix`),所以 cross-sec 因子在 predict 阶段也用真实横截面值,与训练一致。不注入时(``per_stock`` 模式或单股测试)fall back 到 `build_factor_matrix` 单股退化。CLI (`cli._prepare_ml_pool`) 在 8 只票循环外**预算 panel 一次**,避免每股重算 4000+ 列。
 - **训练/应用池分离**:`training_universe=all` 时,`cli._prepare_ml_pool` 用 `load_universe_cache(data/)` 装全市场 ~4350 只票作 pool_data(应用池 cfg.stocks 仍 merge 进去保证存在);predict 仍只对 cfg.stocks 跑。意味着 cross-sec 因子和 IC 加权拿到的是全市场横截面,而日报/回测的标的仍是 cfg.stocks 那几只。
+
+### 2026-05-31 因子扩展(11 家族 + 基本面)
+
+114 → ~165 个 base 因子(变体计含 ~280-320),按 11 家族扩展:
+
+- **VWAP 偏离 / 收盘位置 / 秩相关 / 单股波动 / 短窗换手 / 复合 / 加速度 / 直接统计 / 截面宽度 / EWMA / 基本面**
+
+命名语义化(`vwap_dev_5` / `close_pos_10` / `roe` 等)。Mask 行为完全沿用现状:因子看 raw close,mask 只在标签层。
+
+基本面族 PIT 设计:按 `pubDate`(公告日)前向填充,**不**用 `statDate`,防 ~1 个月未来泄露。首次拉 baostock 5 张季度表约 30-60 分钟,30 天缓存到 `data/fundamentals_*.parquet`。`--refresh-fundamentals` 强制重拉。
+
+`factor_panels/<sig>/manifest.json` 现含 `fundamentals_snapshot_date` 字段:若 fundamentals parquet 在 panel 缓存之后被刷新,panel 缓存自动失效重建(spec §5.6)。
 
 ### HTML 选择器
 
