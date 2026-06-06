@@ -113,3 +113,60 @@ def industry_neutralize_panel(
         lambda s: s - s.mean()
     )
     return demeaned.T
+
+
+def _is_all_off(cfg: "PreprocessConfig") -> bool:
+    """True when every step is disabled (cfg semantically a no-op)."""
+    return (
+        cfg.winsorize is None
+        and cfg.zscore is False
+        and cfg.industry_neutralize is False
+    )
+
+
+def apply_preprocess_pipeline(
+    factor_panel: dict[str, pd.DataFrame],
+    cfg: "PreprocessConfig",
+    sector_map: Mapping[str, str] | None = None,
+    factor_types: Mapping[str, tuple[str, ...]] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Run winsorize → cs_zscore → industry_neutralize on each factor.
+
+    Args:
+        factor_panel: ``{factor_name: T × N DataFrame}``.
+        cfg: ``PreprocessConfig`` controlling which steps run.
+        sector_map: ``{code: industry}``. Required when
+            ``cfg.industry_neutralize=True``; if missing/empty, that step is
+            skipped with a warning (other steps still run).
+        factor_types: ``{factor_name: (type_tag, ...)}``. Factors whose tag
+            tuple includes ``"fundamental"`` skip industry neutralize
+            (preserves sector-intrinsic signal like bank-low-PE).
+
+    Returns:
+        New dict with same keys; values are transformed (or shallow-copied
+        if cfg is all-off). Original input is never mutated.
+    """
+    if _is_all_off(cfg):
+        return dict(factor_panel)
+
+    out: dict[str, pd.DataFrame] = {}
+    do_neutralize = cfg.industry_neutralize and bool(sector_map)
+    if cfg.industry_neutralize and not sector_map:
+        log.warning(
+            "industry_neutralize=True but sector_map is empty/None; "
+            "skipping that step (winsorize/zscore still applied if enabled)"
+        )
+
+    for name, df in factor_panel.items():
+        work = df
+        if cfg.winsorize is not None:
+            lo, hi = cfg.winsorize
+            work = winsorize_panel(work, lo, hi)
+        if cfg.zscore:
+            work = cs_zscore_panel(work)
+        if do_neutralize:
+            tags = factor_types.get(name, ()) if factor_types else ()
+            if "fundamental" not in tags:
+                work = industry_neutralize_panel(work, sector_map)
+        out[name] = work
+    return out

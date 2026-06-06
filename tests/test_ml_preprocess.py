@@ -138,3 +138,112 @@ def test_industry_neutralize_preserves_index_columns():
     assert (out.index == df.index).all()
     assert list(out.columns) == list(df.columns)
     assert out.shape == df.shape
+
+
+def test_pipeline_all_off_returns_input():
+    """All-off cfg returns a shallow copy with same values (no transform)."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline
+    fp = {"f1": _make_panel(n_days=2, n_stocks=6),
+          "f2": _make_panel(n_days=2, n_stocks=6, seed=99)}
+    out = apply_preprocess_pipeline(fp, PreprocessConfig())
+    assert set(out.keys()) == {"f1", "f2"}
+    for k in out:
+        pd.testing.assert_frame_equal(out[k], fp[k])
+    # Shallow-copy semantics: dict is a fresh object, but frames are the same.
+    assert out is not fp
+
+
+def test_pipeline_all_on_three_steps_order():
+    """Pipeline runs winsorize → zscore → neutralize in that order."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline
+    df = _make_panel(n_days=3, n_stocks=20, seed=10)
+    fp = {"x": df}
+    sector_map = {f"S{i:03d}": f"ind_{i % 4}" for i in range(20)}
+    cfg = PreprocessConfig(
+        winsorize=(0.01, 0.99), zscore=True, industry_neutralize=True,
+    )
+    out = apply_preprocess_pipeline(fp, cfg, sector_map=sector_map)
+    # After neutralize, within-industry mean = 0 each day.
+    for d in df.index:
+        row = out["x"].loc[d]
+        for ind in {f"ind_{i}" for i in range(4)}:
+            members = [c for c, s in sector_map.items() if s == ind]
+            assert abs(row[members].mean()) < 1e-9
+
+
+def test_pipeline_skips_neutralize_when_no_sector_map(caplog):
+    """industry_neutralize=true but empty sector_map → warning, skip step."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline
+    df = _make_panel(n_days=2, n_stocks=10, seed=11)
+    fp = {"x": df}
+    cfg = PreprocessConfig(industry_neutralize=True)
+    import logging
+    with caplog.at_level(logging.WARNING, logger="stockpool.ml.preprocess"):
+        out = apply_preprocess_pipeline(fp, cfg, sector_map=None)
+    # No neutralize done → values unchanged (no other step enabled).
+    pd.testing.assert_frame_equal(out["x"], df)
+    assert any("sector_map" in r.message.lower() for r in caplog.records)
+
+
+def test_pipeline_skips_neutralize_for_fundamental_types():
+    """Factors tagged 'fundamental' bypass industry_neutralize."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline
+    df = _make_panel(n_days=2, n_stocks=10, seed=12)
+    fp = {"pe_ratio": df, "momentum_20": df.copy()}
+    factor_types = {
+        "pe_ratio": ("fundamental",),
+        "momentum_20": ("momentum", "time_series"),
+    }
+    sector_map = {f"S{i:03d}": f"ind_{i % 2}" for i in range(10)}
+    cfg = PreprocessConfig(industry_neutralize=True)
+    out = apply_preprocess_pipeline(
+        fp, cfg, sector_map=sector_map, factor_types=factor_types,
+    )
+    # pe_ratio untouched
+    pd.testing.assert_frame_equal(out["pe_ratio"], df)
+    # momentum_20 demeaned per industry
+    for d in df.index:
+        row = out["momentum_20"].loc[d]
+        for ind in {"ind_0", "ind_1"}:
+            members = [c for c, s in sector_map.items() if s == ind]
+            assert abs(row[members].mean()) < 1e-9
+
+
+def test_pipeline_partial_steps_independent():
+    """Each step independently togglable: zscore-only doesn't trigger others."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline, cs_zscore_panel
+    df = _make_panel(n_days=2, n_stocks=10, seed=13)
+    fp = {"x": df}
+    cfg = PreprocessConfig(zscore=True)
+    out = apply_preprocess_pipeline(fp, cfg)
+    pd.testing.assert_frame_equal(out["x"], cs_zscore_panel(df))
+
+
+def test_pipeline_preserves_factor_keys_and_shapes():
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline
+    fp = {"a": _make_panel(seed=20), "b": _make_panel(seed=21), "c": _make_panel(seed=22)}
+    cfg = PreprocessConfig(winsorize=(0.05, 0.95), zscore=True)
+    out = apply_preprocess_pipeline(fp, cfg)
+    assert set(out.keys()) == {"a", "b", "c"}
+    for k in out:
+        assert out[k].shape == fp[k].shape
+
+
+def test_is_all_off_true_for_defaults():
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import _is_all_off
+    assert _is_all_off(PreprocessConfig()) is True
+
+
+def test_is_all_off_false_for_any_step_enabled():
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import _is_all_off
+    assert _is_all_off(PreprocessConfig(zscore=True)) is False
+    assert _is_all_off(PreprocessConfig(winsorize=(0.01, 0.99))) is False
+    assert _is_all_off(PreprocessConfig(industry_neutralize=True)) is False
