@@ -121,6 +121,7 @@ def _is_all_off(cfg: "PreprocessConfig") -> bool:
         cfg.winsorize is None
         and cfg.zscore is False
         and cfg.industry_neutralize is False
+        and cfg.mcap_neutralize is False
     )
 
 

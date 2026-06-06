@@ -294,3 +294,24 @@ def test_pipeline_n_codes_above_min_runs_normally():
     cfg = PreprocessConfig(zscore=True, min_pool_size=200)
     out = apply_preprocess_pipeline(fp, cfg, n_codes=300)
     pd.testing.assert_frame_equal(out["x"], cs_zscore_panel(df))
+
+
+def test_is_all_off_treats_mcap_neutralize_as_active():
+    """mcap_neutralize=True alone must NOT short-circuit the pipeline."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import _is_all_off
+    cfg = PreprocessConfig(
+        winsorize=None, zscore=False,
+        industry_neutralize=False, mcap_neutralize=True,
+    )
+    assert _is_all_off(cfg) is False
+
+
+def test_is_all_off_true_when_everything_off_including_mcap():
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import _is_all_off
+    cfg = PreprocessConfig(
+        winsorize=None, zscore=False,
+        industry_neutralize=False, mcap_neutralize=False,
+    )
+    assert _is_all_off(cfg) is True
