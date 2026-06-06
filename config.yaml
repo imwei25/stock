@@ -18,6 +18,9 @@ stocks:
 
 data:
   history_days: 500
+  # Phase 2: 额外向前多拉 warmup_days 天数据(仅作为长 rolling 因子的 warmup,
+  # 不进入回测 bar 迭代和绩效统计;但进入 factor 计算和训练样本)。
+  warmup_days: 200
   cache_dir: "data"
   force_refresh: false
   # 数据源: mootdx(默认, 通达信 TCP, 含当日盘中) | baostock(无 token, 收盘后更新)

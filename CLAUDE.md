@@ -166,7 +166,7 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 所有字段由 `config.py:AppConfig` 校验。结构概览:
 
 - `stocks` — 股票池,每条含 `code` / `name` / `sector`
-- `data` — `history_days` / `cache_dir` / `force_refresh` / **`source`** (`mootdx` 默认 / `baostock` / `akshare`)。注意:(1) 切换 source **自动** force_refresh:`cache_dir/.data_source` 记录上次 source,`fetch_daily` / `fetch_index_daily` / `fetch_sector_daily` / `fetch_universe` 入口比对,不一致直接丢弃旧 parquet 重拉(volume 单位 mootdx=手 / baostock=股,混源会污染相对成交量指标);(2) 行业板块仅在 `source=akshare` 时走东财,其他两种 source 都用 **mootdx 的通达信行业指数 (88xxxx)**;名字→代码映射见 `mootdx_backend._TDX_INDUSTRY_CODES`,也可在 `stocks[].sector` 直接填 6 位 TDX 代码
+- `data` — `history_days` / **`warmup_days`** / `cache_dir` / `force_refresh` / **`source`** (`mootdx` 默认 / `baostock` / `akshare`)。注意:(1) **`warmup_days`** (2026-06-06 Phase 2,默认 0,`config.yaml` 显式设 200):额外向前多拉的 bars 仅作为长 rolling 因子(200 日 corr / momentum_120 等)的 warmup。**进入** factor 计算 + 训练样本(都 look-ahead 安全);**不进入** backtest bar 迭代和绩效统计(`backtest_runner.backtest_stocks` 和 `cli._analyze_one` 在 `simulate_*` 之前自动 trim 掉)。`fetch_daily`/`fetch_index_daily`/`fetch_sector_daily`/`fetch_universe`/`load_universe_cache` 都接收 `warmup_days=0` 默认参数,实际值由 caller 从 `cfg.data.warmup_days` 透传。(2) 切换 source **自动** force_refresh:`cache_dir/.data_source` 记录上次 source,`fetch_daily` / `fetch_index_daily` / `fetch_sector_daily` / `fetch_universe` 入口比对,不一致直接丢弃旧 parquet 重拉(volume 单位 mootdx=手 / baostock=股,混源会污染相对成交量指标);(3) 行业板块仅在 `source=akshare` 时走东财,其他两种 source 都用 **mootdx 的通达信行业指数 (88xxxx)**;名字→代码映射见 `mootdx_backend._TDX_INDUSTRY_CODES`,也可在 `stocks[].sector` 直接填 6 位 TDX 代码
 - `indicators` — MA 周期、MACD/KDJ/BOLL 参数
 - `weights` — 各信号触发的得分
 - `scoring` — `daily_weight` / `weekly_weight` / `resonance_bonus`(共振奖励)
