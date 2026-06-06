@@ -10,7 +10,7 @@ arms:
         min_train_samples: 60
         refit_every: 20
         panel_mode: pooled
-        training_universe: pool
+        training_universe: all
         selector: &id001
           type: lasso
           lasso:
@@ -59,7 +59,7 @@ arms:
         min_train_samples: 60
         refit_every: 20
         panel_mode: pooled
-        training_universe: pool
+        training_universe: all
         selector: *id001
         weighter: *id002
         thresholds: *id003
@@ -71,7 +71,7 @@ arms:
         preprocess:
           winsorize: [0.01, 0.99]
           zscore: true
-          industry_neutralize: true
+          industry_neutralize: false  # P1.5: keep off — single-member sub-industries still risk silent demean-to-zero even on full universe; revisit after global-reference design
     backtest:
       equity_curve_holding_days:
       - 10
