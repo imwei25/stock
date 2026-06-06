@@ -743,3 +743,28 @@ def test_preprocess_config_min_pool_size_zero_allowed():
     from stockpool.config import PreprocessConfig
     cfg = PreprocessConfig(min_pool_size=0)
     assert cfg.min_pool_size == 0
+
+
+# === Phase 2 warmup_days feature (Task W1) ===
+
+
+def test_data_config_warmup_days_default_zero():
+    """warmup_days defaults to 0 (no extra warmup; backwards compatible)."""
+    from stockpool.config import DataConfig
+    cfg = DataConfig(history_days=500, cache_dir="data")
+    assert cfg.warmup_days == 0
+
+
+def test_data_config_warmup_days_explicit():
+    from stockpool.config import DataConfig
+    cfg = DataConfig(history_days=500, cache_dir="data", warmup_days=200)
+    assert cfg.warmup_days == 200
+
+
+def test_data_config_warmup_days_negative_raises():
+    """warmup_days must be >= 0."""
+    import pytest
+    from pydantic import ValidationError
+    from stockpool.config import DataConfig
+    with pytest.raises(ValidationError):
+        DataConfig(history_days=500, cache_dir="data", warmup_days=-1)

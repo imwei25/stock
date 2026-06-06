@@ -30,6 +30,11 @@ class ContextConfig(BaseModel):
 
 class DataConfig(BaseModel):
     history_days: int = Field(gt=0)
+    warmup_days: int = Field(default=0, ge=0)
+    # Phase 2 (2026-06-06): extra historical bars pulled before history_days
+    # for factor warmup (e.g., 200-day rolling correlations need 200 bars of
+    # prior data). Backtest iteration and equity-curve metrics trim these
+    # away; only factor computation + training samples use the warmup region.
     cache_dir: str
     force_refresh: bool = False
     # 数据源后端: mootdx(通达信, 默认, 支持当日盘中) | baostock(无 token, 收盘后更新)
