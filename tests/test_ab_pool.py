@@ -707,3 +707,85 @@ def test_resolve_stocks_filter_intersect_with_ab_pool(tmp_path):
     )
     stocks = _resolve_stocks(ab_cfg, base_cfg)
     assert [s.code for s in stocks] == ["600519"]
+
+
+# ============================================================================
+# Task 9: portfolio_ab.yaml use_ab_pool integration
+# ============================================================================
+from stockpool.portfolio_ab.config import (
+    PortfolioABConfig, PortfolioArmOverride, load_portfolio_ab_config,
+    build_effective_cfg as portfolio_build_effective_cfg,
+)
+
+
+def _seed_ab_pool(tmp_path: Path, codes: list[str]):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    pd.DataFrame([
+        {"code": c, "name": f"N{c}", "industry": "test",
+         "circ_mv": 1e10, "avg_amount_20d": 1e8,
+         "source_tag": "mcap", "build_date": "2026-06-06"}
+        for c in codes
+    ]).to_parquet(data_dir / "ab_pool.parquet")
+    return str(data_dir / "ab_pool.parquet")
+
+
+def test_portfolio_ab_use_ab_pool_default_false():
+    cfg = PortfolioABConfig(
+        base_config="config.yaml",
+        arms={"a": PortfolioArmOverride(), "b": PortfolioArmOverride()},
+    )
+    assert cfg.use_ab_pool is False
+
+
+def test_portfolio_ab_injects_universe_codes(tmp_path):
+    """use_ab_pool=true → both arms' effective_cfg.portfolio_backtest.universe_codes
+    == parquet codes; training_universe unchanged by ab_pool injection."""
+    base_yaml = (Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(base_yaml, encoding="utf-8")
+    base_cfg = load_config(tmp_path / "config.yaml")
+    base_cfg.ab_pool.cache_path = _seed_ab_pool(tmp_path, ["600001", "600002"])
+
+    arm = PortfolioArmOverride(
+        strategy={"name": "composite_verdict"},
+        portfolio_backtest={"enabled": True},
+    )
+    eff_with_pool = portfolio_build_effective_cfg(
+        base_cfg, arm, use_ab_pool=True,
+    )
+    eff_without_pool = portfolio_build_effective_cfg(
+        base_cfg, arm, use_ab_pool=False,
+    )
+    assert eff_with_pool.portfolio_backtest.universe_codes == ["600001", "600002"]
+    # Training pool field on ml_factor must be untouched by ab_pool injection
+    # (the wholesale strategy override decides ml_factor; ab_pool injection
+    # only touches portfolio_backtest.universe_codes).
+    assert (
+        eff_with_pool.strategy.ml_factor.training_universe
+        == eff_without_pool.strategy.ml_factor.training_universe
+    )
+
+
+def test_portfolio_ab_per_arm_override_wins(tmp_path):
+    """Per-arm explicit universe_codes wins over use_ab_pool."""
+    base_yaml = (Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(base_yaml, encoding="utf-8")
+    base_cfg = load_config(tmp_path / "config.yaml")
+    base_cfg.ab_pool.cache_path = _seed_ab_pool(tmp_path, ["600001", "600002"])
+
+    arm = PortfolioArmOverride(
+        strategy={"name": "composite_verdict"},
+        portfolio_backtest={"enabled": True, "universe_codes": ["999999"]},
+    )
+    eff = portfolio_build_effective_cfg(base_cfg, arm, use_ab_pool=True)
+    assert eff.portfolio_backtest.universe_codes == ["999999"]
+
+
+def test_portfolio_ab_use_ab_pool_missing_parquet_raises(tmp_path):
+    base_yaml = (Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(base_yaml, encoding="utf-8")
+    base_cfg = load_config(tmp_path / "config.yaml")
+    base_cfg.ab_pool.cache_path = str(tmp_path / "data" / "ab_pool.parquet")
+    arm = PortfolioArmOverride(strategy={"name": "composite_verdict"})
+    with pytest.raises(FileNotFoundError, match="ab_pool"):
+        portfolio_build_effective_cfg(base_cfg, arm, use_ab_pool=True)

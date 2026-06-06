@@ -43,6 +43,7 @@ class PortfolioABConfig(BaseModel):
     """Top-level portfolio AB config (loaded from portfolio_ab.yaml)."""
     model_config = ConfigDict(extra="forbid")
     base_config: str
+    use_ab_pool: bool = False
     arms: dict[str, PortfolioArmOverride] = Field(..., min_length=2, max_length=2)
 
     @model_validator(mode="after")
@@ -68,7 +69,9 @@ def _deep_merge_dict(base: dict, override: dict) -> dict:
 
 
 def build_effective_cfg(
-    base: AppConfig, arm: PortfolioArmOverride,
+    base: AppConfig,
+    arm: PortfolioArmOverride,
+    use_ab_pool: bool = False,
 ) -> AppConfig:
     """Deep-merge an arm's overrides into the base config.
 
@@ -76,6 +79,9 @@ def build_effective_cfg(
       * ``arm.strategy`` (if set) replaces ``base.strategy`` *wholesale*.
       * ``arm.portfolio_backtest`` (if set) field-merges into
         ``base.portfolio_backtest`` (recursive for nested dicts).
+      * If ``use_ab_pool``: inject ab_pool codes into
+        ``portfolio_backtest.universe_codes`` unless the merged result
+        already has a non-None universe_codes (per-arm override always wins).
       * All other top-level fields pass through unchanged.
 
     Returns a fresh ``AppConfig`` with ``content_hash`` recomputed from a
@@ -93,6 +99,16 @@ def build_effective_cfg(
             merged.get("portfolio_backtest", {}) or {},
             arm.portfolio_backtest,
         )
+
+    if use_ab_pool:
+        from stockpool.ab_pool import load_ab_pool
+        pool_df = load_ab_pool(base.ab_pool.cache_path)
+        pool_codes = [str(c).zfill(6) for c in pool_df["code"]]
+        pb = merged.setdefault("portfolio_backtest", {})
+        # Per-arm override wins: only inject if universe_codes is None / absent
+        if pb.get("universe_codes") is None:
+            pb["universe_codes"] = pool_codes
+
     out = AppConfig.model_validate(merged)
     canonical = yaml.safe_dump(merged, sort_keys=True).encode("utf-8")
     out.content_hash = hashlib.sha256(canonical).hexdigest()[:8]
@@ -121,7 +137,7 @@ def load_portfolio_ab_config(path: str | Path) -> PortfolioABConfig:
     base_cfg = load_config(base_path)
     for name, arm in ab_cfg.arms.items():
         try:
-            build_effective_cfg(base_cfg, arm)
+            build_effective_cfg(base_cfg, arm, use_ab_pool=ab_cfg.use_ab_pool)
         except ValidationError as e:
             raise ValueError(
                 f"arm {name!r} fails effective-config validation: {e}"

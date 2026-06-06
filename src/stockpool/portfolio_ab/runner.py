@@ -220,7 +220,7 @@ def run_portfolio_ab(
     arms: dict[str, ArmResult] = {}
     for arm_name, override in ab_cfg.arms.items():
         try:
-            effective = build_effective_cfg(base_cfg, override)
+            effective = build_effective_cfg(base_cfg, override, use_ab_pool=ab_cfg.use_ab_pool)
         except Exception as e:  # noqa: BLE001
             log.error("[%s] effective-cfg merge failed: %s", arm_name, e)
             arms[arm_name] = ArmResult(
