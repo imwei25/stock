@@ -8,8 +8,10 @@ See docs/superpowers/specs/2026-06-06-ab-candidate-pool-design.md.
 """
 from __future__ import annotations
 
+from datetime import date as _date
 from typing import Literal
 
+import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
 
@@ -29,3 +31,37 @@ class AbPoolConfig(BaseModel):
     per_industry_top_liq: int = 2
     exclude_st: bool = True
     include_unknown_industry: bool = True
+
+
+def _apply_hard_filters(
+    df: pd.DataFrame,
+    cfg: AbPoolConfig,
+    today: _date | None = None,
+) -> pd.DataFrame:
+    """Apply pre-stratification hard filters.
+
+    Drops in order:
+      1. NaN circ_mv (stock missing from akshare snapshot)
+      2. ST / *ST / 退 names (if cfg.exclude_st)
+      3. IPO date within min_listing_days
+      4. avg_amount_20d below min_avg_amount_20d
+
+    Expects columns: code, name, industry, circ_mv, avg_amount_20d, ipo_date.
+    ``today`` is injectable for deterministic tests.
+    """
+    if today is None:
+        today = _date.today()
+    out = df.copy()
+    out = out[out["circ_mv"].notna()]
+    if cfg.exclude_st:
+        name_str = out["name"].astype(str)
+        is_st = (
+            name_str.str.upper().str.contains("ST", na=False)
+            | name_str.str.contains("退", na=False)
+        )
+        out = out[~is_st]
+    cutoff = pd.Timestamp(today) - pd.Timedelta(days=cfg.min_listing_days)
+    ipo_ts = pd.to_datetime(out["ipo_date"], errors="coerce")
+    out = out[ipo_ts <= cutoff]
+    out = out[out["avg_amount_20d"] >= cfg.min_avg_amount_20d]
+    return out.reset_index(drop=True)
