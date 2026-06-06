@@ -76,7 +76,9 @@ def test_mcap_neutralize_handles_all_nan_log_mcap_day():
 
 
 def test_mcap_neutralize_days_are_independent():
-    """Mutating log_mcap on one day must not change residuals on other days."""
+    """Mutating log_mcap on one day must not change residuals on other days,
+    AND must change residuals on the mutated day (so the test isn't trivially satisfied
+    by a function that ignores log_mcap entirely)."""
     from stockpool.ml.preprocess import mcap_neutralize_panel
     df = _panel(3, 30, seed=7)
     log_mcap = _panel(3, 30, seed=8)
@@ -84,5 +86,11 @@ def test_mcap_neutralize_days_are_independent():
     log_mcap_mod = log_mcap.copy()
     log_mcap_mod.iloc[1] = log_mcap_mod.iloc[1] * 100
     out2 = mcap_neutralize_panel(df, log_mcap_mod)
+    # Independence: rows 0 and 2 unchanged
     pd.testing.assert_series_equal(out1.iloc[0], out2.iloc[0])
     pd.testing.assert_series_equal(out1.iloc[2], out2.iloc[2])
+    # Effectiveness: mutated row 1 is different
+    assert not out1.iloc[1].equals(out2.iloc[1]), (
+        "mutating log_mcap on day 1 produced identical residuals — "
+        "function may be ignoring log_mcap input"
+    )

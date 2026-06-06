@@ -146,7 +146,7 @@ def mcap_neutralize_panel(
     if df.empty:
         return df.copy()
     log_mcap_aligned = log_mcap.reindex(index=df.index, columns=df.columns)
-    out = df.copy()
+    out = df.astype(float).copy()
     fallback_days = 0
     for date in df.index:
         y = df.loc[date]
