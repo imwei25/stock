@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as _date
+from pathlib import Path as _Path
 from typing import Literal
 
 import pandas as pd
@@ -112,4 +113,56 @@ def _stratified_select(df: pd.DataFrame, cfg: AbPoolConfig) -> pd.DataFrame:
             columns=["code", "name", "industry", "circ_mv",
                      "avg_amount_20d", "source_tag"]
         )
+    return pd.DataFrame(rows)
+
+
+def _import_akshare():
+    """Indirection seam for tests — mock this function, not `import akshare`."""
+    import akshare
+    return akshare
+
+
+def _fetch_circ_mv_snapshot() -> pd.DataFrame:
+    """Pull 全 A 股流通市值 snapshot from akshare's stock_zh_a_spot_em.
+
+    Returns columns: code (str, 6-digit zero-padded), name (str), circ_mv (yuan).
+    Raises on akshare failure — caller decides exit semantics.
+    """
+    ak = _import_akshare()
+    raw = ak.stock_zh_a_spot_em()
+    out = pd.DataFrame({
+        "code": raw["代码"].astype(str).str.zfill(6),
+        "name": raw["名称"].astype(str),
+        "circ_mv": pd.to_numeric(raw["流通市值"], errors="coerce"),
+    })
+    return out
+
+
+def _compute_avg_amount_20d(
+    codes: list[str],
+    cache_dir: str | _Path,
+) -> pd.DataFrame:
+    """For each code, compute mean(volume * close * 100) over last 20 bars.
+
+    Reads from <cache_dir>/<code>_daily.parquet. Missing files yield NaN.
+    Returns columns: code, avg_amount_20d.
+
+    Note: mootdx volume unit is 手 (= 100 股), so multiply by 100 to get 元.
+    Matches recommend_pool._apply_funnel:172-174.
+    """
+    cache_dir = _Path(cache_dir)
+    rows: list[dict] = []
+    for code in codes:
+        path = cache_dir / f"{code}_daily.parquet"
+        if not path.exists():
+            rows.append({"code": code, "avg_amount_20d": float("nan")})
+            continue
+        try:
+            daily = pd.read_parquet(path)
+            tail = daily.tail(20)
+            avg = float((tail["volume"] * tail["close"] * 100).mean())
+        except Exception as e:
+            log.warning("ab_pool: avg_amount calc failed for %s (%s)", code, e)
+            avg = float("nan")
+        rows.append({"code": code, "avg_amount_20d": avg})
     return pd.DataFrame(rows)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -222,3 +223,61 @@ def test_stratified_output_columns():
     out = _stratified_select(df, cfg)
     assert set(out.columns) >= {"code", "name", "industry", "circ_mv",
                                 "avg_amount_20d", "source_tag"}
+
+
+from stockpool.ab_pool import _fetch_circ_mv_snapshot, _compute_avg_amount_20d
+
+
+def test_fetch_circ_mv_snapshot_normalizes(monkeypatch):
+    """Mock akshare; verify shape: columns code/name/circ_mv (float, yuan)."""
+    fake_df = pd.DataFrame({
+        "代码": ["600519", "000001"],
+        "名称": ["贵州茅台", "平安银行"],
+        "流通市值": [2.1e12, 3.2e11],  # akshare already returns yuan
+    })
+    mock_ak = MagicMock()
+    mock_ak.stock_zh_a_spot_em.return_value = fake_df
+    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
+
+    out = _fetch_circ_mv_snapshot()
+
+    assert list(out.columns) == ["code", "name", "circ_mv"]
+    assert list(out["code"]) == ["600519", "000001"]
+    assert list(out["name"]) == ["贵州茅台", "平安银行"]
+    assert out["circ_mv"].dtype.kind == "f"
+    assert out["circ_mv"].iloc[0] == pytest.approx(2.1e12)
+
+
+def test_fetch_circ_mv_snapshot_propagates_error(monkeypatch):
+    def raise_err():
+        raise RuntimeError("akshare timeout")
+    mock_ak = MagicMock()
+    mock_ak.stock_zh_a_spot_em.side_effect = raise_err
+    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
+    with pytest.raises(RuntimeError, match="akshare"):
+        _fetch_circ_mv_snapshot()
+
+
+def test_compute_avg_amount_20d_basic(tmp_path: Path):
+    """Synthesize per-stock parquet, verify avg_amount = mean(vol*close*100) tail-20."""
+    cache_dir = tmp_path
+    dates = pd.date_range("2026-01-01", periods=30, freq="B")
+    # vol*close*100 average of last 20 should be 100 * (100 * 10) = 100000
+    df = pd.DataFrame({
+        "date": dates,
+        "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0,
+        "volume": 100.0,
+    })
+    df.to_parquet(cache_dir / "600519_daily.parquet")
+
+    out = _compute_avg_amount_20d(["600519"], cache_dir)
+    assert list(out["code"]) == ["600519"]
+    assert out["avg_amount_20d"].iloc[0] == pytest.approx(100.0 * 10.0 * 100)
+
+
+def test_compute_avg_amount_20d_missing_file_nan(tmp_path: Path):
+    """Missing parquet → NaN, not crash."""
+    out = _compute_avg_amount_20d(["600519"], tmp_path)
+    assert list(out["code"]) == ["600519"]
+    import math
+    assert math.isnan(out["avg_amount_20d"].iloc[0])
