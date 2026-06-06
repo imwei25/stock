@@ -252,3 +252,91 @@ def test_fetch_daily_auto_refresh_on_source_change(tmp_path):
 
     assert mocked_bs.called, "baostock backend should be invoked when source changes"
     assert not mocked_ak.called, "akshare should NOT be called when source=baostock"
+
+
+# ---------------------------------------------------------------------------
+# warmup_days tests (Task W2)
+# ---------------------------------------------------------------------------
+
+def test_fetch_daily_returns_history_plus_warmup(tmp_path, monkeypatch):
+    """fetch_daily returns history_days + warmup_days bars when both > 0."""
+    from stockpool import fetcher
+
+    dates = pd.date_range("2022-01-01", periods=1000, freq="B")
+    fake = pd.DataFrame({
+        "date": dates,
+        "open": [100.0] * 1000,
+        "high": [101.0] * 1000,
+        "low": [99.0] * 1000,
+        "close": [100.5] * 1000,
+        "volume": [1_000_000] * 1000,
+    })
+    monkeypatch.setattr(fetcher, "_dispatch_stock", lambda src, c, start=None: fake)
+    monkeypatch.setattr(fetcher, "_is_stale", lambda *a, **k: False)
+
+    out = fetcher.fetch_daily(
+        "000001", history_days=500, cache_dir=str(tmp_path),
+        force_refresh=True, warmup_days=200,
+    )
+    assert len(out) == 700, f"expected 700 (500+200) rows, got {len(out)}"
+
+
+def test_fetch_daily_default_warmup_zero(tmp_path, monkeypatch):
+    """fetch_daily without warmup_days returns history_days bars (backward compat)."""
+    from stockpool import fetcher
+
+    dates = pd.date_range("2022-01-01", periods=1000, freq="B")
+    fake = pd.DataFrame({
+        "date": dates,
+        "open": [100.0] * 1000,
+        "high": [101.0] * 1000,
+        "low": [99.0] * 1000,
+        "close": [100.5] * 1000,
+        "volume": [1_000_000] * 1000,
+    })
+    monkeypatch.setattr(fetcher, "_dispatch_stock", lambda src, c, start=None: fake)
+    monkeypatch.setattr(fetcher, "_is_stale", lambda *a, **k: False)
+
+    out = fetcher.fetch_daily(
+        "000001", history_days=500, cache_dir=str(tmp_path),
+        force_refresh=True,
+    )
+    assert len(out) == 500
+
+
+def test_fetch_index_daily_with_warmup(tmp_path, monkeypatch):
+    """fetch_index_daily returns history_days + warmup_days bars."""
+    from stockpool import fetcher
+
+    dates = pd.date_range("2022-01-01", periods=1000, freq="B")
+    fake = pd.DataFrame({
+        "date": dates, "open": [3000.0] * 1000, "high": [3010.0] * 1000,
+        "low": [2990.0] * 1000, "close": [3005.0] * 1000, "volume": [1e9] * 1000,
+    })
+    monkeypatch.setattr(fetcher, "_dispatch_index", lambda src, s: fake)
+    monkeypatch.setattr(fetcher, "_is_stale", lambda *a, **k: False)
+
+    out = fetcher.fetch_index_daily(
+        "sh000001", history_days=300, cache_dir=str(tmp_path),
+        force_refresh=True, warmup_days=100,
+    )
+    assert len(out) == 400
+
+
+def test_fetch_sector_daily_with_warmup(tmp_path, monkeypatch):
+    """fetch_sector_daily returns history_days + warmup_days bars."""
+    from stockpool import fetcher
+
+    dates = pd.date_range("2022-01-01", periods=1000, freq="B")
+    fake = pd.DataFrame({
+        "date": dates, "open": [1000.0] * 1000, "high": [1010.0] * 1000,
+        "low": [990.0] * 1000, "close": [1005.0] * 1000, "volume": [1e8] * 1000,
+    })
+    monkeypatch.setattr(fetcher, "_dispatch_sector", lambda src, s, start=None: fake)
+    monkeypatch.setattr(fetcher, "_is_stale", lambda *a, **k: False)
+
+    out = fetcher.fetch_sector_daily(
+        "化工", history_days=200, cache_dir=str(tmp_path),
+        force_refresh=True, warmup_days=50,
+    )
+    assert len(out) == 250

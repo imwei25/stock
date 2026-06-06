@@ -187,8 +187,13 @@ def fetch_daily(
     cache_dir: str | Path,
     force_refresh: bool = False,
     source: Source = "akshare",
+    warmup_days: int = 0,
 ) -> pd.DataFrame:
-    """Return latest `history_days` daily K bars (English column names).
+    """Return latest ``history_days + warmup_days`` daily K bars (English column names).
+
+    The ``warmup_days`` prefix lets long rolling factors warm up before the
+    official backtest window (callers trim those bars before equity-curve
+    iteration). Default 0 keeps backward compatibility.
 
     Uses local Parquet cache, only triggers incremental fetch when needed.
     """
@@ -215,7 +220,7 @@ def fetch_daily(
     need_fetch = (
         force_refresh
         or cached is None
-        or len(cached) < history_days
+        or len(cached) < (history_days + warmup_days)
         or (cached is not None and not force_refresh and _is_stale(cached))
     )
 
@@ -233,7 +238,7 @@ def fetch_daily(
         combined.to_parquet(cache_file, index=False)
         cached = combined
 
-    return cached.tail(history_days).reset_index(drop=True)
+    return cached.tail(history_days + warmup_days).reset_index(drop=True)
 
 
 def _fetch_index_from_akshare(symbol: str) -> pd.DataFrame:
@@ -269,8 +274,12 @@ def fetch_index_daily(
     cache_dir: str | Path,
     force_refresh: bool = False,
     source: Source = "akshare",
+    warmup_days: int = 0,
 ) -> pd.DataFrame:
-    """Return latest `history_days` daily bars for a market index.
+    """Return latest ``history_days + warmup_days`` daily bars for a market index.
+
+    The ``warmup_days`` prefix lets long rolling factors warm up before the
+    official backtest window. Default 0 keeps backward compatibility.
 
     stock_zh_index_daily fetches all history at once (no start_date param),
     so we always replace the cache on a stale hit rather than appending.
@@ -292,7 +301,7 @@ def fetch_index_daily(
     need_fetch = (
         force_refresh
         or cached is None
-        or len(cached) < history_days
+        or len(cached) < (history_days + warmup_days)
         or (cached is not None and not force_refresh and _is_stale(cached))
     )
 
@@ -305,7 +314,7 @@ def fetch_index_daily(
         cached = fresh
 
     assert cached is not None
-    return cached.tail(history_days).reset_index(drop=True)
+    return cached.tail(history_days + warmup_days).reset_index(drop=True)
 
 
 def _fetch_sector_from_akshare(sector_name: str, start: str | None = None) -> pd.DataFrame:
@@ -353,8 +362,13 @@ def fetch_sector_daily(
     cache_dir: str | Path,
     force_refresh: bool = False,
     source: Source = "akshare",
+    warmup_days: int = 0,
 ) -> pd.DataFrame:
-    """Return latest `history_days` daily bars for an industry sector board."""
+    """Return latest ``history_days + warmup_days`` daily bars for an industry sector board.
+
+    The ``warmup_days`` prefix lets long rolling factors warm up before the
+    official backtest window. Default 0 keeps backward compatibility.
+    """
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
     if check_source_change(cache_dir, source):
         force_refresh = True
@@ -373,7 +387,7 @@ def fetch_sector_daily(
     need_fetch = (
         force_refresh
         or cached is None
-        or len(cached) < history_days
+        or len(cached) < (history_days + warmup_days)
         or (cached is not None and not force_refresh and _is_stale(cached))
     )
 
@@ -392,7 +406,7 @@ def fetch_sector_daily(
         cached = combined
 
     assert cached is not None
-    return cached.tail(history_days).reset_index(drop=True)
+    return cached.tail(history_days + warmup_days).reset_index(drop=True)
 
 
 def list_universe(source: Source = "mootdx") -> pd.DataFrame:
