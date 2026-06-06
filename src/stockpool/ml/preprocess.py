@@ -80,3 +80,36 @@ def cs_zscore_panel(df: pd.DataFrame) -> pd.DataFrame:
         for d in df.index[degenerate]:
             out.loc[d] = out.loc[d].where(df.loc[d].isna(), 0.0)
     return out
+
+
+def industry_neutralize_panel(
+    df: pd.DataFrame, sector_map: Mapping[str, str],
+) -> pd.DataFrame:
+    """Per-day within-industry demean.
+
+    Args:
+        df: T × N factor wide-frame (columns = codes).
+        sector_map: ``{code: industry_label}``. Codes absent from the map
+            fall into a single ``"_unknown_"`` bucket and are demeaned together.
+
+    Returns:
+        Same-shape DataFrame, each cell ``= x - mean(x within industry on day)``.
+
+    Raises:
+        ValueError: if ``sector_map`` is empty (caller catches and skips).
+    """
+    if not sector_map:
+        raise ValueError("sector_map is empty; cannot industry-neutralize")
+    industries = pd.Series(
+        {c: sector_map.get(c, "_unknown_") for c in df.columns},
+        name="industry",
+    )
+    # Transpose so each industry is contiguous rows; groupby + transform demean.
+    transposed = df.T.copy()
+    transposed["__industry__"] = industries
+    # For each day column, subtract per-industry mean.
+    date_cols = [c for c in transposed.columns if c != "__industry__"]
+    demeaned = transposed.groupby("__industry__")[date_cols].transform(
+        lambda s: s - s.mean()
+    )
+    return demeaned.T

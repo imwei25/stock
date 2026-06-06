@@ -95,3 +95,46 @@ def test_cs_zscore_preserves_index_columns():
     assert (out.index == df.index).all()
     assert list(out.columns) == list(df.columns)
     assert out.shape == df.shape
+
+
+def test_industry_neutralize_within_group_mean_zero():
+    """Per-day, within each industry group, mean of values is 0."""
+    from stockpool.ml.preprocess import industry_neutralize_panel
+    df = _make_panel(n_days=3, n_stocks=12, seed=6)
+    # 3 industries × 4 stocks each.
+    sector_map = {f"S{i:03d}": f"ind_{i // 4}" for i in range(12)}
+    out = industry_neutralize_panel(df, sector_map)
+    for d in df.index:
+        row = out.loc[d]
+        for ind in {"ind_0", "ind_1", "ind_2"}:
+            members = [c for c, s in sector_map.items() if s == ind]
+            assert abs(row[members].mean()) < 1e-9
+
+
+def test_industry_neutralize_unknown_code_bucket():
+    """Codes not in sector_map go to '_unknown_' bucket and are demeaned together."""
+    from stockpool.ml.preprocess import industry_neutralize_panel
+    df = _make_panel(n_days=2, n_stocks=6, seed=7)
+    sector_map = {"S000": "A", "S001": "A"}  # only 2 of 6 mapped
+    out = industry_neutralize_panel(df, sector_map)
+    unknown_cols = [f"S{i:03d}" for i in range(2, 6)]
+    for d in df.index:
+        assert abs(out.loc[d, unknown_cols].mean()) < 1e-9
+
+
+def test_industry_neutralize_empty_sector_map_raises():
+    """Empty sector_map raises — caller (apply_pipeline) wraps in try/skip."""
+    from stockpool.ml.preprocess import industry_neutralize_panel
+    df = _make_panel()
+    with pytest.raises(ValueError):
+        industry_neutralize_panel(df, {})
+
+
+def test_industry_neutralize_preserves_index_columns():
+    from stockpool.ml.preprocess import industry_neutralize_panel
+    df = _make_panel(n_days=2, n_stocks=8)
+    sector_map = {f"S{i:03d}": f"ind_{i % 2}" for i in range(8)}
+    out = industry_neutralize_panel(df, sector_map)
+    assert (out.index == df.index).all()
+    assert list(out.columns) == list(df.columns)
+    assert out.shape == df.shape
