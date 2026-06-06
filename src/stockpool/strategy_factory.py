@@ -72,7 +72,10 @@ def build_strategy(
             and cfg.strategy.ml_factor.panel_mode == "pooled"
             and pool_data
         ):
-            factor_panel = build_factor_panel(cfg.strategy.ml_factor.factors, pool_data)
+            factor_panel = build_factor_panel(
+                cfg.strategy.ml_factor.factors, pool_data,
+                cache_dir=cfg.data.cache_dir,
+            )
         if (
             close_panel is None
             and cfg.strategy.ml_factor.panel_mode == "pooled"
@@ -118,6 +121,7 @@ def build_factor_panel(
     factor_names: list[str],
     pool_data: Mapping[str, pd.DataFrame],
     preprocess_cfg: "PreprocessConfig | None" = None,
+    cache_dir: str | Path | None = None,
 ) -> dict[str, pd.DataFrame]:
     """从 ``{code: daily_df}`` 装一个 OHLCV Panel,在 Panel 上算所有因子,
     返回 ``{factor_name: T×N DataFrame}``。
@@ -134,8 +138,11 @@ def build_factor_panel(
         pool_data: ``{code: daily_df}``.
         preprocess_cfg: 可选的 ``PreprocessConfig``。非 None 且非全关时,
             对原始因子 panel 运行 winsorize / cs_zscore / industry_neutralize
-            流水线(见 ``ml/preprocess.py``)。sector_map 从
-            ``factors.context.get_sector_map()`` 读取(caller 责任注入)。
+            / mcap_neutralize 流水线(见 ``ml/preprocess.py``)。sector_map
+            从 ``factors.context.get_sector_map()`` 读取(caller 责任注入)。
+        cache_dir: 用于 ``build_log_mcap_panel`` 取 baostock balance 缓存的
+            根目录。``mcap_neutralize=True`` 且 ``cache_dir=None`` 时 log 一条
+            warning 并跳过 mcap 步骤(其他步骤照常)。
     """
     from stockpool.ml.dataset import compute_factor_panel
     from stockpool.ml import preprocess as preproc_mod
@@ -167,9 +174,21 @@ def build_factor_panel(
     types_map = {
         s.base_name: s.types for s in list_specs() if s.base_name in factor_names
     }
+
+    log_mcap_panel = None
+    if preprocess_cfg.mcap_neutralize:
+        if cache_dir is None:
+            log.warning(
+                "mcap_neutralize=True but cache_dir=None; cannot load baostock "
+                "balance — skipping mcap step (winsorize/zscore/industry still applied)"
+            )
+        else:
+            from stockpool.ml.mcap import build_log_mcap_panel
+            log_mcap_panel = build_log_mcap_panel(panel, cache_dir=cache_dir)
+
     return preproc_mod.apply_preprocess_pipeline(
         raw, preprocess_cfg, sector_map=sector_map, factor_types=types_map,
-        n_codes=len(pool_data),
+        n_codes=len(pool_data), log_mcap_panel=log_mcap_panel,
     )
 
 
@@ -299,7 +318,11 @@ def load_or_build_factor_panel(
 
     log.info("Building factor panel: %d factors × %d stocks (sig=%s)",
              len(factor_names), len(pool_data), sig)
-    factor_panel = build_factor_panel(factor_names, pool_data, preprocess_cfg=preprocess_cfg)
+    factor_panel = build_factor_panel(
+        factor_names, pool_data,
+        preprocess_cfg=preprocess_cfg,
+        cache_dir=cache_dir,
+    )
     close_panel = build_close_panel(pool_data)
 
     root.mkdir(parents=True, exist_ok=True)

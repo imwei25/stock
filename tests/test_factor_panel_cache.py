@@ -342,10 +342,12 @@ def test_build_factor_panel_passes_preprocess(monkeypatch):
     called = {}
     real_apply = preproc_mod.apply_preprocess_pipeline
 
-    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None):
+    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None,
+            log_mcap_panel=None):
         called["cfg"] = cfg
         called["n_factors"] = len(fp)
-        return real_apply(fp, cfg, sector_map=sector_map, factor_types=factor_types, n_codes=n_codes)
+        return real_apply(fp, cfg, sector_map=sector_map, factor_types=factor_types,
+                          n_codes=n_codes, log_mcap_panel=log_mcap_panel)
 
     monkeypatch.setattr(preproc_mod, "apply_preprocess_pipeline", spy)
 
@@ -397,10 +399,12 @@ def test_build_factor_panel_passes_n_codes_to_pipeline(monkeypatch):
     captured = {}
     real = preproc_mod.apply_preprocess_pipeline
 
-    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None):
+    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None,
+            log_mcap_panel=None):
         captured["n_codes"] = n_codes
         return real(fp, cfg, sector_map=sector_map,
-                    factor_types=factor_types, n_codes=n_codes)
+                    factor_types=factor_types, n_codes=n_codes,
+                    log_mcap_panel=log_mcap_panel)
 
     monkeypatch.setattr(preproc_mod, "apply_preprocess_pipeline", spy)
 
