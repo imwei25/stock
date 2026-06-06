@@ -18,7 +18,7 @@ from stockpool.factors.registry import register
     "vwap_dev",
     sources=("builtin",),
     types=("trend", "volume", "time_series"),
-    description="(close - vwap) / vwap 的 N 日均值",
+    description="近 N 日收盘价相对当日 VWAP 代理(高+低+收)/3 的平均偏离率。持续正 = 尾盘倾向拉抬,持续负 = 尾盘抛压。",
 )
 class VWAPDevFactor(Factor):
     def __init__(self, n: int = 5):
@@ -40,7 +40,7 @@ class VWAPDevFactor(Factor):
     "vwap_weighted_mom",
     sources=("builtin",),
     types=("momentum", "volume", "time_series"),
-    description="量加权偏离动量: sum_d((close-vwap)*volume) / sum_d(volume) / vwap[t]",
+    description="用成交量加权的“收盘 vs VWAP”偏离动量。放量日的偏离权重更大,反映真实成交压力方向。",
 )
 class VWAPWeightedMomFactor(Factor):
     def __init__(self, n: int = 5):
@@ -65,7 +65,7 @@ class VWAPWeightedMomFactor(Factor):
     "vwap_above_ratio",
     sources=("builtin",),
     types=("trend", "time_series"),
-    description="N 日内 close > vwap 的天数比例 ∈ [0, 1]",
+    description="N 日内收盘价超过当日 VWAP 的天数比例 ∈ [0,1]。越接近 1 越强势(几乎每天买盘都赢均价)。",
 )
 class VWAPAboveRatioFactor(Factor):
     def __init__(self, n: int = 5):
@@ -87,7 +87,7 @@ class VWAPAboveRatioFactor(Factor):
     "vwap_dev_std",
     sources=("builtin",),
     types=("volatility", "volume", "time_series"),
-    description="(close - vwap) / vwap 的 N 日 std",
+    description="收盘相对 VWAP 偏离率在 N 日内的波动率。值大 = 收盘与日内均价的关系飘忽,常见于换手频繁的票。",
 )
 class VWAPDevStdFactor(Factor):
     def __init__(self, n: int = 20):

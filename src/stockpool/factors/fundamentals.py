@@ -83,7 +83,7 @@ class _ScalarFundamentalFactor(Factor):
     "roe",
     sources=("custom",),
     types=("fundamental", "cross_sectional"),
-    description="ROE (return on equity, profit.roeAvg) PIT 前向填充",
+    description="净资产收益率,股东每投 1 元年化能赚多少。长期 > 15% 通常是优质资产;严格按公告日 PIT 对齐(只看已披露)。",
 )
 class ROEFactor(_ScalarFundamentalFactor):
     _table = "profit"
@@ -98,7 +98,7 @@ class ROEFactor(_ScalarFundamentalFactor):
     "roa",
     sources=("custom",),
     types=("fundamental", "cross_sectional"),
-    description="ROA (return on assets, profit.roaAvg) PIT 前向填充",
+    description="总资产收益率,每 1 元资产年化产出多少利润。衡量经营效率;与 ROE 对比可看出杠杆水平。",
 )
 class ROAFactor(_ScalarFundamentalFactor):
     _table = "profit"
@@ -113,7 +113,7 @@ class ROAFactor(_ScalarFundamentalFactor):
     "gross_margin",
     sources=("custom",),
     types=("fundamental", "cross_sectional"),
-    description="毛利率 profit.gpMargin",
+    description="毛利率(销售毛利占收入比例)。高且稳 = 产品有定价权或成本控制好,常见于消费/高科技龙头。",
 )
 class GrossMarginFactor(_ScalarFundamentalFactor):
     _table = "profit"
@@ -128,7 +128,7 @@ class GrossMarginFactor(_ScalarFundamentalFactor):
     "net_margin",
     sources=("custom",),
     types=("fundamental", "cross_sectional"),
-    description="净利率 profit.npMargin",
+    description="净利率(净利润占收入比例),企业最终留下的赚钱能力,综合反映成本+费用+税负+其他损益。",
 )
 class NetMarginFactor(_ScalarFundamentalFactor):
     _table = "profit"
@@ -143,7 +143,7 @@ class NetMarginFactor(_ScalarFundamentalFactor):
     "revenue_yoy",
     sources=("custom",),
     types=("fundamental", "cross_sectional"),
-    description="营收同比 growth.YOYIncome",
+    description="营收同比增长率,看企业当下的成长性。配合毛利率可判断“高增长是否伴随毛利下滑”。",
 )
 class RevenueYoYFactor(_ScalarFundamentalFactor):
     _table = "growth"
@@ -158,7 +158,7 @@ class RevenueYoYFactor(_ScalarFundamentalFactor):
     "pe",
     sources=("custom",),
     types=("fundamental", "cross_sectional"),
-    description="PE = close × totalShare / TTM(netProfit),亏损 → NaN",
+    description="市盈率(总市值 / 滚动 4 季净利润)。值越低越便宜,但要警惕周期顶反转;亏损公司返回 NaN。",
 )
 class PEFactor(Factor):
     def __init__(self):
@@ -198,7 +198,7 @@ class PEFactor(Factor):
     "pb",
     sources=("custom",),
     types=("fundamental", "cross_sectional"),
-    description="PB = close × totalShare / totalShareholdersEquity",
+    description="市净率(总市值 / 股东权益)。低 PB 常见于金融/周期股,需要配合 ROE 才能判断是否真便宜。",
 )
 class PBFactor(Factor):
     def __init__(self):

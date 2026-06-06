@@ -17,7 +17,7 @@ from stockpool.factors.registry import register
     "mom_accel",
     sources=("builtin",),
     types=("momentum", "time_series"),
-    description="N 日动量的 N 日差: mom_d - mom_d.shift(d)",
+    description="动量的“加速度”:N 日涨幅减去 N 日前的同期 N 日涨幅。正值 = 涨势在加速;负值 = 涨势在减速/反转。",
 )
 class MomAccelFactor(Factor):
     def __init__(self, n: int = 5):
@@ -38,7 +38,7 @@ class MomAccelFactor(Factor):
     "vol_accel",
     sources=("builtin",),
     types=("volume", "time_series"),
-    description="log(volume) 二阶差分: lv - 2*lv.shift(n) + lv.shift(2n)",
+    description="log 成交量的二阶差分,捕捉成交活跃度由热到冷或由冷到热的“转折速度”。",
 )
 class VolAccelFactor(Factor):
     def __init__(self, n: int = 5):
@@ -60,7 +60,7 @@ class VolAccelFactor(Factor):
     "turnover_accel",
     sources=("builtin",),
     types=("volume", "time_series"),
-    description="turnover_z_n 的 N 日差,换手 z-score 的加速度",
+    description="换手 z 分数的 N 日变化,识别活跃度趋势的拐点(由热转冷或由冷转热)。",
 )
 class TurnoverAccelFactor(Factor):
     def __init__(self, n: int = 5):

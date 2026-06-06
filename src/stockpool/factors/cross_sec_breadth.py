@@ -28,7 +28,7 @@ def _broadcast(scalar: pd.Series, like: pd.DataFrame) -> pd.DataFrame:
     "breadth_above_ma",
     sources=("builtin",),
     types=("cross_sectional", "time_series"),
-    description="全市场 close > MA_d 的股票比例 ∈ [0, 1],广播到 T×N",
+    description="全市场有多少比例股票当日收盘高于自己的 N 日均线。读数 > 0.5 多数股偏强;< 0.3 大盘普遍弱势。",
 )
 class BreadthAboveMAFactor(Factor):
     def __init__(self, n: int = 20):
@@ -51,7 +51,7 @@ class BreadthAboveMAFactor(Factor):
     "breadth_advance",
     sources=("builtin",),
     types=("cross_sectional", "time_series"),
-    description="全市场当日上涨股比例 = (close.pct_change > 0).mean(axis=1)",
+    description="当天全市场涨股占比。> 0.6 全面普涨,< 0.4 普跌,中间值意味着分化。",
 )
 class BreadthAdvanceFactor(Factor):
     def __init__(self):
@@ -71,7 +71,7 @@ class BreadthAdvanceFactor(Factor):
     "breadth_limit_up",
     sources=("builtin",),
     types=("cross_sectional", "time_series"),
-    description="全市场触涨停 (ret>0.099) 股票占比;涨停股按 spec §6.1.2 算入分子",
+    description="当天触涨停股票占比。同步突高 = 题材热点炒作进入高峰,可作为情绪温度计。",
 )
 class BreadthLimitUpFactor(Factor):
     def __init__(self):
@@ -92,7 +92,7 @@ class BreadthLimitUpFactor(Factor):
     "breadth_dispersion",
     sources=("builtin",),
     types=("cross_sectional", "volatility", "time_series"),
-    description="全市场收益横截面 std,衡量当日个股分化程度",
+    description="当日个股收益率的横截面 std。大 = 个股分化严重(题材轮动);小 = 齐涨齐跌(系统性行情)。",
 )
 class BreadthDispersionFactor(Factor):
     def __init__(self):
@@ -112,7 +112,7 @@ class BreadthDispersionFactor(Factor):
     "breadth_pos_skew",
     sources=("builtin",),
     types=("cross_sectional", "time_series"),
-    description="全市场收益横截面 skewness,正偏 → 头部领涨",
+    description="当日横截面收益率的偏度。正偏 = 少数股大涨拉高指数(头部领涨);负偏 = 少数股大跌拖累指数。",
 )
 class BreadthPosSkewFactor(Factor):
     def __init__(self):

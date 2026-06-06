@@ -24,7 +24,7 @@ def _pos_raw(panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     "close_pos",
     sources=("builtin",),
     types=("momentum", "time_series"),
-    description="(close - low) / (high - low) 的 N 日均值 ∈ [0, 1]",
+    description="N 日内“收盘价处于当日 high-low 区间的相对位置”的均值,在 [0,1] 之间。接近 1 = 经常收在高位(买方强势);接近 0 = 经常收在低位。",
 )
 class ClosePositionFactor(Factor):
     def __init__(self, n: int = 5):
@@ -44,7 +44,7 @@ class ClosePositionFactor(Factor):
     "close_pos_cum",
     sources=("builtin",),
     types=("momentum", "time_series"),
-    description="(pos - 0.5) 的 N 日累积偏离,正多空",
+    description="累积偏离中位(0.5)的位置和。正值大 = 持续收在 K 线上半段(多头强);负值大 = 持续收下半段(空头强)。",
 )
 class ClosePositionCumFactor(Factor):
     def __init__(self, n: int = 5):
@@ -64,7 +64,7 @@ class ClosePositionCumFactor(Factor):
     "close_pos_ema",
     sources=("builtin",),
     types=("momentum", "time_series"),
-    description="收盘位置 pos 的 EMA(span=n) 平滑",
+    description="用 EMA 平滑过的收盘位置,比 rolling 均值更敏锐反映最近几日的变化。",
 )
 class ClosePositionEMAFactor(Factor):
     def __init__(self, n: int = 5):

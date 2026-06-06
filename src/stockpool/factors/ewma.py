@@ -27,7 +27,7 @@ def _parse_hl(args: list[str]) -> int:
     "ewma_momentum",
     sources=("builtin",),
     types=("momentum", "time_series"),
-    description="close 相对 EWMA 的偏离(半衰期 h)",
+    description="收盘价相对其指数平滑均线的偏离比例。正值 = 现价高于近期均价(强势上行);半衰期 h 控制远近权重。",
 )
 class EWMAMomentumFactor(Factor):
     def __init__(self, halflife: int = 10):
@@ -53,7 +53,7 @@ class EWMAMomentumFactor(Factor):
     "ewma_vol",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="RiskMetrics-like EWMA 收益波动率(半衰期 h)",
+    description="用 RiskMetrics 风格指数平滑算出的近期收益波动率。比简单 rolling std 反应更快,半衰期短=对最新波动更敏感。",
 )
 class EWMAVolFactor(Factor):
     def __init__(self, halflife: int = 10):
@@ -78,7 +78,7 @@ class EWMAVolFactor(Factor):
     "ewma_turnover_z",
     sources=("builtin",),
     types=("volume", "time_series"),
-    description="log(volume) EWMA z-score,异常活跃度",
+    description="今日 log 成交量相对其指数平滑均值的 z 分数,衡量“今天有多反常”。极值 = 异常活跃或异常清淡。",
 )
 class EWMATurnoverZFactor(Factor):
     def __init__(self, halflife: int = 10):
@@ -106,7 +106,7 @@ class EWMATurnoverZFactor(Factor):
     "ewma_close_dev",
     sources=("builtin",),
     types=("trend", "time_series"),
-    description="(close - EWMA(close)) / EWMA std,close 偏离自身 EWMA 的 z",
+    description="收盘价相对 EMA 均线的 z 分数(用 EWM std 标准化)。同时考虑偏离方向与偏离幅度,绝对值大代表显著偏离常态。",
 )
 class EWMACloseDevFactor(Factor):
     def __init__(self, halflife: int = 10):
@@ -133,7 +133,7 @@ class EWMACloseDevFactor(Factor):
     "ewma_volume_ratio",
     sources=("builtin",),
     types=("volume", "time_series"),
-    description="volume / EWMA(volume).shift(1) - 1,放/缩量 EWMA 版",
+    description="今日量除以昨日(及之前)指数平滑均量。正值放量,负值缩量;比简单 rolling 版本反应更快。",
 )
 class EWMAVolumeRatioFactor(Factor):
     def __init__(self, halflife: int = 10):

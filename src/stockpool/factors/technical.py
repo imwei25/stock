@@ -26,7 +26,7 @@ from stockpool.factors.registry import register
     "momentum",
     sources=("builtin",),
     types=("momentum", "time_series"),
-    description="N 日动量: close[t]/close[t-n] - 1",
+    description="N 日涨跌幅,过去 N 天股价的累计涨幅。最经典的趋势/动量信号。",
 )
 class MomentumFactor(Factor):
     def __init__(self, n: int = 20):
@@ -46,7 +46,7 @@ class MomentumFactor(Factor):
     "macd_hist",
     sources=("builtin",),
     types=("momentum", "time_series"),
-    description="MACD 柱: 2*(DIF - DEA),正/负分别代表多/空动能",
+    description="MACD 红柱/绿柱的高度。正且变大 = 多头加速;负且变大 = 空头加速;在 0 附近 = 动能枯竭。",
 )
 class MACDHistFactor(Factor):
     def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
@@ -71,7 +71,7 @@ class MACDHistFactor(Factor):
     "macd_dif_norm",
     sources=("builtin",),
     types=("momentum", "time_series"),
-    description="MACD DIF 除以 close,跨股票可比",
+    description="MACD DIF 线除以收盘价,把不同价位的票放在同一尺度,方便横向比较“谁更强势”。",
 )
 class MACDDifNormFactor(Factor):
     def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
@@ -97,7 +97,7 @@ class MACDDifNormFactor(Factor):
     "rsi_centered",
     sources=("builtin",),
     types=("reversal", "time_series"),
-    description="RSI 中心化: RSI - 50,正多负空",
+    description="RSI 减去 50 的中心化值。正 = 多头主导,负 = 空头主导;接近 ±50 = 极端超买/超卖。",
 )
 class RSICenteredFactor(Factor):
     def __init__(self, n: int = 14):
@@ -129,7 +129,7 @@ class RSICenteredFactor(Factor):
     "kdj_j",
     sources=("builtin",),
     types=("reversal", "time_series"),
-    description="KDJ J 线中心化 (J - 50)",
+    description="KDJ 的 J 线减去 50。比 KDJ 本身更敏感,J 远离 50 常预警短线极值反转。",
 )
 class KDJJFactor(Factor):
     def __init__(self, n: int = 9, m1: int = 3, m2: int = 3):
@@ -164,7 +164,7 @@ class KDJJFactor(Factor):
     "ma_distance",
     sources=("builtin",),
     types=("trend", "time_series"),
-    description="(close - MA_n) / MA_n,相对均线的距离",
+    description="收盘价距离 N 日均线的相对距离。正且大 = 显著高于均线可能透支;负且大 = 跌破均线深可能见底。",
 )
 class MADistanceFactor(Factor):
     def __init__(self, n: int = 20):
@@ -186,7 +186,7 @@ class MADistanceFactor(Factor):
     "ma_slope",
     sources=("builtin",),
     types=("trend", "time_series"),
-    description="MA_n 的 k-bar 相对斜率,衡量趋势强度",
+    description="N 日均线的近期斜率(相对值)。正陡 = 均线明显走高(强趋势);0 附近 = 走平(整理期)。",
 )
 class MASlopeFactor(Factor):
     def __init__(self, n: int = 20, k: int = 5):
@@ -213,7 +213,7 @@ class MASlopeFactor(Factor):
     "vol_ratio",
     sources=("builtin",),
     types=("volume", "time_series"),
-    description="volume / MA_n(volume).shift(1) - 1,放/缩量",
+    description="今日成交量相对近 N 日均量的偏离比,大于 0 放量、小于 0 缩量,衡量交易热度。",
 )
 class VolumeRatioFactor(Factor):
     def __init__(self, n: int = 5):
@@ -235,7 +235,7 @@ class VolumeRatioFactor(Factor):
     "boll_position",
     sources=("builtin",),
     types=("reversal", "volatility", "time_series"),
-    description="布林位置 (close - mid) / (up - mid) ∈ [-1, +1]",
+    description="收盘价在布林轨道中的相对位置 ∈ [-1, +1]。+1 触上轨可能超买;-1 触下轨可能超卖。",
 )
 class BollPositionFactor(Factor):
     def __init__(self, n: int = 20, k: float = 2.0):
@@ -259,7 +259,7 @@ class BollPositionFactor(Factor):
     "hl_range",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="N 日 (高-低) / close,波动率代理",
+    description="近 N 日日均振幅相对收盘价的比值,简单波动率代理。",
 )
 class HLRangeFactor(Factor):
     def __init__(self, n: int = 20):

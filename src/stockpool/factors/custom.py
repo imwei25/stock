@@ -20,7 +20,7 @@ from stockpool.factors.registry import register
     "industry_relative_strength",
     sources=("custom",),
     types=("momentum", "industry_neutral", "cross_sectional"),
-    description="N 日动量减去同行业中位动量 (sector_map 通过 factors.context 注入)",
+    description="N 日涨幅减去同行业中位涨幅。剔除行业 β,只看“相对同行的超额表现”,识别行业内的真龙头。",
 )
 class IndustryRelativeStrengthFactor(Factor):
     def __init__(self, n: int = 20):
@@ -80,7 +80,7 @@ class IndustryRelativeStrengthFactor(Factor):
     "limit_up_count",
     sources=("custom",),
     types=("momentum", "time_series"),
-    description="近 N 日触及涨停 (close > prev_close × 1.099) 的次数",
+    description="近 N 日触及涨停的天数。值大 = 持续连板/题材股属性强,但也意味着回调风险高。",
 )
 class LimitUpCountFactor(Factor):
     def __init__(self, n: int = 20):
@@ -110,7 +110,7 @@ class LimitUpCountFactor(Factor):
     "turnover_zscore",
     sources=("custom",),
     types=("volume", "time_series"),
-    description="log(volume) 的 N 日时间序列 z-score, 反映异常活跃度",
+    description="log 成交量的 N 日 z 分数,衡量“今日活跃度相对近期常态的偏离倍数”。常用 N=60 看长窗节奏。",
 )
 class TurnoverZScoreFactor(Factor):
     def __init__(self, n: int = 60):

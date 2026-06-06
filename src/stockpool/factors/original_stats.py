@@ -23,7 +23,7 @@ from stockpool.factors.registry import register
     "close_std",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="close N 日 std / close,归一化波动率",
+    description="收盘价 N 日波动率(用当前价归一化)。值越大代表股价摆动越剧烈,常用来识别震荡 vs 趋势状态。",
 )
 class CloseStdFactor(Factor):
     def __init__(self, n: int = 20):
@@ -44,7 +44,7 @@ class CloseStdFactor(Factor):
     "close_skew",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="close N 日滚动 skewness",
+    description="收盘价 N 日分布的偏度。正偏 = 多数日小涨偶尔大涨,负偏 = 多数日小跌偶尔大跌,极值常预示拐点。",
 )
 class CloseSkewFactor(Factor):
     def __init__(self, n: int = 20):
@@ -64,7 +64,7 @@ class CloseSkewFactor(Factor):
     "close_kurt",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="close N 日滚动 kurtosis",
+    description="收盘价 N 日峰度。值越高代表“平时温吞、偶有极端波动”,可识别“看似平静实有暗涌”的票。",
 )
 class CloseKurtFactor(Factor):
     def __init__(self, n: int = 20):
@@ -84,7 +84,7 @@ class CloseKurtFactor(Factor):
     "volume_skew",
     sources=("builtin",),
     types=("volume", "time_series"),
-    description="volume N 日滚动 skewness",
+    description="成交量 N 日分布偏度。正偏 = 多数日量平稳偶尔放巨量(突发关注),可作为关注度异动信号。",
 )
 class VolumeSkewFactor(Factor):
     def __init__(self, n: int = 20):
@@ -104,7 +104,7 @@ class VolumeSkewFactor(Factor):
     "volume_kurt",
     sources=("builtin",),
     types=("volume", "time_series"),
-    description="volume N 日滚动 kurtosis",
+    description="成交量 N 日峰度。值高 = 日常量小但常有偶发尖峰,体现脉冲式资金流入流出。",
 )
 class VolumeKurtFactor(Factor):
     def __init__(self, n: int = 20):
@@ -124,7 +124,7 @@ class VolumeKurtFactor(Factor):
     "range_std",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="(high-low) N 日 std / close,日内振幅波动",
+    description="N 日日内振幅的波动率。衡量“波动率的波动率”,可分辨“持续宽幅震荡”与“偶尔宽幅”两种行情。",
 )
 class RangeStdFactor(Factor):
     def __init__(self, n: int = 20):
@@ -145,7 +145,7 @@ class RangeStdFactor(Factor):
     "volume_std",
     sources=("builtin",),
     types=("volume", "time_series"),
-    description="volume 变异系数 (N 日 std / N 日 mean)",
+    description="成交量变异系数(N 日 std 除以均值)。值越大说明成交量分布越不稳定,可能正经历题材轮动。",
 )
 class VolumeStdFactor(Factor):
     def __init__(self, n: int = 20):

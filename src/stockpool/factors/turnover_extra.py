@@ -19,7 +19,7 @@ from stockpool.factors.registry import register
     "turnover_z",
     sources=("custom",),
     types=("volume", "time_series"),
-    description="log(volume) 短窗 z-score (短 vs custom.turnover_zscore_60 长窗)",
+    description="近 N 日 log 成交量的 z 分数。今日活跃度相对近期常态的偏离倍数,N 越小越短线。",
 )
 class TurnoverZShortFactor(Factor):
     def __init__(self, n: int = 5):
@@ -43,7 +43,7 @@ class TurnoverZShortFactor(Factor):
     "amount_z",
     sources=("custom",),
     types=("volume", "time_series"),
-    description="log(volume*close) 短窗 z-score (成交额)",
+    description="近 N 日 log 成交额(量×价)的 z 分数。比换手 z 多了价格信息,大资金更看成交额而非手数。",
 )
 class AmountZFactor(Factor):
     def __init__(self, n: int = 5):
@@ -67,7 +67,7 @@ class AmountZFactor(Factor):
     "volume_ratio_short",
     sources=("custom",),
     types=("volume", "time_series"),
-    description="volume / mean(volume, n).shift(1) - 1,短窗放/缩量",
+    description="今日量相对近 N 日均量(排除今日)的放缩比。正值放量,负值缩量;短窗版,更敏感。",
 )
 class VolumeRatioShortFactor(Factor):
     def __init__(self, n: int = 5):

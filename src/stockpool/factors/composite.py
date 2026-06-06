@@ -19,7 +19,7 @@ from stockpool.factors.registry import register
     "rank_signed_mom",
     sources=("builtin",),
     types=("cross_sectional", "momentum", "time_series"),
-    description="rank(close.pct_change(d)) * sign(volume.pct_change(d))",
+    description="横截面动量秩 × 量变方向。所有股票按 N 日涨幅排名,再乘以“量是放还是缩”,同时筛“涨且放量”的股。",
 )
 class RankSignedMomFactor(Factor):
     def __init__(self, n: int = 10):
@@ -41,7 +41,7 @@ class RankSignedMomFactor(Factor):
     "decay_corr_pv",
     sources=("builtin",),
     types=("cross_sectional", "volume", "time_series"),
-    description="decay_linear(ts_corr(rank(close), rank(volume), d), d)",
+    description="价格秩与量秩相关性的线性衰减加权(近期权重更大),刻画“近期量价是否一致变动”。",
 )
 class DecayCorrPVFactor(Factor):
     def __init__(self, n: int = 20):
@@ -64,7 +64,7 @@ class DecayCorrPVFactor(Factor):
     "scale_decay_mom",
     sources=("builtin",),
     types=("cross_sectional", "momentum", "time_series"),
-    description="scale(decay_linear(close.pct_change(d), d))",
+    description="动量先 N 日线性衰减加权再做截面归一化,平滑短期噪音,适合做横截面排序选股。",
 )
 class ScaleDecayMomFactor(Factor):
     def __init__(self, n: int = 10):
@@ -85,7 +85,7 @@ class ScaleDecayMomFactor(Factor):
     "mom_vol_interact",
     sources=("builtin",),
     types=("momentum", "volume", "time_series"),
-    description="动量与放量的乘积: mom_d * (volume / mean(volume, d).shift(1) - 1)",
+    description="动量 × 放量比的乘积。两者同号(涨+放量 或 跌+缩量)时数值最大,纯涨或纯放都不算极强。",
 )
 class MomVolInteractFactor(Factor):
     def __init__(self, n: int = 10):

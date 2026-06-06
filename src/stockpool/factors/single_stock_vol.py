@@ -18,7 +18,7 @@ from stockpool.factors.registry import register
     "atr",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="Wilder ATR: EMA(alpha=1/n) of true range max(h-l, |h-c_prev|, |l-c_prev|)",
+    description="Wilder 经典 ATR:N 日真实波幅的指数平滑值。衡量“一根 K 线平均能走多远”,常用于止损/仓位计算。",
 )
 class ATRFactor(Factor):
     def __init__(self, n: int = 14):
@@ -47,7 +47,7 @@ class ATRFactor(Factor):
     "cci",
     sources=("builtin",),
     types=("reversal", "time_series"),
-    description="CCI = (tp - SMA(tp, n)) / (0.015 * MAD(tp, n)),tp=(H+L+C)/3",
+    description="顺势指标 CCI。值远离 0(如 ±100)代表“典型价”偏离常态过度,常用来抓超买/超卖反转。",
 )
 class CCIFactor(Factor):
     def __init__(self, n: int = 20):
@@ -71,7 +71,7 @@ class CCIFactor(Factor):
     "amp",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="日内振幅 (high-low)/close 的 N 日均值",
+    description="N 日日内振幅 (高-低)/收盘 的均值。波动率代理,数值越大说明这只票每天来回幅度越大。",
 )
 class AmpFactor(Factor):
     def __init__(self, n: int = 5):
@@ -92,7 +92,7 @@ class AmpFactor(Factor):
     "park_vol",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="Parkinson vol = sqrt(mean(ln(H/L)^2 / (4 ln 2), n))",
+    description="Parkinson 波动率,只用 high/low 估算,比仅看收盘价的 std 更稳健、对真实波动更敏感。",
 )
 class ParkinsonVolFactor(Factor):
     def __init__(self, n: int = 20):
@@ -114,7 +114,7 @@ class ParkinsonVolFactor(Factor):
     "gk_vol",
     sources=("builtin",),
     types=("volatility", "time_series"),
-    description="Garman-Klass vol: 综合 OHLC 的极差估计",
+    description="Garman-Klass 波动率,综合 OHLC 算出来,既比 close-only 准也比 high-low 准;对极端跳空更敏感。",
 )
 class GarmanKlassVolFactor(Factor):
     def __init__(self, n: int = 20):
