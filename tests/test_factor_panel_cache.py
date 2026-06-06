@@ -413,3 +413,37 @@ def test_build_factor_panel_passes_n_codes_to_pipeline(monkeypatch):
     assert captured["n_codes"] == 3, (
         f"build_factor_panel should pass n_codes=len(pool_data)=3, got {captured['n_codes']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 8: mcap_neutralize toggle changes the cache sig (regression guard)
+# ---------------------------------------------------------------------------
+
+
+def test_factor_panel_sig_changes_when_mcap_neutralize_flips():
+    """Toggling mcap_neutralize must produce a different cache sig.
+
+    This is a regression guard: _factor_panel_sig JSON-dumps the full
+    PreprocessConfig, so flipping mcap_neutralize must change the sig hash.
+    """
+    from stockpool.config import PreprocessConfig
+    from stockpool.strategy_factory import _factor_panel_sig
+
+    pool = _pool(["600000"])
+
+    cfg_off = PreprocessConfig(
+        winsorize=None, zscore=True,
+        industry_neutralize=False, mcap_neutralize=False,
+    )
+    cfg_on = PreprocessConfig(
+        winsorize=None, zscore=True,
+        industry_neutralize=False, mcap_neutralize=True,
+    )
+
+    sig_off, _ = _factor_panel_sig(["momentum_20"], pool, preprocess_cfg=cfg_off)
+    sig_on, _ = _factor_panel_sig(["momentum_20"], pool, preprocess_cfg=cfg_on)
+
+    assert sig_off != sig_on, (
+        "mcap_neutralize toggle must change the sig, "
+        f"but both produced sig={sig_off}"
+    )
