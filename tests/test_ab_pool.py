@@ -281,3 +281,142 @@ def test_compute_avg_amount_20d_missing_file_nan(tmp_path: Path):
     assert list(out["code"]) == ["600519"]
     import math
     assert math.isnan(out["avg_amount_20d"].iloc[0])
+
+
+from stockpool.ab_pool import build_ab_pool, load_ab_pool
+
+
+def _stub_app_cfg(tmp_path: Path) -> "AppConfig":
+    """Build a minimal AppConfig with cache_dir = tmp_path / 'data'."""
+    yaml_text = (Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8")
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml_text, encoding="utf-8")
+    cfg = load_config(cfg_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    cfg.data.cache_dir = str(data_dir)
+    cfg.ab_pool.cache_path = str(data_dir / "ab_pool.parquet")
+    return cfg
+
+
+def _seed_universe_and_daily(cfg, codes_industries: list[tuple[str, str, str, float]]):
+    """Seed universe.parquet + per-stock parquets + industry_map cache.
+
+    Each tuple = (code, name, industry, daily_amount_yuan)
+    """
+    data_dir = Path(cfg.data.cache_dir)
+    universe = pd.DataFrame([
+        {"code": c, "name": n, "market": "sh" if c.startswith("6") else "sz"}
+        for c, n, _, _ in codes_industries
+    ])
+    universe.to_parquet(data_dir / "universe.parquet")
+
+    dates = pd.date_range("2026-01-01", periods=30, freq="B")
+    for code, _, _, daily_amt in codes_industries:
+        # daily_amt = volume * close * 100  →  set volume=daily_amt/(close*100)
+        close = 10.0
+        volume = daily_amt / (close * 100)
+        df = pd.DataFrame({
+            "date": dates, "open": close, "high": close, "low": close,
+            "close": close, "volume": volume,
+        })
+        df.to_parquet(data_dir / f"{code}_daily.parquet")
+
+    industry_df = pd.DataFrame([
+        {"code": c, "industry": ind}
+        for c, _, ind, _ in codes_industries
+    ])
+    industry_df.to_parquet(data_dir / "stock_industry_map.parquet")
+
+
+def test_build_basic(tmp_path, monkeypatch):
+    cfg = _stub_app_cfg(tmp_path)
+    cfg.ab_pool.min_listing_days = 0  # disable IPO filter for synthetic data
+    _seed_universe_and_daily(cfg, [
+        ("600001", "Bank1", "银行", 1e9),
+        ("600002", "Bank2", "银行", 1e9),
+        ("600003", "Bank3", "银行", 1e9),
+        ("600004", "Bank4", "银行", 1e9),
+        ("600005", "Food1", "食品", 1e9),
+        ("600006", "Food2", "食品", 1e9),
+    ])
+    mock_ak = MagicMock()
+    mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame({
+        "代码": ["600001", "600002", "600003", "600004", "600005", "600006"],
+        "名称": ["Bank1", "Bank2", "Bank3", "Bank4", "Food1", "Food2"],
+        "流通市值": [9e10, 8e10, 7e10, 6e10, 5e10, 4e10],
+    })
+    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
+    monkeypatch.setattr("stockpool.ab_pool._load_industry_map",
+                        lambda *_a, **_k: {"600001": "银行", "600002": "银行",
+                                            "600003": "银行", "600004": "银行",
+                                            "600005": "食品", "600006": "食品"})
+    monkeypatch.setattr("stockpool.ab_pool._load_ipo_dates",
+                        lambda *_a, **_k: {})
+
+    out_path = build_ab_pool(cfg, refresh=False)
+
+    assert Path(out_path).exists()
+    df = load_ab_pool(out_path)
+    assert set(df.columns) >= {"code", "name", "industry", "circ_mv",
+                                "avg_amount_20d", "source_tag", "build_date"}
+    assert set(df["industry"]) == {"银行", "食品"}
+
+
+def test_build_idempotent_guard(tmp_path, monkeypatch):
+    cfg = _stub_app_cfg(tmp_path)
+    cache_path = Path(cfg.ab_pool.cache_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(b"existing")
+    with pytest.raises(FileExistsError):
+        build_ab_pool(cfg, refresh=False)
+    assert cache_path.read_bytes() == b"existing"
+
+
+def test_build_refresh_overwrites(tmp_path, monkeypatch):
+    cfg = _stub_app_cfg(tmp_path)
+    cfg.ab_pool.min_listing_days = 0
+    _seed_universe_and_daily(cfg, [
+        ("600001", "Bank1", "银行", 1e9),
+        ("600002", "Bank2", "银行", 1e9),
+    ])
+    mock_ak = MagicMock()
+    mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame({
+        "代码": ["600001", "600002"], "名称": ["Bank1", "Bank2"],
+        "流通市值": [9e10, 8e10],
+    })
+    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
+    monkeypatch.setattr("stockpool.ab_pool._load_industry_map",
+                        lambda *_a, **_k: {"600001": "银行", "600002": "银行"})
+    monkeypatch.setattr("stockpool.ab_pool._load_ipo_dates",
+                        lambda *_a, **_k: {})
+
+    cache_path = Path(cfg.ab_pool.cache_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(b"old")
+    build_ab_pool(cfg, refresh=True)
+    # File should be overwritten with a valid parquet
+    df = load_ab_pool(cache_path)
+    assert "600001" in set(df["code"])
+
+
+def test_build_universe_missing(tmp_path):
+    cfg = _stub_app_cfg(tmp_path)
+    with pytest.raises(FileNotFoundError, match="universe.parquet"):
+        build_ab_pool(cfg, refresh=False)
+
+
+def test_build_all_buckets_empty(tmp_path, monkeypatch):
+    cfg = _stub_app_cfg(tmp_path)
+    _seed_universe_and_daily(cfg, [("600001", "Only", "银行", 1e3)])  # below floor
+    mock_ak = MagicMock()
+    mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame({
+        "代码": ["600001"], "名称": ["Only"], "流通市值": [1e10],
+    })
+    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
+    monkeypatch.setattr("stockpool.ab_pool._load_industry_map",
+                        lambda *_a, **_k: {"600001": "银行"})
+    monkeypatch.setattr("stockpool.ab_pool._load_ipo_dates",
+                        lambda *_a, **_k: {})
+    with pytest.raises(RuntimeError, match="empty"):
+        build_ab_pool(cfg, refresh=False)

@@ -11,10 +11,13 @@ from __future__ import annotations
 import logging
 from datetime import date as _date
 from pathlib import Path as _Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from stockpool.config import AppConfig
 
 log = logging.getLogger("stockpool")
 
@@ -166,3 +169,89 @@ def _compute_avg_amount_20d(
             avg = float("nan")
         rows.append({"code": code, "avg_amount_20d": avg})
     return pd.DataFrame(rows)
+
+
+def _load_industry_map(cache_dir: _Path, source: str) -> dict[str, str]:
+    """Thin wrapper over industry_map.load_or_build_industry_map for mockability."""
+    from stockpool.industry_map import load_or_build_industry_map
+    return load_or_build_industry_map(cache_dir=cache_dir, source=source)
+
+
+def _load_ipo_dates(cache_dir: _Path) -> dict[str, pd.Timestamp]:
+    """Thin wrapper over ipo_dates.load_or_build_ipo_dates for mockability."""
+    from stockpool.ipo_dates import load_or_build_ipo_dates
+    return load_or_build_ipo_dates(cache_dir=cache_dir)
+
+
+def build_ab_pool(cfg: "AppConfig", refresh: bool = False) -> _Path:
+    """Build the AB candidate pool and persist to cfg.ab_pool.cache_path.
+
+    Raises:
+      FileNotFoundError — universe.parquet missing
+      FileExistsError — cache_path exists without refresh=True
+      RuntimeError — akshare snapshot empty / all industry buckets empty
+
+    Returns: the cache_path Path on success.
+    """
+    out_path = _Path(cfg.ab_pool.cache_path)
+    if out_path.exists() and not refresh:
+        raise FileExistsError(
+            f"{out_path} already exists. Pass --refresh to rebuild."
+        )
+
+    cache_dir = _Path(cfg.data.cache_dir)
+    universe_path = cache_dir / "universe.parquet"
+    if not universe_path.exists():
+        raise FileNotFoundError(
+            f"{universe_path} not found. Run `python -m stockpool fetch-universe` first."
+        )
+    universe = pd.read_parquet(universe_path)
+    universe["code"] = universe["code"].astype(str).str.zfill(6)
+
+    snapshot = _fetch_circ_mv_snapshot()
+    industry = _load_industry_map(cache_dir, cfg.ab_pool.industry_source)
+    ipo_dates = _load_ipo_dates(cache_dir)
+    liq = _compute_avg_amount_20d(list(universe["code"]), cache_dir)
+
+    # Assemble candidate table — left-join universe ← snapshot ← industry ← ipo ← liq
+    candidates = universe[["code", "name"]].merge(
+        snapshot[["code", "circ_mv", "name"]].rename(
+            columns={"name": "snapshot_name"}
+        ),
+        on="code", how="left",
+    )
+    # Prefer akshare name when present (more authoritative for ST tagging)
+    candidates["name"] = candidates["snapshot_name"].fillna(candidates["name"])
+    candidates = candidates.drop(columns=["snapshot_name"])
+    candidates["industry"] = candidates["code"].map(industry).fillna("未知")
+    candidates["ipo_date"] = candidates["code"].map(
+        lambda c: ipo_dates.get(c, pd.Timestamp("1900-01-01"))
+    )
+    candidates = candidates.merge(liq, on="code", how="left")
+
+    filtered = _apply_hard_filters(candidates, cfg.ab_pool)
+    selected = _stratified_select(filtered, cfg.ab_pool)
+
+    if selected.empty:
+        raise RuntimeError(
+            "ab_pool: all industry buckets empty after filters — "
+            "check liquidity floor / ST filter / IPO cutoff"
+        )
+
+    selected = selected.copy()
+    selected["build_date"] = _date.today()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    selected.to_parquet(out_path, index=False)
+    log.info("ab_pool: built %d codes across %d industries → %s",
+             len(selected), selected["industry"].nunique(), out_path)
+    return out_path
+
+
+def load_ab_pool(cache_path: str | _Path) -> pd.DataFrame:
+    """Read the persisted AB pool parquet. Raises FileNotFoundError if absent."""
+    cache_path = _Path(cache_path)
+    if not cache_path.exists():
+        raise FileNotFoundError(
+            f"{cache_path} not found. Run `python -m stockpool ab-pool build` first."
+        )
+    return pd.read_parquet(cache_path)
