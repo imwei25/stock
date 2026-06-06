@@ -44,7 +44,7 @@ def test_fetch_universe_uses_cfg_source_when_no_cli_flag(tmp_path, monkeypatch):
     calls: list[str] = []
 
     def _fake_fetch_universe(codes, *, history_days, cache_dir, source,
-                             force_refresh=False, max_workers=8):
+                             force_refresh=False, max_workers=8, warmup_days=0):
         calls.append(source)
         return {c: pd.DataFrame() for c in codes}
 
@@ -65,7 +65,7 @@ def test_fetch_universe_cli_source_overrides_cfg(tmp_path, monkeypatch):
     calls: list[str] = []
 
     def _fake_fetch_universe(codes, *, history_days, cache_dir, source,
-                             force_refresh=False, max_workers=8):
+                             force_refresh=False, max_workers=8, warmup_days=0):
         calls.append(source)
         return {c: pd.DataFrame() for c in codes}
 
@@ -90,7 +90,7 @@ def test_fetch_universe_force_refresh_on_source_change(tmp_path, monkeypatch):
     seen: dict = {}
 
     def _fake_fetch_universe(codes, *, history_days, cache_dir, source,
-                             force_refresh=False, max_workers=8):
+                             force_refresh=False, max_workers=8, warmup_days=0):
         seen["source"] = source
         seen["force_refresh"] = force_refresh
         return {c: pd.DataFrame() for c in codes}

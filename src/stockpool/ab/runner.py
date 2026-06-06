@@ -125,6 +125,7 @@ def _prepare_pool_for_arm(
     if injected_universe is None and ml_cfg.training_universe == "all":
         pool_data = load_universe_cache(
             arm_cfg.data.cache_dir, arm_cfg.data.history_days,
+            warmup_days=arm_cfg.data.warmup_days,
         )
 
     for s in stocks:
@@ -132,6 +133,7 @@ def _prepare_pool_for_arm(
             pool_data[s.code] = fetch_daily(
                 s.code, arm_cfg.data.history_days, arm_cfg.data.cache_dir,
                 force_refresh=refresh, source=arm_cfg.data.source,
+                warmup_days=arm_cfg.data.warmup_days,
             )
         except Exception as e:
             log.warning("Pool preload skipped for %s: %s", s.code, e)
@@ -196,6 +198,7 @@ def run_ab(
         try:
             shared_universe = load_universe_cache(
                 base_cfg.data.cache_dir, base_cfg.data.history_days,
+                warmup_days=base_cfg.data.warmup_days,
             )
             log.info("Shared universe loaded: %d stocks",
                      len(shared_universe) if shared_universe else 0)

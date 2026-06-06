@@ -58,7 +58,7 @@ def prepare_pool(
 
     if ml_cfg.training_universe == "all":
         log.info("Loading universe cache (training_universe=all) ...")
-        pool_data = load_universe_cache(cfg.data.cache_dir, cfg.data.history_days)
+        pool_data = load_universe_cache(cfg.data.cache_dir, cfg.data.history_days, warmup_days=cfg.data.warmup_days)
         if not pool_data:
             log.warning(
                 "training_universe=all but data/ has no cached stocks. "
@@ -74,6 +74,7 @@ def prepare_pool(
             pool_data[s.code] = fetch_daily(
                 s.code, cfg.data.history_days, cfg.data.cache_dir,
                 force_refresh=force_refresh, source=cfg.data.source,
+                warmup_days=cfg.data.warmup_days,
             )
         except Exception as e:
             log.warning("Pool preload skipped for %s: %s", s.code, e)

@@ -116,7 +116,8 @@ def _analyze_one(
     try:
         daily = fetch_daily(stock.code, cfg.data.history_days,
                             cfg.data.cache_dir, force_refresh=force_refresh,
-                            source=cfg.data.source)
+                            source=cfg.data.source,
+                            warmup_days=cfg.data.warmup_days)
     except Exception as e:
         warnings.append(f"数据拉取失败: {e}")
         return StockAnalysis(
@@ -199,6 +200,7 @@ def _analyze_one(
                     stock.sector, cfg.data.history_days,
                     cfg.data.cache_dir, force_refresh,
                     source=cfg.data.source,
+                    warmup_days=cfg.data.warmup_days,
                 )
                 d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(sector_df, cfg)
                 context.append(ContextSignal(
@@ -380,7 +382,7 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     if universe_path.exists():
         universe_df = pd.read_parquet(universe_path)
         name_map = dict(zip(universe_df["code"], universe_df.get("name", universe_df["code"])))
-    pool_data = load_universe_cache(cache_dir, cfg.data.history_days)
+    pool_data = load_universe_cache(cache_dir, cfg.data.history_days, warmup_days=cfg.data.warmup_days)
     if not pool_data:
         log.warning(
             "Universe cache is empty (run `stockpool fetch-universe` first to "
@@ -392,6 +394,7 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
                 pool_data[s.code] = fetch_daily(
                     s.code, cfg.data.history_days, cfg.data.cache_dir,
                     force_refresh=args.refresh, source=cfg.data.source,
+                    warmup_days=cfg.data.warmup_days,
                 )
                 name_map.setdefault(s.code, s.name)
             except Exception as e:
@@ -406,6 +409,7 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
                     pool_data[s.code] = fetch_daily(
                         s.code, cfg.data.history_days, cfg.data.cache_dir,
                         force_refresh=args.refresh, source=cfg.data.source,
+                        warmup_days=cfg.data.warmup_days,
                     )
                 except Exception as e:
                     log.warning("Skipped %s: %s", s.code, e)
@@ -593,7 +597,7 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
     if universe_path.exists():
         universe_df = pd.read_parquet(universe_path)
         name_map = dict(zip(universe_df["code"], universe_df.get("name", universe_df["code"])))
-    pool_data = load_universe_cache(cache_dir, base_cfg.data.history_days)
+    pool_data = load_universe_cache(cache_dir, base_cfg.data.history_days, warmup_days=base_cfg.data.warmup_days)
     if not pool_data:
         log.warning(
             "Universe cache is empty; falling back to cfg.stocks. "
@@ -605,6 +609,7 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
                 pool_data[s.code] = fetch_daily(
                     s.code, base_cfg.data.history_days, base_cfg.data.cache_dir,
                     force_refresh=args.refresh, source=base_cfg.data.source,
+                    warmup_days=base_cfg.data.warmup_days,
                 )
                 name_map.setdefault(s.code, s.name)
             except Exception as e:
@@ -617,6 +622,7 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
                     pool_data[s.code] = fetch_daily(
                         s.code, base_cfg.data.history_days, base_cfg.data.cache_dir,
                         force_refresh=args.refresh, source=base_cfg.data.source,
+                        warmup_days=base_cfg.data.warmup_days,
                     )
                 except Exception as e:
                     log.warning("Skipped %s: %s", s.code, e)
@@ -731,6 +737,7 @@ def cmd_fetch_universe(args: argparse.Namespace) -> int:
         source=effective_source,
         force_refresh=force_refresh,
         max_workers=args.workers,
+        warmup_days=cfg.data.warmup_days,
     )
     log.info("Fetched %d/%d stocks successfully.", len(result), len(codes))
     return 0
@@ -889,6 +896,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 idx_cfg.code, cfg.data.history_days,
                 cfg.data.cache_dir, force_refresh=args.refresh,
                 source=cfg.data.source,
+                warmup_days=cfg.data.warmup_days,
             )
             d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(idx_df, cfg)
             market_context.append(ContextSignal(
@@ -924,6 +932,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 sector, cfg.data.history_days,
                 cfg.data.cache_dir, args.refresh,
                 source=cfg.data.source,
+                warmup_days=cfg.data.warmup_days,
             )
             d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(sector_df, cfg)
             sector_context_cache[sector] = ContextSignal(

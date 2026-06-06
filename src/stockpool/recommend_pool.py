@@ -88,7 +88,7 @@ def _compute_pool_b(
 ) -> list[PoolBEntry]:
     cfg_pool = cfg.recommend_pool
 
-    universe_data = load_universe_cache(cfg.data.cache_dir, cfg.data.history_days)
+    universe_data = load_universe_cache(cfg.data.cache_dir, cfg.data.history_days, warmup_days=cfg.data.warmup_days)
     if not universe_data:
         log.warning(
             "Pool B: universe cache empty at %s — run "
