@@ -326,7 +326,12 @@ def cmd_ab(args: argparse.Namespace) -> int:
     _setup_logging(out_root / run_date)
     log.info("stockpool ab v%s for %s", __version__, run_date)
 
-    stocks = _apply_stocks_filter(base_cfg.stocks, ab_cfg.stocks_filter)
+    from stockpool.ab.config import _resolve_stocks
+    try:
+        stocks = _resolve_stocks(ab_cfg, base_cfg)
+    except FileNotFoundError as e:
+        log.error("ab pool load failed: %s", e)
+        return 2
 
     if args.arm:
         if args.arm not in ab_cfg.arms:

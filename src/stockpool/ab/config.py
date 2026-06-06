@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 from typing import Literal
 
+import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -12,6 +13,7 @@ from stockpool.config import (
     AppConfig,
     BacktestCostConfig,
     SizingConfig,
+    Stock,
     StrategyConfig,
     load_config,
 )
@@ -59,6 +61,7 @@ class ABConfig(BaseModel):
     """Top-level A/B test config (loaded from ab.yaml)."""
     model_config = ConfigDict(extra="forbid")
     base_config: str
+    use_ab_pool: bool = False
     stocks_filter: list[str] = Field(default_factory=list)
     arms: dict[str, ArmOverride]
 
@@ -107,10 +110,38 @@ def build_effective_cfg(base: AppConfig, arm: ArmOverride) -> AppConfig:
     return out
 
 
+def _resolve_stocks(ab_cfg: ABConfig, base_cfg: AppConfig) -> list[Stock]:
+    """Return the per-stock iteration list for this AB run.
+
+    Precedence:
+      1. If ``ab_cfg.use_ab_pool``, read ab_pool.parquet → synthesize Stock list
+         (sector = industry from parquet).
+      2. Else use base_cfg.stocks as-is.
+      3. Then intersect with ``ab_cfg.stocks_filter`` if non-empty.
+
+    Raises FileNotFoundError if use_ab_pool=True but parquet absent.
+    """
+    from stockpool.ab_pool import load_ab_pool
+
+    if ab_cfg.use_ab_pool:
+        df = load_ab_pool(base_cfg.ab_pool.cache_path)
+        stocks = [
+            Stock(code=str(r["code"]).zfill(6), name=str(r["name"]),
+                  sector=str(r["industry"]))
+            for _, r in df.iterrows()
+        ]
+    else:
+        stocks = list(base_cfg.stocks)
+
+    if ab_cfg.stocks_filter:
+        wanted = set(ab_cfg.stocks_filter)
+        stocks = [s for s in stocks if s.code in wanted]
+    return stocks
+
+
 def load_ab_config(ab_path: str | Path) -> ABConfig:
     """Load and validate ab.yaml. Performs post-pydantic checks that need
-    side info (base config existence, stocks_filter membership, deep-merge
-    validity).
+    side info (base config existence, stocks resolution, deep-merge validity).
 
     Raises pydantic.ValidationError or ValueError on any failure.
     """
@@ -127,12 +158,26 @@ def load_ab_config(ab_path: str | Path) -> ABConfig:
 
     base_cfg = load_config(base_path)
 
+    # Resolve the effective stocks list (ab_pool swap + stocks_filter)
+    # and validate that stocks_filter codes exist in the resolved pool.
+    try:
+        _resolve_stocks(ab_cfg, base_cfg)
+    except FileNotFoundError as e:
+        raise ValueError(
+            f"use_ab_pool=true but {e}"
+        ) from e
+
     if ab_cfg.stocks_filter:
-        base_codes = {s.code for s in base_cfg.stocks}
-        unknown = [c for c in ab_cfg.stocks_filter if c not in base_codes]
+        if ab_cfg.use_ab_pool:
+            df = pd.read_parquet(base_cfg.ab_pool.cache_path)
+            pool_codes = {str(c).zfill(6) for c in df["code"]}
+            unknown = [c for c in ab_cfg.stocks_filter if c not in pool_codes]
+        else:
+            base_codes = {s.code for s in base_cfg.stocks}
+            unknown = [c for c in ab_cfg.stocks_filter if c not in base_codes]
         if unknown:
             raise ValueError(
-                f"stocks_filter references codes not in base.stocks: {unknown}"
+                f"stocks_filter references codes not in resolved pool: {unknown}"
             )
 
     for name, arm in ab_cfg.arms.items():

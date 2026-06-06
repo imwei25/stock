@@ -563,3 +563,147 @@ def test_cli_ab_pool_show_renders(tmp_path, monkeypatch):
     out_html = tmp_path / "reports" / "ab_pool.html"
     assert out_html.exists()
     assert "贵州茅台" in out_html.read_text(encoding="utf-8")
+
+
+# ============================================================================
+# Task 8: ab.yaml use_ab_pool integration
+# ============================================================================
+from stockpool.ab.config import ABConfig, ArmOverride, load_ab_config, _resolve_stocks
+
+
+def _write_ab_yaml(tmp_path: Path, use_ab_pool: bool, stocks_filter: list[str] | None = None):
+    """Write a tmp config.yaml + ab.yaml. Uses _stub_app_cfg-style normalization
+    so factors_file and ab_pool.cache_path are absolute (no cwd dependency)."""
+    import yaml as _yaml
+    proj_root = Path(__file__).parent.parent
+    base_cfg_text = (proj_root / "config.yaml").read_text(encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(base_cfg_text, encoding="utf-8")
+    # Re-load + re-dump with absolute factors_file + ab_pool.cache_path so
+    # load_ab_config → load_config works regardless of cwd.
+    cfg = load_config(tmp_path / "config.yaml")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    cfg.data.cache_dir = str(data_dir)
+    cfg.ab_pool.cache_path = str(data_dir / "ab_pool.parquet")
+    ff = cfg.strategy.ml_factor.factors_file
+    if ff and not Path(ff).is_absolute():
+        cfg.strategy.ml_factor.factors_file = str((proj_root / ff).resolve())
+    _yaml.safe_dump(cfg.model_dump(mode="python"),
+                    open(tmp_path / "config.yaml", "w", encoding="utf-8"),
+                    allow_unicode=True)
+
+    ab_text = f"""
+base_config: config.yaml
+use_ab_pool: {str(use_ab_pool).lower()}
+{("stocks_filter: " + repr(stocks_filter)) if stocks_filter else ""}
+arms:
+  baseline:
+    strategy:
+      name: composite_verdict
+    backtest:
+      equity_curve_holding_days: [10]
+  challenger:
+    strategy:
+      name: composite_verdict
+    backtest:
+      equity_curve_holding_days: [10]
+"""
+    ab_path = tmp_path / "ab.yaml"
+    ab_path.write_text(ab_text, encoding="utf-8")
+    return ab_path
+
+
+def test_ab_config_use_ab_pool_default_false(tmp_path):
+    ab_path = _write_ab_yaml(tmp_path, use_ab_pool=False)
+    ab_cfg = load_ab_config(ab_path)
+    assert ab_cfg.use_ab_pool is False
+
+
+def test_ab_config_use_ab_pool_true_field(tmp_path):
+    ab_path = _write_ab_yaml(tmp_path, use_ab_pool=True)
+    # Seed an ab_pool.parquet so load_ab_config doesn't fail on membership check.
+    # _write_ab_yaml normalized cache_path to tmp_path/data/ab_pool.parquet.
+    pd.DataFrame([
+        {"code": "600519", "name": "贵州茅台", "industry": "食品饮料",
+         "circ_mv": 2e12, "avg_amount_20d": 5e9,
+         "source_tag": "mcap+liq", "build_date": "2026-06-06"},
+    ]).to_parquet(tmp_path / "data" / "ab_pool.parquet")
+    ab_cfg = load_ab_config(ab_path)
+    assert ab_cfg.use_ab_pool is True
+
+
+def test_ab_config_use_ab_pool_missing_parquet_raises(tmp_path):
+    ab_path = _write_ab_yaml(tmp_path, use_ab_pool=True)
+    # No parquet exists at tmp_path/data/ab_pool.parquet
+    with pytest.raises(Exception, match="ab_pool"):
+        load_ab_config(ab_path)
+
+
+def test_resolve_stocks_use_ab_pool_replaces(tmp_path):
+    base_yaml = (Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(base_yaml, encoding="utf-8")
+    base_cfg = load_config(tmp_path / "config.yaml")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    base_cfg.data.cache_dir = str(data_dir)
+    base_cfg.ab_pool.cache_path = str(data_dir / "ab_pool.parquet")
+
+    pd.DataFrame([
+        {"code": "600519", "name": "贵州茅台", "industry": "食品饮料",
+         "circ_mv": 2e12, "avg_amount_20d": 5e9,
+         "source_tag": "mcap+liq", "build_date": "2026-06-06"},
+        {"code": "000001", "name": "平安银行", "industry": "银行",
+         "circ_mv": 3e11, "avg_amount_20d": 8e8,
+         "source_tag": "liq", "build_date": "2026-06-06"},
+    ]).to_parquet(base_cfg.ab_pool.cache_path)
+
+    ab_cfg = ABConfig(
+        base_config="config.yaml", use_ab_pool=True, stocks_filter=[],
+        arms={
+            "a": ArmOverride.model_validate({
+                "strategy": {"name": "composite_verdict"},
+                "backtest": {"equity_curve_holding_days": [10]},
+            }),
+            "b": ArmOverride.model_validate({
+                "strategy": {"name": "composite_verdict"},
+                "backtest": {"equity_curve_holding_days": [10]},
+            }),
+        },
+    )
+    stocks = _resolve_stocks(ab_cfg, base_cfg)
+    assert [s.code for s in stocks] == ["600519", "000001"]
+    assert [s.sector for s in stocks] == ["食品饮料", "银行"]
+
+
+def test_resolve_stocks_filter_intersect_with_ab_pool(tmp_path):
+    base_yaml = (Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(base_yaml, encoding="utf-8")
+    base_cfg = load_config(tmp_path / "config.yaml")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    base_cfg.data.cache_dir = str(data_dir)
+    base_cfg.ab_pool.cache_path = str(data_dir / "ab_pool.parquet")
+    pd.DataFrame([
+        {"code": "600519", "name": "贵州茅台", "industry": "食品饮料",
+         "circ_mv": 2e12, "avg_amount_20d": 5e9,
+         "source_tag": "mcap+liq", "build_date": "2026-06-06"},
+        {"code": "000001", "name": "平安银行", "industry": "银行",
+         "circ_mv": 3e11, "avg_amount_20d": 8e8,
+         "source_tag": "liq", "build_date": "2026-06-06"},
+    ]).to_parquet(base_cfg.ab_pool.cache_path)
+    ab_cfg = ABConfig(
+        base_config="config.yaml", use_ab_pool=True,
+        stocks_filter=["600519"],
+        arms={
+            "a": ArmOverride.model_validate({
+                "strategy": {"name": "composite_verdict"},
+                "backtest": {"equity_curve_holding_days": [10]},
+            }),
+            "b": ArmOverride.model_validate({
+                "strategy": {"name": "composite_verdict"},
+                "backtest": {"equity_curve_holding_days": [10]},
+            }),
+        },
+    )
+    stocks = _resolve_stocks(ab_cfg, base_cfg)
+    assert [s.code for s in stocks] == ["600519"]
