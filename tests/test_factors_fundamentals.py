@@ -132,3 +132,76 @@ def test_specs_registered():
                  "revenue_yoy"):
         spec = get_spec(name)
         assert spec is not None
+
+
+def test_market_cap_factor_registered_and_computes(monkeypatch, tmp_path):
+    """market_cap factor: close × totalShare PIT-aligned by pubDate."""
+    from stockpool.factors.registry import make_factor
+    import pandas as pd
+    import numpy as np
+
+    fake_balance = pd.DataFrame({
+        "code": ["600000"],
+        "pubDate": pd.to_datetime(["2024-12-15"]),
+        "statDate": pd.to_datetime(["2024-09-30"]),
+        "totalShare": [6e8],
+    })
+    monkeypatch.setattr(
+        "stockpool.fundamentals_loader.load_or_build_fundamentals",
+        lambda table, cache_dir=None: fake_balance,
+    )
+
+    dates = pd.date_range("2025-01-01", periods=3, freq="B")
+    close = pd.DataFrame({"600000": [10.0, 11.0, 12.0]}, index=dates)
+    panel = {"close": close, "open": close, "high": close, "low": close, "volume": close}
+
+    factor = make_factor("market_cap")
+    out = factor.compute(panel)
+    expected = close["600000"] * 6e8
+    np.testing.assert_allclose(out["600000"].values, expected.values)
+
+
+def test_log_market_cap_factor_registered_and_computes(monkeypatch):
+    """log_market_cap = log(close × totalShare), NaN where mcap ≤ 0 / missing."""
+    from stockpool.factors.registry import make_factor
+    import pandas as pd
+    import numpy as np
+
+    fake_balance = pd.DataFrame({
+        "code": ["600000"],
+        "pubDate": pd.to_datetime(["2024-12-15"]),
+        "statDate": pd.to_datetime(["2024-09-30"]),
+        "totalShare": [6e8],
+    })
+    monkeypatch.setattr(
+        "stockpool.fundamentals_loader.load_or_build_fundamentals",
+        lambda table, cache_dir=None: fake_balance,
+    )
+
+    dates = pd.date_range("2025-01-01", periods=3, freq="B")
+    close = pd.DataFrame({"600000": [10.0, 11.0, 12.0]}, index=dates)
+    panel = {"close": close, "open": close, "high": close, "low": close, "volume": close}
+
+    factor = make_factor("log_market_cap")
+    out = factor.compute(panel)
+    expected = np.log(close["600000"] * 6e8)
+    np.testing.assert_allclose(out["600000"].values, expected.values)
+
+
+def test_pe_factor_has_contains_mcap_tag():
+    """PE registration tag tuple must include 'contains_mcap'."""
+    from stockpool.factors.registry import list_specs
+    pe_spec = next(s for s in list_specs() if s.base_name == "pe")
+    assert "contains_mcap" in pe_spec.types
+
+
+def test_pb_factor_has_contains_mcap_tag():
+    from stockpool.factors.registry import list_specs
+    pb_spec = next(s for s in list_specs() if s.base_name == "pb")
+    assert "contains_mcap" in pb_spec.types
+
+
+def test_market_cap_factor_has_size_tag():
+    from stockpool.factors.registry import list_specs
+    spec = next(s for s in list_specs() if s.base_name == "market_cap")
+    assert "size" in spec.types

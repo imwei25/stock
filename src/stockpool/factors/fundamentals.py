@@ -163,7 +163,7 @@ class RevenueYoYFactor(_ScalarFundamentalFactor):
 @register(
     "pe",
     sources=("custom",),
-    types=("fundamental", "cross_sectional"),
+    types=("fundamental", "cross_sectional", "contains_mcap"),
     description="市盈率(总市值 / 滚动 4 季净利润)。值越低越便宜,但要警惕周期顶反转;亏损公司返回 NaN。",
 )
 class PEFactor(Factor):
@@ -203,7 +203,7 @@ class PEFactor(Factor):
 @register(
     "pb",
     sources=("custom",),
-    types=("fundamental", "cross_sectional"),
+    types=("fundamental", "cross_sectional", "contains_mcap"),
     description="市净率(总市值 / 股东权益)。低 PB 常见于金融/周期股,需要配合 ROE 才能判断是否真便宜。",
 )
 class PBFactor(Factor):
@@ -227,3 +227,47 @@ class PBFactor(Factor):
 
         pb = panel["close"] * shares_panel / equity_panel
         return pb.where((equity_panel > 0) & shares_panel.notna())
+
+
+@register(
+    "market_cap",
+    sources=("custom",),
+    types=("fundamental", "cross_sectional", "size"),
+    description="总市值 (close × 总股本)。规模因子,小盘溢价 / 大盘稳定的常用代理。严格按公告日 PIT 对齐。",
+)
+class MarketCapFactor(Factor):
+    def __init__(self):
+        pass
+
+    @property
+    def name(self) -> str:
+        return "market_cap"
+
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        from stockpool.fundamentals_loader import load_or_build_fundamentals
+        balance = load_or_build_fundamentals("balance", cache_dir=_default_cache_dir())
+        if balance is None or balance.empty:
+            return pd.DataFrame(
+                np.nan, index=panel["close"].index, columns=panel["close"].columns,
+            )
+        shares_panel = _pit_align(balance, "totalShare", panel["close"])
+        return panel["close"] * shares_panel
+
+
+@register(
+    "log_market_cap",
+    sources=("custom",),
+    types=("fundamental", "cross_sectional", "size"),
+    description="log(总市值)。剥离市值 β 时常用;线性回归更稳定。NaN 出现在停牌 / 无股本数据 / mcap ≤ 0 时。",
+)
+class LogMarketCapFactor(Factor):
+    def __init__(self):
+        pass
+
+    @property
+    def name(self) -> str:
+        return "log_market_cap"
+
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        mcap = MarketCapFactor().compute(panel)
+        return np.log(mcap.where(mcap > 0))
