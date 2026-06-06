@@ -258,37 +258,31 @@ def apply_preprocess_pipeline(
     sector_map: Mapping[str, str] | None = None,
     factor_types: Mapping[str, tuple[str, ...]] | None = None,
     n_codes: int | None = None,
+    log_mcap_panel: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Run winsorize → cs_zscore → industry_neutralize on each factor.
+    """Run winsorize → cs_zscore → (industry/mcap) neutralize per factor.
 
     Args:
         factor_panel: ``{factor_name: T × N DataFrame}``.
         cfg: ``PreprocessConfig`` controlling which steps run.
-        sector_map: ``{code: industry}``. Required when
-            ``cfg.industry_neutralize=True``; if missing/empty, that step is
-            skipped with a warning (other steps still run).
-        factor_types: ``{factor_name: (type_tag, ...)}``. Factors whose tag
-            tuple includes ``"fundamental"`` skip industry neutralize
-            (preserves sector-intrinsic signal like bank-low-PE).
-        n_codes: actual panel width (number of stocks). When provided AND
-            below ``cfg.min_pool_size``, every preprocess step is skipped
-            with a single warning — cross-sec preprocessing is unstable
-            on small pools and produces silent zero-demean bugs in
-            single-member industries (Phase 1.5 size guard). Pass ``None``
-            to bypass the guard entirely (used by unit tests of the
-            transform logic itself).
+        sector_map: ``{code: industry}``. Required when ``cfg.industry_neutralize``;
+            empty/missing skips that step with a warning.
+        factor_types: ``{factor_name: (type_tag, ...)}``.
+            * ``"fundamental"`` → skip industry neutralize (legacy bank-low-PE rule).
+            * ``"contains_mcap"`` → also skip mcap neutralize (PE/PB are
+              collinear with close × shares).
+        n_codes: actual panel width. When below ``cfg.min_pool_size`` every step
+            is skipped with a warning (Phase 1.5 size guard).
+        log_mcap_panel: T × N log(market_cap). Required when
+            ``cfg.mcap_neutralize``; ``None`` → skip mcap with a warning.
 
     Returns:
-        New dict with same keys; values are transformed (or shallow-copied
-        if cfg is all-off OR size guard tripped). Original input is never mutated.
+        New dict with same keys; values transformed (or shallow-copied if cfg
+        all-off or size guard tripped). Original input is never mutated.
     """
     if _is_all_off(cfg):
         return dict(factor_panel)
 
-    # Phase 1.5 size guard: cross-sec preprocessing on small pools is
-    # mathematically degenerate (μ/σ unstable; single-member industries
-    # demean to 0). When caller supplies n_codes and it falls below the
-    # configured threshold, skip every step with one warning per call.
     if n_codes is not None and n_codes < cfg.min_pool_size:
         log.warning(
             "preprocess pipeline skipped: n_codes=%d < min_pool_size=%d "
@@ -297,14 +291,21 @@ def apply_preprocess_pipeline(
         )
         return dict(factor_panel)
 
-    out: dict[str, pd.DataFrame] = {}
-    do_neutralize = cfg.industry_neutralize and bool(sector_map)
+    do_industry = cfg.industry_neutralize and bool(sector_map)
     if cfg.industry_neutralize and not sector_map:
         log.warning(
             "industry_neutralize=True but sector_map is empty/None; "
-            "skipping that step (winsorize/zscore still applied if enabled)"
+            "skipping that step (winsorize/zscore/mcap still applied if enabled)"
         )
 
+    do_mcap = cfg.mcap_neutralize and log_mcap_panel is not None
+    if cfg.mcap_neutralize and log_mcap_panel is None:
+        log.warning(
+            "mcap_neutralize=True but log_mcap_panel is None; skipping mcap step "
+            "(caller must build log(market_cap) and pass it in)"
+        )
+
+    out: dict[str, pd.DataFrame] = {}
     for name, df in factor_panel.items():
         work = df
         if cfg.winsorize is not None:
@@ -312,9 +313,24 @@ def apply_preprocess_pipeline(
             work = winsorize_panel(work, lo, hi)
         if cfg.zscore:
             work = cs_zscore_panel(work)
-        if do_neutralize:
-            tags = factor_types.get(name, ()) if factor_types else ()
-            if "fundamental" not in tags:
-                work = industry_neutralize_panel(work, sector_map)
+
+        tags = factor_types.get(name, ()) if factor_types else ()
+        is_fundamental = "fundamental" in tags
+        is_contains_mcap = "contains_mcap" in tags
+
+        # industry: legacy rule — skip on fundamental tag.
+        run_industry = do_industry and not is_fundamental
+        # mcap: skip only on contains_mcap tag (PE/PB). Other fundamentals OK.
+        run_mcap = do_mcap and not is_contains_mcap
+
+        if run_industry and run_mcap:
+            work = industry_neutralize_panel(
+                work, sector_map, log_mcap=log_mcap_panel,
+            )
+        elif run_industry:
+            work = industry_neutralize_panel(work, sector_map)
+        elif run_mcap:
+            work = mcap_neutralize_panel(work, log_mcap_panel)
+
         out[name] = work
     return out
