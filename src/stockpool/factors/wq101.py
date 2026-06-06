@@ -97,7 +97,7 @@ def _nan_like(panel) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(1, ("cross_sectional", "reversal"),
-     "rank(Ts_ArgMax(SignedPower((returns<0)?stddev(returns,20):close, 2), 5)) - 0.5")
+     "横截面反转因子,先把负收益日替换为近 20 日收益率波动率、正收益日保留收盘价,平方后取近 5 日最大值出现的位置做横截面秩,衡量波动峰值在窗口内的相对位置。")
 class Alpha001(WqAlpha):
     def compute(self, panel):
         ret = _ret(panel)
@@ -110,7 +110,7 @@ class Alpha001(WqAlpha):
 
 
 @_wq(2, ("cross_sectional", "volume"),
-     "-1 * correlation(rank(delta(log(volume),2)), rank((close-open)/open), 6)")
+     "量价背离因子,对成交量对数差分的横截面秩与日内涨跌幅的横截面秩做近 6 日滚动相关再取负,捕捉量价不同步的反转信号。")
 class Alpha002(WqAlpha):
     def compute(self, panel):
         log_v = np.log(panel["volume"].replace(0, np.nan))
@@ -120,21 +120,21 @@ class Alpha002(WqAlpha):
 
 
 @_wq(3, ("cross_sectional", "volume"),
-     "-1 * correlation(rank(open), rank(volume), 10)")
+     "经典的开盘价与成交量横截面秩的负向 10 日滚动相关,是 WQ101 里最直观的量价反向因子,相关性越强信号越弱。")
 class Alpha003(WqAlpha):
     def compute(self, panel):
         return -1.0 * ops.correlation(ops.rank(panel["open"]), ops.rank(panel["volume"]), 10)
 
 
 @_wq(4, ("cross_sectional", "reversal"),
-     "-1 * Ts_Rank(rank(low), 9)")
+     "对最低价做横截面秩后再算近 9 日时序排名并取负,本质是短期反转因子:近期低点抬升越快越看空。")
 class Alpha004(WqAlpha):
     def compute(self, panel):
         return -1.0 * ops.ts_rank(ops.rank(panel["low"]), 9)
 
 
 @_wq(5, ("cross_sectional",),
-     "rank(open - sum(vwap,10)/10) * (-1 * abs(rank(close - vwap)))")
+     "开盘价相对近 10 日 vwap 均值的横截面秩,乘以收盘价与 vwap 偏离秩的绝对值取负,反映日内强弱与近期均价的背离。")
 class Alpha005(WqAlpha):
     def compute(self, panel):
         vwap = _vwap(panel)
@@ -144,14 +144,14 @@ class Alpha005(WqAlpha):
 
 
 @_wq(6, ("cross_sectional", "volume"),
-     "-1 * correlation(open, volume, 10)")
+     "开盘价与成交量的 10 日滚动相关取负,典型量价反向因子,跟 Alpha003 思路相近但不做秩归一。")
 class Alpha006(WqAlpha):
     def compute(self, panel):
         return -1.0 * ops.correlation(panel["open"], panel["volume"], 10)
 
 
 @_wq(7, ("cross_sectional",),
-     "adv20<volume ? -1*ts_rank(abs(delta(close,7)),60)*sign(delta(close,7)) : -1")
+     "当成交量放大超过 20 日均量时,用近 7 日收盘差分的绝对值时序排名乘以方向取负,否则强制返回 -1,带成交量门控的趋势反转。")
 class Alpha007(WqAlpha):
     def compute(self, panel):
         adv20 = _adv(panel, 20)
@@ -163,7 +163,7 @@ class Alpha007(WqAlpha):
 
 
 @_wq(8, ("cross_sectional", "momentum"),
-     "-1 * rank((sum(open,5)*sum(returns,5)) - delay(sum(open,5)*sum(returns,5), 10))")
+     "近 5 日开盘价之和乘以 5 日收益率之和,与其 10 日前的同一组合做差,再做横截面秩并取负,捕捉量价动量的周期性反复。")
 class Alpha008(WqAlpha):
     def compute(self, panel):
         ret = _ret(panel)
@@ -172,7 +172,7 @@ class Alpha008(WqAlpha):
 
 
 @_wq(9, ("time_series",),
-     "((0<ts_min(delta(close,1),5))?delta(close,1):((ts_max(delta(close,1),5)<0)?delta(close,1):-1*delta(close,1)))")
+     "近 5 日日内涨跌均同号时延续动量,否则取反,纯时序的小周期动量/反转切换信号。")
 class Alpha009(WqAlpha):
     def compute(self, panel):
         d = ops.delta(panel["close"], 1)
@@ -183,7 +183,7 @@ class Alpha009(WqAlpha):
 
 
 @_wq(10, ("cross_sectional", "time_series"),
-     "rank(((0<ts_min(delta(close,1),4))?delta(close,1):((ts_max(delta(close,1),4)<0)?delta(close,1):-1*delta(close,1))))")
+     "Alpha009 的横截面秩版本,4 日窗口判断方向一致性后再做横截面归一,把时序信号转成横截面排名。")
 class Alpha010(WqAlpha):
     def compute(self, panel):
         d = ops.delta(panel["close"], 1)
@@ -198,7 +198,7 @@ class Alpha010(WqAlpha):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(11, ("cross_sectional",),
-     "(rank(ts_max(vwap-close,3)) + rank(ts_min(vwap-close,3))) * rank(delta(volume,3))")
+     "vwap 与收盘价之差在近 3 日最大/最小值的横截面秩之和,再乘以成交量 3 日差分秩,把日内强弱与放量结合。")
 class Alpha011(WqAlpha):
     def compute(self, panel):
         d = _vwap(panel) - panel["close"]
@@ -206,28 +206,28 @@ class Alpha011(WqAlpha):
 
 
 @_wq(12, ("cross_sectional", "volume"),
-     "sign(delta(volume,1)) * (-1 * delta(close,1))")
+     "成交量变化方向乘以收盘价单日变化的反向,放量上涨偏空、放量下跌偏多,经典的量价短期反转。")
 class Alpha012(WqAlpha):
     def compute(self, panel):
         return np.sign(ops.delta(panel["volume"], 1)) * (-1.0 * ops.delta(panel["close"], 1))
 
 
 @_wq(13, ("cross_sectional", "volume"),
-     "-1 * rank(covariance(rank(close), rank(volume), 5))")
+     "收盘价秩与成交量秩 5 日协方差再取横截面秩并取负,衡量价量同步性的横截面短期反转。")
 class Alpha013(WqAlpha):
     def compute(self, panel):
         return -1.0 * ops.rank(ops.covariance(ops.rank(panel["close"]), ops.rank(panel["volume"]), 5))
 
 
 @_wq(14, ("cross_sectional", "volume"),
-     "(-1 * rank(delta(returns,3))) * correlation(open, volume, 10)")
+     "近 3 日收益率差分的横截面秩取负,乘以开盘价与成交量的 10 日滚动相关,把动量减速与量价关系叠加。")
 class Alpha014(WqAlpha):
     def compute(self, panel):
         return (-1.0 * ops.rank(ops.delta(_ret(panel), 3))) * ops.correlation(panel["open"], panel["volume"], 10)
 
 
 @_wq(15, ("cross_sectional", "volume"),
-     "-1 * sum(rank(correlation(rank(high), rank(volume), 3)), 3)")
+     "最高价秩与成交量秩的 3 日滚动相关,横截面秩后再做 3 日时序累加并取负,衡量高位放量的持续性。")
 class Alpha015(WqAlpha):
     def compute(self, panel):
         c = ops.correlation(ops.rank(panel["high"]), ops.rank(panel["volume"]), 3)
@@ -235,14 +235,14 @@ class Alpha015(WqAlpha):
 
 
 @_wq(16, ("cross_sectional", "volume"),
-     "-1 * rank(covariance(rank(high), rank(volume), 5))")
+     "最高价秩与成交量秩的 5 日协方差横截面秩并取负,跟 Alpha013 同款思路换成 high 价,捕捉冲高放量后的反转。")
 class Alpha016(WqAlpha):
     def compute(self, panel):
         return -1.0 * ops.rank(ops.covariance(ops.rank(panel["high"]), ops.rank(panel["volume"]), 5))
 
 
 @_wq(17, ("cross_sectional",),
-     "((-1*rank(ts_rank(close,10))) * rank(delta(delta(close,1),1))) * rank(ts_rank(volume/adv20,5))")
+     "把收盘价的 10 日时序排名秩、二阶差分秩、相对 20 日均量的近 5 日时序排名秩三者相乘,WQ101 数据挖掘风格的复合反转信号。")
 class Alpha017(WqAlpha):
     def compute(self, panel):
         a = -1.0 * ops.rank(ops.ts_rank(panel["close"], 10))
@@ -253,7 +253,7 @@ class Alpha017(WqAlpha):
 
 
 @_wq(18, ("cross_sectional",),
-     "-1*rank(stddev(abs(close-open),5) + (close-open) + correlation(close,open,10))")
+     "近 5 日日内振幅波动、当日涨跌、收开 10 日相关性相加后做横截面秩取负,综合波动与日内强弱的反向因子。")
 class Alpha018(WqAlpha):
     def compute(self, panel):
         diff = panel["close"] - panel["open"]
@@ -262,7 +262,7 @@ class Alpha018(WqAlpha):
 
 
 @_wq(19, ("cross_sectional", "momentum"),
-     "(-1*sign(close-delay(close,7)+delta(close,7))) * (1+rank(1+sum(returns,250)))")
+     "判断近 7 日是涨是跌的方向取负,乘以近 250 日累计收益的横截面秩加一,把短期动量方向和长期收益位置反向耦合。")
 class Alpha019(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -273,7 +273,7 @@ class Alpha019(WqAlpha):
 
 
 @_wq(20, ("cross_sectional", "reversal"),
-     "((-1*rank(open-delay(high,1))) * rank(open-delay(close,1))) * rank(open-delay(low,1))")
+     "开盘价分别相对前一日 high/close/low 偏离的横截面秩相乘,首项取负,典型的隔夜跳空反转因子。")
 class Alpha020(WqAlpha):
     def compute(self, panel):
         op = panel["open"]
@@ -288,7 +288,7 @@ class Alpha020(WqAlpha):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(21, ("time_series", "volume"),
-     "if ((sum(close,8)/8+stddev(close,8))<(sum(close,2)/2)) then -1; elif ((sum(close,2)/2)<(sum(close,8)/8-stddev(close,8))) then 1; elif (1<=(volume/adv20)) then 1 else -1")
+     "用近 2 日均价与近 8 日均价加减一倍标准差比较,再叠加放量条件,产生 -1/+1 的三态信号,带波动通道的时序均值回归。")
 class Alpha021(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -304,7 +304,7 @@ class Alpha021(WqAlpha):
 
 
 @_wq(22, ("cross_sectional", "volume"),
-     "-1 * (delta(correlation(high,volume,5),5) * rank(stddev(close,20)))")
+     "high 与 volume 5 日滚动相关再做 5 日差分,乘以收盘价 20 日波动率的横截面秩并取负,量价关系恶化叠加高波动时的反转信号。")
 class Alpha022(WqAlpha):
     def compute(self, panel):
         a = ops.delta(ops.correlation(panel["high"], panel["volume"], 5), 5)
@@ -313,7 +313,7 @@ class Alpha022(WqAlpha):
 
 
 @_wq(23, ("time_series", "reversal"),
-     "((sum(high,20)/20)<high) ? -1*delta(high,2) : 0")
+     "仅当 high 突破近 20 日均高时触发,信号为近 2 日 high 差分取负,其余日子为零,是带条件的突破后回落反转。")
 class Alpha023(WqAlpha):
     def compute(self, panel):
         h = panel["high"]
@@ -323,7 +323,7 @@ class Alpha023(WqAlpha):
 
 
 @_wq(24, ("time_series", "reversal"),
-     "if delta(sum(close,100)/100,100)/delay(close,100)<=0.05 then -1*(close-ts_min(close,100)) else -1*delta(close,3)")
+     "如果近 100 日均价相对 100 日前的涨幅极小,则发出距离 100 日低点的负偏离;否则用近 3 日收盘差分取负,慢牛/震荡市切换的反转信号。")
 class Alpha024(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -335,7 +335,7 @@ class Alpha024(WqAlpha):
 
 
 @_wq(25, ("cross_sectional", "volume"),
-     "rank(((-1*returns)*adv20*vwap)*(high-close))")
+     "把负收益、20 日均量、vwap 和当日上影线长度连乘后做横截面秩,综合反转、流动性和日内弱势,典型 WQ101 数据挖掘合成因子。")
 class Alpha025(WqAlpha):
     def compute(self, panel):
         ret = _ret(panel)
@@ -343,7 +343,7 @@ class Alpha025(WqAlpha):
 
 
 @_wq(26, ("cross_sectional", "volume"),
-     "-1 * ts_max(correlation(ts_rank(volume,5), ts_rank(high,5), 5), 3)")
+     "近 5 日成交量时序排名与最高价时序排名做 5 日滚动相关,再取近 3 日最大值并取负,捕捉量价同步走强后的短期反转。")
 class Alpha026(WqAlpha):
     def compute(self, panel):
         c = ops.correlation(ops.ts_rank(panel["volume"], 5), ops.ts_rank(panel["high"], 5), 5)
@@ -351,7 +351,7 @@ class Alpha026(WqAlpha):
 
 
 @_wq(27, ("cross_sectional", "volume"),
-     "(0.5<rank(sum(correlation(rank(volume),rank(vwap),6),2)/2)) ? -1 : 1")
+     "横截面下成交量秩与 vwap 秩的 6 日滚动相关,值高发出做空、低发出做多的反向信号,典型量价相关反转。")
 class Alpha027(WqAlpha):
     def compute(self, panel):
         c = ops.correlation(ops.rank(panel["volume"]), ops.rank(_vwap(panel)), 6)
@@ -361,7 +361,7 @@ class Alpha027(WqAlpha):
 
 
 @_wq(28, ("cross_sectional",),
-     "scale(correlation(adv20, low, 5) + (high+low)/2 - close)")
+     "20 日均量与最低价的 5 日滚动相关,叠加中间价偏离收盘的部分,再做横截面标准化的复合因子。")
 class Alpha028(WqAlpha):
     def compute(self, panel):
         return ops.scale(
@@ -372,7 +372,7 @@ class Alpha028(WqAlpha):
 
 
 @_wq(29, ("cross_sectional",),
-     "min(product(rank(rank(scale(log(sum(ts_min(rank(rank(-1*rank(delta(close-1,5)))),2),1))))),1),5) + ts_rank(delay(-1*returns,6),5)")
+     "WQ101 数据挖掘风格的横截面复合,包含多层 rank、log、scale 与 6 日延迟收益率时序排名,无清晰金融直觉。")
 class Alpha029(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -389,7 +389,7 @@ class Alpha029(WqAlpha):
 
 
 @_wq(30, ("cross_sectional", "volume", "reversal"),
-     "((1.0-rank(sign(close-delay(close,1)) + sign(delay(close,1)-delay(close,2)) + sign(delay(close,2)-delay(close,3)))) * sum(volume,5)) / sum(volume,20)")
+     "用最近 3 日收盘方向是否一致衡量趋势连续性,连续同向时减仓,再用近 5 日与 20 日成交量比值放大,属于量价反转因子。")
 class Alpha030(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -402,7 +402,7 @@ class Alpha030(WqAlpha):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(31, ("cross_sectional",),
-     "rank(rank(rank(decay_linear(-1*rank(rank(delta(close,10))),10)))) + rank(-1*delta(close,3)) + sign(scale(correlation(adv20,low,12)))")
+     "三段叠加:10 日动量的衰减加权 rank、3 日反向动量 rank、以及 20 日均量与最低价相关的符号,综合横截面打分。")
 class Alpha031(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -413,7 +413,7 @@ class Alpha031(WqAlpha):
 
 
 @_wq(32, ("cross_sectional",),
-     "scale(sum(close,7)/7 - close) + 20*scale(correlation(vwap, delay(close,5), 230))")
+     "近 7 日均价相对当前收盘的偏离,叠加 vwap 与 5 日前收盘的长期 230 日相关,属于均值回归 + 长周期量价共振复合。")
 class Alpha032(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -423,14 +423,14 @@ class Alpha032(WqAlpha):
 
 
 @_wq(33, ("cross_sectional",),
-     "rank(-1 * ((1 - open/close)^1))")
+     "横截面下对开收比 open/close 取负后做秩,本质是收盘相对开盘越强排名越靠前的简单日内动量。")
 class Alpha033(WqAlpha):
     def compute(self, panel):
         return ops.rank(-1.0 * (1.0 - panel["open"] / panel["close"]))
 
 
 @_wq(34, ("cross_sectional",),
-     "rank((1 - rank(stddev(returns,2)/stddev(returns,5))) + (1 - rank(delta(close,1))))")
+     "把短期(2 日)与中期(5 日)收益波动比、以及 1 日收盘差分都做反向横截面秩相加,挑选低波动 + 短期下跌的票。")
 class Alpha034(WqAlpha):
     def compute(self, panel):
         ret = _ret(panel)
@@ -440,7 +440,7 @@ class Alpha034(WqAlpha):
 
 
 @_wq(35, ("time_series",),
-     "ts_rank(volume,32) * (1 - ts_rank(close+high-low,16)) * (1 - ts_rank(returns,32))")
+     "32 日成交量时序排名乘以(1 - 16 日价格振幅时序排名)乘以(1 - 32 日收益时序排名),倾向于高量、低波动、低收益的票。")
 class Alpha035(WqAlpha):
     def compute(self, panel):
         a = ops.ts_rank(panel["volume"], 32)
@@ -450,7 +450,7 @@ class Alpha035(WqAlpha):
 
 
 @_wq(36, ("cross_sectional", "volume"),
-     "2.21*rank(corr(close-open, delay(volume,1), 15)) + 0.7*rank(open-close) + 0.73*rank(ts_rank(delay(-1*returns,6),5)) + rank(abs(corr(vwap,adv20,6))) + 0.6*rank((sum(close,200)/200-open)*(close-open))")
+     "5 个子项加权求和的横截面因子,涵盖日内涨跌与昨量相关、开收差、滞后收益时序排名、vwap-均量相关绝对值、200 日均价偏离等。")
 class Alpha036(WqAlpha):
     def compute(self, panel):
         c, o = panel["close"], panel["open"]
@@ -464,7 +464,7 @@ class Alpha036(WqAlpha):
 
 
 @_wq(37, ("cross_sectional",),
-     "rank(correlation(delay(open-close,1), close, 200)) + rank(open - close)")
+     "昨日开收差与今日收盘的 200 日长周期滚动相关,加上当日开收差的横截面秩,捕捉日内反转的持续模式。")
 class Alpha037(WqAlpha):
     def compute(self, panel):
         c, o = panel["close"], panel["open"]
@@ -472,14 +472,14 @@ class Alpha037(WqAlpha):
 
 
 @_wq(38, ("cross_sectional", "reversal"),
-     "-1 * rank(ts_rank(close,10)) * rank(close/open)")
+     "10 日收盘时序排名与日内收开比的横截面秩相乘后取负,属于短期反转因子:涨得久且当日强的票给负分。")
 class Alpha038(WqAlpha):
     def compute(self, panel):
         return -1.0 * ops.rank(ops.ts_rank(panel["close"], 10)) * ops.rank(panel["close"] / panel["open"])
 
 
 @_wq(39, ("cross_sectional", "momentum"),
-     "(-1 * rank(delta(close,7) * (1 - rank(decay_linear(volume/adv20, 9))))) * (1 + rank(sum(returns,250)))")
+     "7 日动量乘以(1 - 衰减加权的相对成交量秩),再乘以 250 日累计收益的秩(+1),把短期动量按长期动量和量能调权。")
 class Alpha039(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -491,7 +491,7 @@ class Alpha039(WqAlpha):
 
 
 @_wq(40, ("cross_sectional", "volatility"),
-     "-1 * rank(stddev(high,10)) * correlation(high, volume, 10)")
+     "10 日最高价波动的横截面秩乘以最高价与成交量的 10 日相关,再取负,本质是高波动+量价同步走强的反向信号。")
 class Alpha040(WqAlpha):
     def compute(self, panel):
         return -1.0 * ops.rank(ops.ts_std(panel["high"], 10)) * ops.correlation(panel["high"], panel["volume"], 10)
@@ -502,14 +502,14 @@ class Alpha040(WqAlpha):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(41, ("cross_sectional",),
-     "(high * low)^0.5 - vwap")
+     "高低价几何均值减去 vwap,衡量当日中枢相对成交均价的偏离,是一个简单的日内价位偏离因子。")
 class Alpha041(WqAlpha):
     def compute(self, panel):
         return (panel["high"] * panel["low"]) ** 0.5 - _vwap(panel)
 
 
 @_wq(42, ("cross_sectional",),
-     "rank(vwap - close) / rank(vwap + close)")
+     "vwap 减收盘的横截面秩除以 vwap 加收盘的秩,捕捉收盘相对成交均价的相对位置,数值小代表收盘偏强。")
 class Alpha042(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -517,21 +517,21 @@ class Alpha042(WqAlpha):
 
 
 @_wq(43, ("time_series",),
-     "ts_rank(volume/adv20, 20) * ts_rank(-1*delta(close,7), 8)")
+     "相对成交量(volume/adv20)的 20 日时序排名乘以 7 日反向动量的 8 日时序排名,典型量价共振反转。")
 class Alpha043(WqAlpha):
     def compute(self, panel):
         return ops.ts_rank(panel["volume"] / _adv(panel, 20), 20) * ops.ts_rank(-1.0 * ops.delta(panel["close"], 7), 8)
 
 
 @_wq(44, ("cross_sectional", "volume"),
-     "-1 * correlation(high, rank(volume), 5)")
+     "最高价与横截面成交量秩的 5 日滚动相关取负,放大量价背离信号的反向因子。")
 class Alpha044(WqAlpha):
     def compute(self, panel):
         return -1.0 * ops.correlation(panel["high"], ops.rank(panel["volume"]), 5)
 
 
 @_wq(45, ("cross_sectional",),
-     "-1 * (rank(sum(delay(close,5),20)/20) * correlation(close,volume,2) * rank(correlation(sum(close,5),sum(close,20),2)))")
+     "5 日前收盘的 20 日均值秩、收盘成交量的 2 日相关、以及 5/20 日累计收盘的相关秩,三者相乘取负的复合因子。")
 class Alpha045(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -542,7 +542,7 @@ class Alpha045(WqAlpha):
 
 
 @_wq(46, ("time_series", "reversal"),
-     "if 0.25<((delay(close,20)-delay(close,10))/10 - (delay(close,10)-close)/10) then -1; elif (...)<0 then 1; else -1*(close - delay(close,1))")
+     "通过比较最近 20-10 日与 10-0 日的趋势加速度,加速向上时做空、向下时做多,否则按 1 日反向动量,典型时序反转。")
 class Alpha046(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -554,7 +554,7 @@ class Alpha046(WqAlpha):
 
 
 @_wq(47, ("cross_sectional", "volume"),
-     "((rank(1/close)*volume)/adv20) * ((high*rank(high-close))/(sum(high,5)/5)) - rank(vwap - delay(vwap,5))")
+     "把收盘倒数秩 × 成交量 / 均量 乘以高价相对 5 日均高的偏离,再减去 vwap 的 5 日动量秩,属于量价加权的反转因子。")
 class Alpha047(WqAlpha):
     def compute(self, panel):
         c, h = panel["close"], panel["high"]
@@ -567,7 +567,7 @@ class Alpha047(WqAlpha):
 
 
 @_wq(48, ("cross_sectional", "industry_neutral"),
-     "indneutralize(((correlation(delta(close,1), delta(delay(close,1),1), 250)*delta(close,1))/close), IndClass.subindustry) / sum((delta(close,1)/delay(close,1))^2, 250)")
+     "对一阶差分自相关与价格变动的复合做行业中性化,再除以 250 日累计平方收益,捕捉行业内动量持续性的归一化版本。")
 class Alpha048(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -579,7 +579,7 @@ class Alpha048(WqAlpha):
 
 
 @_wq(49, ("time_series",),
-     "if delta(delay(close,10),10)/10 - delta(close,10)/10 < -0.1 then 1 else -1*(close - delay(close,1))")
+     "类似 Alpha046 的趋势加速度判断,但阈值更宽松(-0.1):加速向下时做多,否则按 1 日反向动量,时序反转因子。")
 class Alpha049(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -589,7 +589,7 @@ class Alpha049(WqAlpha):
 
 
 @_wq(50, ("cross_sectional", "volume"),
-     "-1 * ts_max(rank(correlation(rank(volume), rank(vwap), 5)), 5)")
+     "成交量秩与 vwap 秩的 5 日滚动相关再取横截面秩,取 5 日最大值后取负,惩罚量价同步走强的票,典型反转信号。")
 class Alpha050(WqAlpha):
     def compute(self, panel):
         c = ops.correlation(ops.rank(panel["volume"]), ops.rank(_vwap(panel)), 5)
@@ -601,7 +601,7 @@ class Alpha050(WqAlpha):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(51, ("time_series",),
-     "if delta(delay(close,10),10)/10 - delta(close,10)/10 < -0.05 then 1 else -1*(close - delay(close,1))")
+     "看 20 日到 10 日均速与近 10 日均速的差异,若长期减速明显则给 +1 多头,否则按昨日涨跌取反向,是一个偏反转的时序信号。")
 class Alpha051(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -611,7 +611,7 @@ class Alpha051(WqAlpha):
 
 
 @_wq(52, ("cross_sectional",),
-     "(-1*ts_min(low,5)+delay(ts_min(low,5),5)) * rank((sum(returns,240)-sum(returns,20))/220) * ts_rank(volume,5)")
+     "5 日最低价的差分动量、长短期累计收益率横截面秩、近 5 日成交量时序排名三者相乘,长期-短期收益率差是核心。")
 class Alpha052(WqAlpha):
     def compute(self, panel):
         ret = _ret(panel)
@@ -622,7 +622,7 @@ class Alpha052(WqAlpha):
 
 
 @_wq(53, ("time_series",),
-     "-1 * delta(((close-low)-(high-close))/(close-low), 9)")
+     "对(收盘相对当日区间的位置)做 9 日差分取负,本质是反转因子,区间内位置回落则给出多头信号。")
 class Alpha053(WqAlpha):
     def compute(self, panel):
         c, h, l = panel["close"], panel["high"], panel["low"]
@@ -632,7 +632,7 @@ class Alpha053(WqAlpha):
 
 
 @_wq(54, ("cross_sectional",),
-     "(-1 * ((low-close)*(open^5))) / ((low-high)*(close^5))")
+     "用开盘价五次方与收盘价五次方的比值放大区间位置差异,属于横截面价格形态因子,无明确金融直觉。")
 class Alpha054(WqAlpha):
     def compute(self, panel):
         c, o, h, l = panel["close"], panel["open"], panel["high"], panel["low"]
@@ -642,7 +642,7 @@ class Alpha054(WqAlpha):
 
 
 @_wq(55, ("cross_sectional", "volume"),
-     "-1 * correlation(rank((close - ts_min(low,12))/(ts_max(high,12) - ts_min(low,12))), rank(volume), 6)")
+     "12 日通道内收盘相对位置的秩与成交量秩的 6 日滚动相关取负,属于典型量价背离类反转因子。")
 class Alpha055(WqAlpha):
     def compute(self, panel):
         c, h, l = panel["close"], panel["high"], panel["low"]
@@ -654,7 +654,7 @@ class Alpha055(WqAlpha):
 
 
 @_wq(56, ("cross_sectional", "industry_neutral"),
-     "0 - (1 * (rank(sum(returns,10)/sum(sum(returns,2),3)) * rank(returns*cap)))  // 需 cap (未实现)")
+     "原版需要总市值(cap)字段,本项目未实现市值字段,直接返回 NaN,仅作占位。")
 class Alpha056(WqAlpha):
     def compute(self, panel):
         # 项目无 cap 字段;返回 NaN
@@ -662,7 +662,7 @@ class Alpha056(WqAlpha):
 
 
 @_wq(57, ("cross_sectional",),
-     "0 - (1 * ((close - vwap) / decay_linear(rank(ts_argmax(close,30)),2)))")
+     "收盘价相对 vwap 的偏离除以 30 日最高位置秩的衰减权重并取负,价格偏离均价时给反向信号。")
 class Alpha057(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -670,7 +670,7 @@ class Alpha057(WqAlpha):
 
 
 @_wq(58, ("cross_sectional", "industry_neutral"),
-     "-1 * Ts_Rank(decay_linear(correlation(IndNeutralize(vwap, IndClass.sector), volume, 3.92795), 7.89291), 5.50322)")
+     "对行业中性化的 vwap 与成交量做滚动相关,再线性衰减加权后做时序排名取负,属于行业中性的量价背离因子。")
 class Alpha058(WqAlpha):
     def compute(self, panel):
         vw_n = _indneutralize(_vwap(panel))
@@ -680,7 +680,7 @@ class Alpha058(WqAlpha):
 
 
 @_wq(59, ("cross_sectional", "industry_neutral"),
-     "-1 * Ts_Rank(decay_linear(correlation(IndNeutralize((vwap*0.728317)+(vwap*(1-0.728317)), IndClass.industry), volume, 4.25197), 16.2289), 8.19648)")
+     "与 58 号几乎一致,区别只在 vwap 用 0.728/0.272 加权(化简后仍是 vwap),同样是行业中性量价背离的反向因子。")
 class Alpha059(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -690,7 +690,7 @@ class Alpha059(WqAlpha):
 
 
 @_wq(60, ("cross_sectional",),
-     "0 - (1 * ((2*scale(rank(((close-low)-(high-close))/(high-low)*volume))) - scale(rank(ts_argmax(close,10)))))")
+     "把(区间位置×成交量)的横截面秩与 10 日最高位置秩相减,构造方向偏空的横截面合成,WQ101 数据挖掘风格。")
 class Alpha060(WqAlpha):
     def compute(self, panel):
         c, h, l = panel["close"], panel["high"], panel["low"]
@@ -705,7 +705,7 @@ class Alpha060(WqAlpha):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(61, ("cross_sectional",),
-     "rank(vwap - ts_min(vwap,16.1219)) < rank(correlation(vwap, adv180, 17.9282))")
+     "比较 vwap 距 16 日低点的秩与 vwap 和 180 日均额相关性的秩,前者较小时给多头,是量价配合类信号。")
 class Alpha061(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -715,7 +715,7 @@ class Alpha061(WqAlpha):
 
 
 @_wq(62, ("cross_sectional",),
-     "rank(correlation(vwap, sum(adv20,22), 10)) < rank(((rank(open)+rank(open)) < (rank((high+low)/2)+rank(high))))")
+     "vwap 与 22 日累计 adv20 的相关性秩,对比开盘与高低均价秩的不等式比较,结果取负,量价结构类反转。")
 class Alpha062(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -727,7 +727,7 @@ class Alpha062(WqAlpha):
 
 
 @_wq(63, ("cross_sectional", "industry_neutral"),
-     "需 IndClass.industry,退化到 sector")
+     "行业中性后收盘的近期差分衰减秩,减去(vwap 与开盘加权)与长期 adv180 累计的相关性秩,再取负,行业中性量价合成。")
 class Alpha063(WqAlpha):
     def compute(self, panel):
         c = panel["close"]
@@ -741,7 +741,7 @@ class Alpha063(WqAlpha):
 
 
 @_wq(64, ("cross_sectional",),
-     "rank(corr(sum((open*0.178404)+(low*(1-0.178404)),12), sum(adv120,12), 16)) < rank(delta((((high+low)/2)*0.178404)+(vwap*(1-0.178404)),3))")
+     "开盘与最低加权后的 12 日累计与 adv120 累计的相关性秩,对比(高低中价与 vwap 加权)的 3 日差分秩,反向信号。")
 class Alpha064(WqAlpha):
     def compute(self, panel):
         adv120 = _adv(panel, 120)
@@ -753,7 +753,7 @@ class Alpha064(WqAlpha):
 
 
 @_wq(65, ("cross_sectional",),
-     "rank(corr((open*0.00817205)+(vwap*(1-0.00817205)), sum(adv60,8), 6)) < rank(open - ts_min(open,13))")
+     "开盘与 vwap 加权后与 adv60 累计的相关性秩,对比开盘距 13 日最低位置秩,前者较小则给反向信号。")
 class Alpha065(WqAlpha):
     def compute(self, panel):
         adv60 = _adv(panel, 60)
@@ -764,7 +764,7 @@ class Alpha065(WqAlpha):
 
 
 @_wq(66, ("cross_sectional",),
-     "(rank(decay_linear(delta(vwap,3),7)) + Ts_Rank(decay_linear(((low*0.96633)+(low*(1-0.96633))-vwap)/(open-(high+low)/2), 11), 6)) * -1")
+     "vwap 的 3 日差分线性衰减秩,加上(最低相对 vwap 偏离 / 开盘相对中价偏离)的衰减时序排名,整体取负。")
 class Alpha066(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -776,7 +776,7 @@ class Alpha066(WqAlpha):
 
 
 @_wq(67, ("cross_sectional", "industry_neutral"),
-     "(rank(high - ts_min(high,2))^rank(corr(IndNeutralize(vwap,IndClass.sector), IndNeutralize(adv20,IndClass.subindustry), 6))) * -1")
+     "高点距 2 日最低的秩,按(行业中性 vwap 与行业中性 adv20 相关性的秩)做幂次复合,结果取负,属典型 WQ 复合形式。")
 class Alpha067(WqAlpha):
     def compute(self, panel):
         a = ops.rank(panel["high"] - ops.ts_min(panel["high"], 2))
@@ -788,7 +788,7 @@ class Alpha067(WqAlpha):
 
 
 @_wq(68, ("cross_sectional",),
-     "(Ts_Rank(corr(rank(high), rank(adv15), 9), 14) < rank(delta((close*0.518371)+(low*(1-0.518371)),1))) * -1")
+     "高点秩与 adv15 秩的 9 日相关性时序排名,对比(收盘与最低加权)的 1 日差分秩,前者较小给反向信号。")
 class Alpha068(WqAlpha):
     def compute(self, panel):
         adv15 = _adv(panel, 15)
@@ -799,7 +799,7 @@ class Alpha068(WqAlpha):
 
 
 @_wq(69, ("cross_sectional", "industry_neutral"),
-     "需 IndClass.industry,退化到 sector")
+     "行业中性 vwap 差分 5 日最大值的秩,按收盘与 vwap 加权和 adv20 相关性的时序排名做幂次复合,取负。")
 class Alpha069(WqAlpha):
     def compute(self, panel):
         vw_n = _indneutralize(_vwap(panel))
@@ -812,7 +812,7 @@ class Alpha069(WqAlpha):
 
 
 @_wq(70, ("cross_sectional", "industry_neutral"),
-     "(rank(delta(vwap,1))^Ts_Rank(corr(IndNeutralize(close,IndClass.industry), adv50, 18), 18)) * -1")
+     "vwap 的 1 日差分秩,按(行业中性收盘与 adv50 的 18 日相关性的时序排名)做幂次复合,最后取负。")
 class Alpha070(WqAlpha):
     def compute(self, panel):
         a = ops.rank(ops.delta(_vwap(panel), 1))
@@ -827,7 +827,7 @@ class Alpha070(WqAlpha):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(71, ("cross_sectional",),
-     "max(Ts_Rank(decay_linear(corr(Ts_Rank(close,3), Ts_Rank(adv180,12), 18), 4), 15), Ts_Rank(decay_linear((rank((low+open)-(vwap+vwap)))^2, 16), 4))")
+     "收盘时序秩与 adv180 时序秩相关性的衰减再排名,与(低开相对 vwap 偏离秩平方)的衰减再排名取最大值,属横截面复合。")
 class Alpha071(WqAlpha):
     def compute(self, panel):
         adv180 = _adv(panel, 180)
@@ -840,7 +840,7 @@ class Alpha071(WqAlpha):
 
 
 @_wq(72, ("cross_sectional",),
-     "rank(decay_linear(corr((high+low)/2, adv40, 9), 10)) / rank(decay_linear(corr(Ts_Rank(vwap,4), Ts_Rank(volume,19), 7), 3))")
+     "中价与 adv40 相关性的衰减秩,除以 vwap 时序秩与成交量时序秩相关性的衰减秩,量价相关强弱比值。")
 class Alpha072(WqAlpha):
     def compute(self, panel):
         hl = (panel["high"] + panel["low"]) / 2.0
@@ -852,7 +852,7 @@ class Alpha072(WqAlpha):
 
 
 @_wq(73, ("cross_sectional",),
-     "max(rank(decay_linear(delta(vwap,5),3)), Ts_Rank(decay_linear((delta((open*0.147155+low*0.852845),2)/(open*0.147155+low*0.852845))*-1, 3), 17)) * -1")
+     "vwap 的 5 日差分衰减秩,与(开盘最低加权的 2 日相对差分取负)的衰减时序排名取最大值,再取负,反转复合。")
 class Alpha073(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -864,7 +864,7 @@ class Alpha073(WqAlpha):
 
 
 @_wq(74, ("cross_sectional",),
-     "(rank(corr(close, sum(adv30,37), 15)) < rank(corr(rank((high*0.0261661)+(vwap*(1-0.0261661))), rank(volume), 11))) * -1")
+     "收盘与 37 日累计 adv30 相关性的秩,对比(高点与 vwap 加权)秩与成交量秩 11 日相关性的秩,前者较小给反向。")
 class Alpha074(WqAlpha):
     def compute(self, panel):
         adv30 = _adv(panel, 30)
@@ -875,7 +875,7 @@ class Alpha074(WqAlpha):
 
 
 @_wq(75, ("cross_sectional",),
-     "rank(corr(vwap, volume, 4)) < rank(corr(rank(low), rank(adv50), 12))")
+     "vwap 与成交量 4 日相关性的秩,对比最低秩与 adv50 秩的 12 日相关性的秩,前者较小给多头,属量价配合因子。")
 class Alpha075(WqAlpha):
     def compute(self, panel):
         adv50 = _adv(panel, 50)
@@ -885,7 +885,7 @@ class Alpha075(WqAlpha):
 
 
 @_wq(76, ("cross_sectional", "industry_neutral"),
-     "max(rank(decay_linear(delta(vwap,1),12)), Ts_Rank(decay_linear(Ts_Rank(corr(IndNeutralize(low,IndClass.sector), adv81, 8), 20), 17), 19)) * -1")
+     "VWAP 短期差分秩与行业中性化后 low 与成交额相关性的合成,取较大值后取负,典型 WQ101 反转风格挖掘因子。")
 class Alpha076(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -897,7 +897,7 @@ class Alpha076(WqAlpha):
 
 
 @_wq(77, ("cross_sectional",),
-     "min(rank(decay_linear((((high+low)/2)+high)-(vwap+high), 20)), rank(decay_linear(corr((high+low)/2, adv40, 3), 6)))")
+     "结合中价高于 VWAP 的程度与中价同成交额的相关性,取两路秩衰减的较小值,偏短期反转的横截面信号。")
 class Alpha077(WqAlpha):
     def compute(self, panel):
         hl = (panel["high"] + panel["low"]) / 2.0
@@ -909,7 +909,7 @@ class Alpha077(WqAlpha):
 
 
 @_wq(78, ("cross_sectional",),
-     "rank(corr(sum((low*0.352233)+(vwap*(1-0.352233)),20), sum(adv40,20), 7))^rank(corr(rank(vwap), rank(volume), 6))")
+     "20 日加权低价均值与成交额均值的相关性,再用 VWAP 与成交量秩相关作为指数幂调制,量价共振挖掘因子。")
 class Alpha078(WqAlpha):
     def compute(self, panel):
         adv40 = _adv(panel, 40)
@@ -921,7 +921,7 @@ class Alpha078(WqAlpha):
 
 
 @_wq(79, ("cross_sectional", "industry_neutral"),
-     "(rank(delta(IndNeutralize((close*0.60733)+(open*(1-0.60733)), IndClass.sector), 1)) < rank(corr(Ts_Rank(vwap,4), Ts_Rank(adv150,9), 15)))")
+     "行业中性化后的收开盘加权价单日差分秩,与 VWAP 时序排名同成交额时序排名相关性的横截面比较,偏动量方向因子。")
 class Alpha079(WqAlpha):
     def compute(self, panel):
         proxy = panel["close"] * 0.60733 + panel["open"] * (1 - 0.60733)
@@ -932,7 +932,7 @@ class Alpha079(WqAlpha):
 
 
 @_wq(80, ("cross_sectional", "industry_neutral"),
-     "(rank(sign(delta(IndNeutralize((open*0.868128)+(high*(1-0.868128)), IndClass.industry), 4)))^Ts_Rank(corr(high, adv10, 5), 6)) * -1")
+     "行业中性化后的开高加权价 4 日动量方向,与高价同成交额相关性时序排名的指数复合,再取负,反转挖掘因子。")
 class Alpha080(WqAlpha):
     def compute(self, panel):
         proxy = panel["open"] * 0.868128 + panel["high"] * (1 - 0.868128)
@@ -948,7 +948,7 @@ class Alpha080(WqAlpha):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(81, ("cross_sectional",),
-     "(rank(log(product(rank(rank(corr(vwap, sum(adv10,50), 8))^4),15))) < rank(corr(rank(vwap), rank(volume), 5))) * -1")
+     "VWAP 与成交额累计的高阶相关性秩积取对数,与 VWAP 和成交量秩相关比较后取负,典型 WQ101 量价挖掘合成。")
 class Alpha081(WqAlpha):
     def compute(self, panel):
         adv10 = _adv(panel, 10)
@@ -961,7 +961,7 @@ class Alpha081(WqAlpha):
 
 
 @_wq(82, ("cross_sectional", "industry_neutral"),
-     "min(rank(decay_linear(delta(open,1),15)), Ts_Rank(decay_linear(corr(IndNeutralize(volume,IndClass.sector), (open*0.634196)+(open*(1-0.634196)), 17), 7), 13)) * -1")
+     "开盘价 1 日动量的秩衰减,与行业中性化成交量同开盘价相关性的时序排名,取较小值后取负,短期反转因子。")
 class Alpha082(WqAlpha):
     def compute(self, panel):
         a = ops.rank(ops.decay_linear(ops.delta(panel["open"], 1), 15))
@@ -971,7 +971,7 @@ class Alpha082(WqAlpha):
 
 
 @_wq(83, ("cross_sectional",),
-     "(rank(delay((high-low)/(sum(close,5)/5), 2)) * rank(rank(volume))) / (((high-low)/(sum(close,5)/5)) / (vwap-close))")
+     "前两日波动幅度比例乘以成交量秩,除以当前波幅与 VWAP 收盘价差的比,量价波动复合的横截面因子。")
 class Alpha083(WqAlpha):
     def compute(self, panel):
         c, h, l = panel["close"], panel["high"], panel["low"]
@@ -983,7 +983,7 @@ class Alpha083(WqAlpha):
 
 
 @_wq(84, ("cross_sectional",),
-     "SignedPower(Ts_Rank(vwap-ts_max(vwap,15),21), delta(close,5))")
+     "VWAP 偏离 15 日高点的时序排名,以 5 日 close 动量为指数做符号幂运算,无明确金融解释的数据挖掘因子。")
 class Alpha084(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -993,7 +993,7 @@ class Alpha084(WqAlpha):
 
 
 @_wq(85, ("cross_sectional",),
-     "rank(corr((high*0.876703)+(close*(1-0.876703)), adv30, 10))^rank(corr(Ts_Rank((high+low)/2,4), Ts_Rank(volume,10), 7))")
+     "高收加权价与成交额相关性秩,以中价时序排名和成交量时序排名相关性为指数做符号幂调制,量价相关挖掘因子。")
 class Alpha085(WqAlpha):
     def compute(self, panel):
         adv30 = _adv(panel, 30)
@@ -1006,7 +1006,7 @@ class Alpha085(WqAlpha):
 
 
 @_wq(86, ("cross_sectional",),
-     "(Ts_Rank(corr(close, sum(adv20,15), 6), 20) < rank((open+close)-(vwap+open))) * -1")
+     "close 与 20 日成交额累计的相关性时序排名,与开收 VWAP 差异秩的横截面比较,取负后输出,反转挖掘因子。")
 class Alpha086(WqAlpha):
     def compute(self, panel):
         adv20 = _adv(panel, 20)
@@ -1017,7 +1017,7 @@ class Alpha086(WqAlpha):
 
 
 @_wq(87, ("cross_sectional", "industry_neutral"),
-     "max(rank(decay_linear(delta((close*0.369701)+(vwap*(1-0.369701)),2),3)), Ts_Rank(decay_linear(abs(corr(IndNeutralize(adv81,IndClass.industry), close, 13)), 5), 14)) * -1")
+     "收 VWAP 加权价 2 日动量秩衰减,与行业中性化成交额同 close 相关性绝对值的时序排名,取较大值再取负。")
 class Alpha087(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -1030,7 +1030,7 @@ class Alpha087(WqAlpha):
 
 
 @_wq(88, ("cross_sectional",),
-     "min(rank(decay_linear((rank(open)+rank(low))-(rank(high)+rank(close)),8)), Ts_Rank(decay_linear(corr(Ts_Rank(close,8), Ts_Rank(adv60,21), 8), 7), 3))")
+     "开低秩之和减高收秩之和的衰减秩,与 close 时序排名同成交额时序排名相关性衰减的时序排名,取较小值。")
 class Alpha088(WqAlpha):
     def compute(self, panel):
         a = ops.rank(ops.decay_linear((ops.rank(panel["open"]) + ops.rank(panel["low"]))
@@ -1042,7 +1042,7 @@ class Alpha088(WqAlpha):
 
 
 @_wq(89, ("cross_sectional", "industry_neutral"),
-     "Ts_Rank(decay_linear(corr((low*0.967285)+(low*(1-0.967285)), adv10, 7), 6), 4) - Ts_Rank(decay_linear(delta(IndNeutralize(vwap, IndClass.industry), 3), 10), 15)")
+     "低价与成交额相关性的时序排名,减去行业中性化 VWAP 动量的时序排名,量价信号减去动量的合成因子。")
 class Alpha089(WqAlpha):
     def compute(self, panel):
         adv10 = _adv(panel, 10)
@@ -1054,7 +1054,7 @@ class Alpha089(WqAlpha):
 
 
 @_wq(90, ("cross_sectional", "industry_neutral"),
-     "(rank(close - ts_max(close,5))^Ts_Rank(corr(IndNeutralize(adv40,IndClass.subindustry), low, 5), 3)) * -1")
+     "close 偏离 5 日高点的秩,以行业中性化成交额同 low 相关性时序排名为指数做符号幂,再取负,反转因子。")
 class Alpha090(WqAlpha):
     def compute(self, panel):
         a = ops.rank(panel["close"] - ops.ts_max(panel["close"], 5))
@@ -1069,7 +1069,7 @@ class Alpha090(WqAlpha):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @_wq(91, ("cross_sectional", "industry_neutral"),
-     "(Ts_Rank(decay_linear(decay_linear(corr(IndNeutralize(close,IndClass.industry), volume, 10), 16), 4), 5) - rank(decay_linear(corr(vwap, adv30, 4), 3))) * -1")
+     "行业中性化 close 与成交量相关性两次衰减后的时序排名,减 VWAP 与成交额相关性衰减秩,再取负。")
 class Alpha091(WqAlpha):
     def compute(self, panel):
         inner = ops.correlation(_indneutralize(panel["close"]), panel["volume"], 10)
@@ -1080,7 +1080,7 @@ class Alpha091(WqAlpha):
 
 
 @_wq(92, ("cross_sectional",),
-     "min(Ts_Rank(decay_linear((((high+low)/2)+close) < (low+open), 15), 19), Ts_Rank(decay_linear(corr(rank(low), rank(adv30), 8), 7), 7))")
+     "中价加 close 是否低于低开之和的衰减时序排名,与低价秩同成交额秩相关性衰减的时序排名,取较小值。")
 class Alpha092(WqAlpha):
     def compute(self, panel):
         cond = (((panel["high"] + panel["low"]) / 2.0 + panel["close"])
@@ -1092,7 +1092,7 @@ class Alpha092(WqAlpha):
 
 
 @_wq(93, ("cross_sectional", "industry_neutral"),
-     "Ts_Rank(decay_linear(corr(IndNeutralize(vwap,IndClass.industry), adv81, 17), 20), 8) / rank(decay_linear(delta((close*0.524434)+(vwap*(1-0.524434)),3), 16))")
+     "行业中性化 VWAP 与成交额相关性的衰减时序排名,除以收 VWAP 加权价 3 日动量秩衰减,趋势与动量比值因子。")
 class Alpha093(WqAlpha):
     def compute(self, panel):
         adv81 = _adv(panel, 81)
@@ -1103,7 +1103,7 @@ class Alpha093(WqAlpha):
 
 
 @_wq(94, ("cross_sectional",),
-     "(rank(vwap - ts_min(vwap,12))^Ts_Rank(corr(Ts_Rank(vwap,20), Ts_Rank(adv60,4), 18), 3)) * -1")
+     "VWAP 偏离 12 日低点的秩,以 VWAP 与成交额时序排名相关性的时序排名为指数做符号幂,再取负,反转因子。")
 class Alpha094(WqAlpha):
     def compute(self, panel):
         vw = _vwap(panel)
@@ -1115,7 +1115,7 @@ class Alpha094(WqAlpha):
 
 
 @_wq(95, ("cross_sectional",),
-     "rank(open - ts_min(open,12)) < Ts_Rank(rank(corr(sum((high+low)/2,19), sum(adv40,19), 13))^5, 12)")
+     "open 偏离 12 日低点的秩,小于中价累计与成交额累计相关性五次幂的时序排名时输出 1,横截面反转触发因子。")
 class Alpha095(WqAlpha):
     def compute(self, panel):
         a = ops.rank(panel["open"] - ops.ts_min(panel["open"], 12))
@@ -1127,7 +1127,7 @@ class Alpha095(WqAlpha):
 
 
 @_wq(96, ("cross_sectional",),
-     "max(Ts_Rank(decay_linear(corr(rank(vwap), rank(volume), 4), 4), 8), Ts_Rank(decay_linear(Ts_ArgMax(corr(Ts_Rank(close,7), Ts_Rank(adv60,4), 4), 13), 14), 13)) * -1")
+     "VWAP 与成交量秩相关性的双层衰减时序排名,与 close 同成交额相关性极值位置衰减的时序排名,取较大值再取负。")
 class Alpha096(WqAlpha):
     def compute(self, panel):
         a = ops.ts_rank(ops.decay_linear(ops.correlation(ops.rank(_vwap(panel)),
@@ -1139,7 +1139,7 @@ class Alpha096(WqAlpha):
 
 
 @_wq(97, ("cross_sectional", "industry_neutral"),
-     "(rank(decay_linear(delta(IndNeutralize((low*0.721001)+(vwap*(1-0.721001)),IndClass.industry),3),20)) - Ts_Rank(decay_linear(Ts_Rank(corr(Ts_Rank(low,8), Ts_Rank(adv60,17), 5), 19), 16), 7)) * -1")
+     "行业中性化的低价 VWAP 加权 3 日动量秩衰减,减去低价与成交额嵌套时序排名相关性的多层衰减,再取负。")
 class Alpha097(WqAlpha):
     def compute(self, panel):
         proxy = panel["low"] * 0.721001 + _vwap(panel) * (1 - 0.721001)
@@ -1151,7 +1151,7 @@ class Alpha097(WqAlpha):
 
 
 @_wq(98, ("cross_sectional",),
-     "rank(decay_linear(corr(vwap, sum(adv5,26), 5), 7)) - rank(decay_linear(Ts_Rank(Ts_ArgMin(corr(rank(open), rank(adv15), 21), 9), 7), 8))")
+     "VWAP 与短期成交额累计相关性的衰减秩,减去开盘秩与成交额秩相关性极小值位置的衰减秩,量价合成因子。")
 class Alpha098(WqAlpha):
     def compute(self, panel):
         adv5 = _adv(panel, 5)
@@ -1163,7 +1163,7 @@ class Alpha098(WqAlpha):
 
 
 @_wq(99, ("cross_sectional",),
-     "(rank(corr(sum((high+low)/2,20), sum(adv60,20), 9)) < rank(corr(low, volume, 6))) * -1")
+     "中价累计与成交额累计相关性秩小于低价同成交量相关性秩时输出负 1,典型量价相关触发型反转因子。")
 class Alpha099(WqAlpha):
     def compute(self, panel):
         hl = (panel["high"] + panel["low"]) / 2.0
@@ -1174,7 +1174,7 @@ class Alpha099(WqAlpha):
 
 
 @_wq(100, ("cross_sectional", "industry_neutral"),
-     "0 - (1*(1.5*scale(IndNeutralize(IndNeutralize(rank(((close-low)-(high-close))/(high-low)*volume), IndClass.subindustry), IndClass.subindustry)) - scale(IndNeutralize(corr(close, rank(adv20), 5) - rank(ts_argmin(close,30)), IndClass.subindustry)))) * (volume/adv20)")
+     "((close-low)-(high-close))/(high-low)*volume 二次行业中性化标准化,减去 close 与成交额相关性等的中性化标准化,再按相对成交量缩放,Money Flow 风格的复杂合成。")
 class Alpha100(WqAlpha):
     def compute(self, panel):
         c, h, l = panel["close"], panel["high"], panel["low"]
@@ -1188,7 +1188,7 @@ class Alpha100(WqAlpha):
 
 
 @_wq(101, ("cross_sectional",),
-     "(close - open) / ((high - low) + 0.001)")
+     "当日涨跌幅相对于日内振幅的比例,等价于 K 线实体占总波幅比重,简洁直观的日内强弱因子。")
 class Alpha101(WqAlpha):
     def compute(self, panel):
         return (panel["close"] - panel["open"]) / ((panel["high"] - panel["low"]) + 0.001)
