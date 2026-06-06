@@ -454,6 +454,7 @@ class MLFactorConfig(BaseModel):
     sell_verdicts: list[str] = Field(default_factory=lambda: ["sell", "strong_sell"])
     refresh_verdicts: list[str] = Field(default_factory=lambda: ["strong_buy"])
     mask: MaskConfig = Field(default_factory=MaskConfig)
+    preprocess: PreprocessConfig = Field(default_factory=PreprocessConfig)
 
     @model_validator(mode="after")
     def _load_factors_file(self) -> "MLFactorConfig":

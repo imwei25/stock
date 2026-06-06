@@ -710,3 +710,13 @@ def test_preprocess_extra_field_forbidden():
 
     with pytest.raises(ValidationError):
         PreprocessConfig(winsorize=(0.01, 0.99), unknown_field=True)
+
+
+def test_ml_factor_config_includes_preprocess_default():
+    """MLFactorConfig has preprocess sub-config defaulting to all-off."""
+    from stockpool.config import MLFactorConfig, PreprocessConfig
+    cfg = MLFactorConfig()
+    assert isinstance(cfg.preprocess, PreprocessConfig)
+    assert cfg.preprocess.winsorize is None
+    assert cfg.preprocess.zscore is False
+    assert cfg.preprocess.industry_neutralize is False
