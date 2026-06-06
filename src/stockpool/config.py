@@ -364,6 +364,34 @@ class MaskConfig(BaseModel):
     min_listing_days: int = Field(default=252, ge=0)
 
 
+class PreprocessConfig(BaseModel):
+    """Cross-sectional preprocessing pipeline for ML factor panels.
+
+    Applied at ``build_factor_panel()`` output, before disk caching. Affects
+    ml_factor training, predict, and downstream Pool B consumers identically.
+    Default = all off → fully backwards compatible (cache sig unchanged).
+
+    See: docs/superpowers/specs/2026-06-06-factor-preprocessing-phase1-design.md
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    winsorize: tuple[float, float] | None = None
+    zscore: bool = False
+    industry_neutralize: bool = False
+
+    @field_validator("winsorize")
+    @classmethod
+    def _check_winsorize_bounds(cls, v):
+        if v is None:
+            return None
+        lo, hi = v
+        if not (0 < lo < hi < 1):
+            raise ValueError(
+                f"winsorize bounds must satisfy 0 < lo < hi < 1, got ({lo}, {hi})"
+            )
+        return (float(lo), float(hi))
+
+
 class MLFactorConfig(BaseModel):
     """Settings for the two-step ML factor strategy.
 

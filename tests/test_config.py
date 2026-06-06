@@ -664,3 +664,38 @@ def test_ml_factor_content_hash_changes_with_mask(tmp_path):
     cfg_b = load_config(f_b)
 
     assert cfg_a.content_hash != cfg_b.content_hash
+
+
+def test_preprocess_config_defaults_all_off():
+    """PreprocessConfig with no args has all three steps disabled."""
+    from stockpool.config import PreprocessConfig
+    cfg = PreprocessConfig()
+    assert cfg.winsorize is None
+    assert cfg.zscore is False
+    assert cfg.industry_neutralize is False
+
+
+def test_preprocess_winsorize_invalid_bounds_raises():
+    """winsorize bounds must satisfy 0 < lo < hi < 1."""
+    import pytest
+    from pydantic import ValidationError
+    from stockpool.config import PreprocessConfig
+
+    with pytest.raises(ValidationError):
+        PreprocessConfig(winsorize=(0.99, 0.01))  # reversed
+    with pytest.raises(ValidationError):
+        PreprocessConfig(winsorize=(0.0, 0.99))   # lo <= 0
+    with pytest.raises(ValidationError):
+        PreprocessConfig(winsorize=(0.01, 1.0))   # hi >= 1
+    with pytest.raises(ValidationError):
+        PreprocessConfig(winsorize=(0.5, 0.5))    # lo == hi
+
+
+def test_preprocess_extra_field_forbidden():
+    """Extra fields rejected (extra=forbid)."""
+    import pytest
+    from pydantic import ValidationError
+    from stockpool.config import PreprocessConfig
+
+    with pytest.raises(ValidationError):
+        PreprocessConfig(winsorize=(0.01, 0.99), unknown_field=True)
