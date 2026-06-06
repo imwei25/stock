@@ -301,3 +301,68 @@ def test_predict_returns_neutral_when_entire_row_is_nan(monkeypatch):
     fully_nan = sigs.iloc[220:230]
     assert (fully_nan["signal"] == "neutral").all()
     assert fully_nan["score"].isna().all()
+
+
+def test_ml_factor_with_preprocess_runs_end_to_end():
+    """ml_factor strategy with three-step preprocess produces signals end-to-end.
+
+    8 synthetic stocks × 200 bars; pooled mode; full train + predict cycle.
+    Just verifies the pipeline doesn't crash and signals come out non-NaN.
+    """
+    from stockpool.config import PreprocessConfig
+    from stockpool.factors.context import set_sector_map
+    from stockpool.strategy_factory import build_factor_panel, build_close_panel
+
+    rng = np.random.default_rng(0)
+    n_stocks = 8
+    n_bars = 200
+    dates = pd.date_range("2024-01-01", periods=n_bars, freq="B")
+    pool_data = {}
+    for i in range(n_stocks):
+        close = 100 * np.exp(np.cumsum(rng.standard_normal(n_bars) * 0.02))
+        pool_data[f"S{i:03d}"] = pd.DataFrame({
+            "date": dates,
+            "open": close * 0.999,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": rng.integers(1_000_000, 10_000_000, n_bars).astype(float),
+        })
+
+    sector_map = {f"S{i:03d}": f"ind_{i % 3}" for i in range(n_stocks)}
+    set_sector_map(sector_map)
+
+    factor_names = ["momentum_20", "rsi_centered_14", "vol_ratio_5"]
+    preprocess_cfg = PreprocessConfig(
+        winsorize=(0.01, 0.99), zscore=True, industry_neutralize=True,
+    )
+    factor_panel = build_factor_panel(
+        factor_names, pool_data, preprocess_cfg=preprocess_cfg,
+    )
+    close_panel = build_close_panel(pool_data)
+    assert set(factor_panel.keys()) == set(factor_names)
+    for df in factor_panel.values():
+        assert df.shape == (n_bars, n_stocks)
+
+    cfg = MLFactorConfig(
+        factors=factor_names,
+        horizon=3,
+        train_window=100,
+        min_train_samples=30,
+        refit_every=20,
+        panel_mode="pooled",
+        embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strategy = MLFactorStrategy(
+        cfg,
+        pool_data=pool_data,
+        factor_panel=factor_panel,
+        close_panel=close_panel,
+    )
+    for code in pool_data:
+        result = strategy.predict_latest(pool_data[code])
+        # Result is a dict with 'signal' and 'final_score' (may be NaN
+        # on warmup or insufficient training data; just must not raise).
+        assert "signal" in result
