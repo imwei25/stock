@@ -768,3 +768,42 @@ def test_data_config_warmup_days_negative_raises():
     from stockpool.config import DataConfig
     with pytest.raises(ValidationError):
         DataConfig(history_days=500, cache_dir="data", warmup_days=-1)
+
+
+def test_preprocess_config_mcap_neutralize_default_false():
+    from stockpool.config import PreprocessConfig
+    cfg = PreprocessConfig()
+    assert cfg.mcap_neutralize is False
+
+
+def test_preprocess_config_mcap_neutralize_explicit_true():
+    from stockpool.config import PreprocessConfig
+    cfg = PreprocessConfig(mcap_neutralize=True)
+    assert cfg.mcap_neutralize is True
+
+
+def test_preprocess_config_extra_forbid_still_rejects_typos():
+    """Regression: adding mcap_neutralize must not loosen extra='forbid'."""
+    import pytest
+    from pydantic import ValidationError
+    from stockpool.config import PreprocessConfig
+    with pytest.raises(ValidationError):
+        PreprocessConfig(mcap_neutralise=True)  # British spelling typo
+
+
+def test_ml_factor_config_hash_changes_when_mcap_neutralize_flips(tmp_path):
+    from stockpool.config import load_config
+    import yaml
+    base = yaml.safe_load(open("config.yaml", encoding="utf-8"))
+    base["strategy"] = {"name": "ml_factor"}
+
+    f_off = tmp_path / "cfg_off.yaml"
+    f_off.write_text(yaml.safe_dump(base), encoding="utf-8")
+    cfg_off = load_config(f_off)
+
+    base["strategy"]["ml_factor"] = {"preprocess": {"mcap_neutralize": True}}
+    f_on = tmp_path / "cfg_on.yaml"
+    f_on.write_text(yaml.safe_dump(base), encoding="utf-8")
+    cfg_on = load_config(f_on)
+
+    assert cfg_off.content_hash != cfg_on.content_hash

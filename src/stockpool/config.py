@@ -9,6 +9,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from stockpool.ab_pool import AbPoolConfig
+
 
 class Stock(BaseModel):
     code: str
@@ -377,16 +379,23 @@ class PreprocessConfig(BaseModel):
     Default = all off → fully backwards compatible (cache sig unchanged).
 
     See: docs/superpowers/specs/2026-06-06-factor-preprocessing-phase1-design.md
+         docs/superpowers/specs/2026-06-06-mcap-neutralization-design.md
     """
     model_config = ConfigDict(extra="forbid")
 
     winsorize: tuple[float, float] | None = None
     zscore: bool = False
     industry_neutralize: bool = False
+    mcap_neutralize: bool = False
+    # 当 True 时,apply_preprocess_pipeline 需要 caller 传 log_mcap_panel:
+    #   - mcap_neutralize=True, industry_neutralize=False → 单变量 OLS Y ~ log_mcap
+    #   - mcap_neutralize=True, industry_neutralize=True  → 联合 OLS Y ~ industry_dummies + log_mcap
+    # PE/PB(打 contains_mcap tag)跳过 mcap_neutralize 防止与 close × shares 强共线。
+    # 详见 docs/superpowers/specs/2026-06-06-mcap-neutralization-design.md
     min_pool_size: int = Field(default=200, ge=0)
-    # n_codes < min_pool_size 时 winsorize / cs_zscore / industry_neutralize
-    # 全部跳过(估计不稳)。industry_neutralize 即使在大池子也建议保持
-    # 默认 false:单成员细分行业会触发 silent demean-to-zero bug(P4-1 verdict)。
+    # n_codes < min_pool_size 时 winsorize / cs_zscore / industry_neutralize /
+    # mcap_neutralize 全部跳过(估计不稳)。industry_neutralize 即使在大池子也建议
+    # 保持默认 false:单成员细分行业会触发 silent demean-to-zero bug(P4-1 verdict)。
     # Phase 1.5 全市场参照设计落地前不推荐启用 industry_neutralize。
 
     @field_validator("winsorize")
@@ -599,6 +608,7 @@ class AppConfig(BaseModel):
     portfolio_backtest: PortfolioBacktestConfig = Field(
         default_factory=PortfolioBacktestConfig,
     )
+    ab_pool: AbPoolConfig = Field(default_factory=AbPoolConfig)
 
     content_hash: str = ""
 
