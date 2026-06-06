@@ -140,6 +140,14 @@ def _prepare_pool_for_arm(
         factor_panel = injected_factor_panel
         close_panel = build_close_panel(pool_data)
     else:
+        # Inject sector_map for industry-aware factors (WQ101 + custom
+        # industry_relative_strength_N) — needed when prepare_pool was
+        # skipped (shared-universe path).
+        from stockpool.factors.context import set_sector_map
+        from stockpool.industry_map import load_or_build_industry_map
+        sector_map = load_or_build_industry_map(arm_cfg.data.cache_dir, source="auto")
+        set_sector_map(sector_map)
+
         factor_panel, close_panel = load_or_build_factor_panel(
             ml_cfg.factors, pool_data, arm_cfg.data.cache_dir,
             preprocess_cfg=ml_cfg.preprocess,
