@@ -9,8 +9,6 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from stockpool.ab_pool import AbPoolConfig
-
 
 class Stock(BaseModel):
     code: str
@@ -608,7 +606,6 @@ class AppConfig(BaseModel):
     portfolio_backtest: PortfolioBacktestConfig = Field(
         default_factory=PortfolioBacktestConfig,
     )
-    ab_pool: AbPoolConfig = Field(default_factory=AbPoolConfig)
 
     content_hash: str = ""
 
