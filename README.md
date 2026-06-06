@@ -454,9 +454,9 @@ portfolio_backtest:
 
 缓存:翻 `mask.enabled` 会改变 `cfg.content_hash` 和 ml_model sig hash → 自动重训 + 重算 score_panel。`factor_panel` 不变(mask 不影响因子值)。
 
-### 因子预处理 (Phase 1, opt-in)
+### 因子预处理 (Phase 1 + Phase 2, opt-in)
 
-Phase 1 因子预处理(winsorize / cs_zscore / industry_neutralize)可在 `strategy.ml_factor.preprocess` 段开关,默认全关。
+Phase 1 因子预处理(winsorize / cs_zscore / industry_neutralize)+ Phase 2 `mcap_neutralize` 可在 `strategy.ml_factor.preprocess` 段开关,默认全关。
 详见 `docs/superpowers/specs/2026-06-06-factor-preprocessing-phase1-design.md`。
 
 ```yaml
@@ -468,6 +468,7 @@ strategy:
       winsorize: [0.01, 0.99]   # null = 关闭
       zscore: true              # 截面 z-score
       industry_neutralize: true # 跳过 factor types 含 "fundamental" 的因子
+      mcap_neutralize: false    # Phase 2 (opt-in):对 log(market_cap) 做 per-day OLS 残差化,PE/PB 等含 mcap 因子自动跳过
 ```
 
 **注意**:⚠️ Phase 1 AB 验证结果为 INDECISIVE(Δsharpe=+0.013,阈值 +0.05),默认保持全关。
