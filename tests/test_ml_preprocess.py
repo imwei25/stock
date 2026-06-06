@@ -163,6 +163,7 @@ def test_pipeline_all_on_three_steps_order():
     sector_map = {f"S{i:03d}": f"ind_{i % 4}" for i in range(20)}
     cfg = PreprocessConfig(
         winsorize=(0.01, 0.99), zscore=True, industry_neutralize=True,
+        min_pool_size=0,  # disable size guard for unit-test panel
     )
     out = apply_preprocess_pipeline(fp, cfg, sector_map=sector_map)
     # After neutralize, within-industry mean = 0 each day.
@@ -179,7 +180,7 @@ def test_pipeline_skips_neutralize_when_no_sector_map(caplog):
     from stockpool.ml.preprocess import apply_preprocess_pipeline
     df = _make_panel(n_days=2, n_stocks=10, seed=11)
     fp = {"x": df}
-    cfg = PreprocessConfig(industry_neutralize=True)
+    cfg = PreprocessConfig(industry_neutralize=True, min_pool_size=0)  # disable size guard for unit-test panel
     import logging
     with caplog.at_level(logging.WARNING, logger="stockpool.ml.preprocess"):
         out = apply_preprocess_pipeline(fp, cfg, sector_map=None)
@@ -199,7 +200,7 @@ def test_pipeline_skips_neutralize_for_fundamental_types():
         "momentum_20": ("momentum", "time_series"),
     }
     sector_map = {f"S{i:03d}": f"ind_{i % 2}" for i in range(10)}
-    cfg = PreprocessConfig(industry_neutralize=True)
+    cfg = PreprocessConfig(industry_neutralize=True, min_pool_size=0)  # disable size guard for unit-test panel
     out = apply_preprocess_pipeline(
         fp, cfg, sector_map=sector_map, factor_types=factor_types,
     )
@@ -219,7 +220,7 @@ def test_pipeline_partial_steps_independent():
     from stockpool.ml.preprocess import apply_preprocess_pipeline, cs_zscore_panel
     df = _make_panel(n_days=2, n_stocks=10, seed=13)
     fp = {"x": df}
-    cfg = PreprocessConfig(zscore=True)
+    cfg = PreprocessConfig(zscore=True, min_pool_size=0)  # disable size guard for unit-test panel
     out = apply_preprocess_pipeline(fp, cfg)
     pd.testing.assert_frame_equal(out["x"], cs_zscore_panel(df))
 
@@ -228,7 +229,7 @@ def test_pipeline_preserves_factor_keys_and_shapes():
     from stockpool.config import PreprocessConfig
     from stockpool.ml.preprocess import apply_preprocess_pipeline
     fp = {"a": _make_panel(seed=20), "b": _make_panel(seed=21), "c": _make_panel(seed=22)}
-    cfg = PreprocessConfig(winsorize=(0.05, 0.95), zscore=True)
+    cfg = PreprocessConfig(winsorize=(0.05, 0.95), zscore=True, min_pool_size=0)  # disable size guard for unit-test panel
     out = apply_preprocess_pipeline(fp, cfg)
     assert set(out.keys()) == {"a", "b", "c"}
     for k in out:
@@ -247,3 +248,49 @@ def test_is_all_off_false_for_any_step_enabled():
     assert _is_all_off(PreprocessConfig(zscore=True)) is False
     assert _is_all_off(PreprocessConfig(winsorize=(0.01, 0.99))) is False
     assert _is_all_off(PreprocessConfig(industry_neutralize=True)) is False
+
+
+def test_pipeline_skips_all_when_pool_below_min(caplog):
+    """n_codes < min_pool_size triggers full skip with single warning."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline
+    df = _make_panel(n_days=2, n_stocks=10, seed=20)
+    fp = {"x": df}
+    sector_map = {f"S{i:03d}": f"ind_{i % 2}" for i in range(10)}
+    cfg = PreprocessConfig(
+        winsorize=(0.01, 0.99), zscore=True, industry_neutralize=True,
+        min_pool_size=200,  # explicit; default is 200 already
+    )
+    import logging
+    with caplog.at_level(logging.WARNING, logger="stockpool.ml.preprocess"):
+        out = apply_preprocess_pipeline(
+            fp, cfg, sector_map=sector_map, n_codes=10,
+        )
+    # All preprocess steps skipped → values pass through unchanged.
+    pd.testing.assert_frame_equal(out["x"], df)
+    # Single warning about size guard
+    skip_warnings = [r for r in caplog.records if "min_pool_size" in r.message]
+    assert len(skip_warnings) == 1
+
+
+def test_pipeline_n_codes_none_bypasses_size_guard():
+    """n_codes=None disables the guard (legacy / unit-test path)."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline, cs_zscore_panel
+    df = _make_panel(n_days=2, n_stocks=10, seed=21)
+    fp = {"x": df}
+    cfg = PreprocessConfig(zscore=True, min_pool_size=200)
+    # No n_codes argument → guard not consulted → transforms apply.
+    out = apply_preprocess_pipeline(fp, cfg)
+    pd.testing.assert_frame_equal(out["x"], cs_zscore_panel(df))
+
+
+def test_pipeline_n_codes_above_min_runs_normally():
+    """n_codes >= min_pool_size proceeds with full pipeline."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline, cs_zscore_panel
+    df = _make_panel(n_days=2, n_stocks=300, seed=22)
+    fp = {"x": df}
+    cfg = PreprocessConfig(zscore=True, min_pool_size=200)
+    out = apply_preprocess_pipeline(fp, cfg, n_codes=300)
+    pd.testing.assert_frame_equal(out["x"], cs_zscore_panel(df))

@@ -129,6 +129,7 @@ def apply_preprocess_pipeline(
     cfg: "PreprocessConfig",
     sector_map: Mapping[str, str] | None = None,
     factor_types: Mapping[str, tuple[str, ...]] | None = None,
+    n_codes: int | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Run winsorize → cs_zscore → industry_neutralize on each factor.
 
@@ -141,12 +142,31 @@ def apply_preprocess_pipeline(
         factor_types: ``{factor_name: (type_tag, ...)}``. Factors whose tag
             tuple includes ``"fundamental"`` skip industry neutralize
             (preserves sector-intrinsic signal like bank-low-PE).
+        n_codes: actual panel width (number of stocks). When provided AND
+            below ``cfg.min_pool_size``, every preprocess step is skipped
+            with a single warning — cross-sec preprocessing is unstable
+            on small pools and produces silent zero-demean bugs in
+            single-member industries (Phase 1.5 size guard). Pass ``None``
+            to bypass the guard entirely (used by unit tests of the
+            transform logic itself).
 
     Returns:
         New dict with same keys; values are transformed (or shallow-copied
-        if cfg is all-off). Original input is never mutated.
+        if cfg is all-off OR size guard tripped). Original input is never mutated.
     """
     if _is_all_off(cfg):
+        return dict(factor_panel)
+
+    # Phase 1.5 size guard: cross-sec preprocessing on small pools is
+    # mathematically degenerate (μ/σ unstable; single-member industries
+    # demean to 0). When caller supplies n_codes and it falls below the
+    # configured threshold, skip every step with one warning per call.
+    if n_codes is not None and n_codes < cfg.min_pool_size:
+        log.warning(
+            "preprocess pipeline skipped: n_codes=%d < min_pool_size=%d "
+            "(cross-sectional preprocessing requires a wider panel)",
+            n_codes, cfg.min_pool_size,
+        )
         return dict(factor_panel)
 
     out: dict[str, pd.DataFrame] = {}
