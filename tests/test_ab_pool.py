@@ -11,7 +11,7 @@ from stockpool.config import AppConfig, load_config
 
 def test_ab_pool_config_defaults():
     cfg = AbPoolConfig()
-    assert cfg.cache_path == Path("data/ab_pool.parquet")
+    assert cfg.cache_path == "data/ab_pool.parquet"
     assert cfg.industry_source == "auto"
     assert cfg.min_listing_days == 252
     assert cfg.min_avg_amount_20d == 5.0e7
@@ -32,4 +32,4 @@ def test_app_config_has_ab_pool_default(tmp_path: Path):
     cfg_path.write_text(yaml_text, encoding="utf-8")
     cfg = load_config(cfg_path)
     assert isinstance(cfg.ab_pool, AbPoolConfig)
-    assert cfg.ab_pool.cache_path == Path("data/ab_pool.parquet")
+    assert cfg.ab_pool.cache_path == "data/ab_pool.parquet"
