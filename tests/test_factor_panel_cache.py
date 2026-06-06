@@ -285,3 +285,80 @@ def test_factor_panel_cache_invalidated_when_fundamentals_newer(tmp_path):
     # Sanity: the snapshot date in the rebuilt manifest reflects the new mtime
     # (was None before since no fundamentals files existed at first build).
     assert manifest_before["fundamentals_snapshot_date"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 7: preprocess_cfg wired into _factor_panel_sig and build_factor_panel
+# ---------------------------------------------------------------------------
+
+
+def test_cache_sig_all_off_backwards_compat():
+    """Default PreprocessConfig sig matches pre-PR baseline (preprocess=None in dict)."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.strategy_factory import _factor_panel_sig
+    pool = _pool(["S001"])
+    sig_no_arg, _ = _factor_panel_sig(["momentum_20"], pool)
+    sig_default, _ = _factor_panel_sig(["momentum_20"], pool, preprocess_cfg=PreprocessConfig())
+    assert sig_no_arg == sig_default
+
+
+def test_cache_sig_with_preprocess_isolated_from_baseline():
+    """Enabling preprocess changes the sig (cache key)."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.strategy_factory import _factor_panel_sig
+    pool = _pool(["S001"])
+    sig_off, _ = _factor_panel_sig(["momentum_20"], pool, preprocess_cfg=PreprocessConfig())
+    sig_on, _ = _factor_panel_sig(
+        ["momentum_20"], pool,
+        preprocess_cfg=PreprocessConfig(zscore=True),
+    )
+    assert sig_off != sig_on
+
+
+def test_cache_invalidates_on_preprocess_change():
+    """Two different preprocess settings produce distinct sigs."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.strategy_factory import _factor_panel_sig
+    pool = _pool(["S001"])
+    sig_a, _ = _factor_panel_sig(
+        ["momentum_20"], pool,
+        preprocess_cfg=PreprocessConfig(zscore=True),
+    )
+    sig_b, _ = _factor_panel_sig(
+        ["momentum_20"], pool,
+        preprocess_cfg=PreprocessConfig(winsorize=(0.01, 0.99)),
+    )
+    assert sig_a != sig_b
+
+
+def test_build_factor_panel_passes_preprocess(monkeypatch):
+    """build_factor_panel routes preprocess_cfg through apply_preprocess_pipeline."""
+    from stockpool.config import PreprocessConfig
+    from stockpool import strategy_factory
+    from stockpool.ml import preprocess as preproc_mod
+
+    pool = _pool(["S001", "S002"])
+
+    called = {}
+    real_apply = preproc_mod.apply_preprocess_pipeline
+
+    def spy(fp, cfg, sector_map=None, factor_types=None):
+        called["cfg"] = cfg
+        called["n_factors"] = len(fp)
+        return real_apply(fp, cfg, sector_map=sector_map, factor_types=factor_types)
+
+    monkeypatch.setattr(preproc_mod, "apply_preprocess_pipeline", spy)
+
+    # Spy is set on the module; build_factor_panel imports inside the function
+    # so it'll see the patched version.
+    cfg = PreprocessConfig(zscore=True)
+    strategy_factory.build_factor_panel(["momentum_20"], pool, preprocess_cfg=cfg)
+    assert called["cfg"] is cfg
+    assert called["n_factors"] == 1
+
+    # All-off should NOT invoke the pipeline (short-circuit before call).
+    called.clear()
+    strategy_factory.build_factor_panel(
+        ["momentum_20"], pool, preprocess_cfg=PreprocessConfig(),
+    )
+    assert called == {}

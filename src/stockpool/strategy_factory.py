@@ -117,6 +117,7 @@ def build_close_panel(
 def build_factor_panel(
     factor_names: list[str],
     pool_data: Mapping[str, pd.DataFrame],
+    preprocess_cfg: "PreprocessConfig | None" = None,
 ) -> dict[str, pd.DataFrame]:
     """从 ``{code: daily_df}`` 装一个 OHLCV Panel,在 Panel 上算所有因子,
     返回 ``{factor_name: T×N DataFrame}``。
@@ -131,8 +132,13 @@ def build_factor_panel(
     Args:
         factor_names: 因子名列表。
         pool_data: ``{code: daily_df}``.
+        preprocess_cfg: 可选的 ``PreprocessConfig``。非 None 且非全关时,
+            对原始因子 panel 运行 winsorize / cs_zscore / industry_neutralize
+            流水线(见 ``ml/preprocess.py``)。sector_map 从
+            ``factors.context.get_sector_map()`` 读取(caller 责任注入)。
     """
     from stockpool.ml.dataset import compute_factor_panel
+    from stockpool.ml import preprocess as preproc_mod
 
     # 1) 把每股 daily_df → date-indexed,按列拼成宽表
     per_stock: dict[str, pd.DataFrame] = {}
@@ -151,7 +157,19 @@ def build_factor_panel(
             index=idx,
         )
 
-    return compute_factor_panel(panel, factor_names)
+    raw = compute_factor_panel(panel, factor_names)
+    if preprocess_cfg is None or preproc_mod._is_all_off(preprocess_cfg):
+        return raw
+
+    from stockpool.factors.context import get_sector_map
+    from stockpool.factors.registry import list_specs
+    sector_map = get_sector_map() or None
+    types_map = {
+        s.base_name: s.types for s in list_specs() if s.base_name in factor_names
+    }
+    return preproc_mod.apply_preprocess_pipeline(
+        raw, preprocess_cfg, sector_map=sector_map, factor_types=types_map,
+    )
 
 
 def _fundamentals_latest_mtime(cache_dir: str | Path | None) -> str | None:
@@ -179,15 +197,23 @@ def _fundamentals_latest_mtime(cache_dir: str | Path | None) -> str | None:
 def _factor_panel_sig(
     factor_names: list[str],
     pool_data: Mapping[str, pd.DataFrame],
+    preprocess_cfg: "PreprocessConfig | None" = None,
 ) -> tuple[str, str]:
     """Return (12-char sig, last_date_iso) identifying a (factor list, universe,
-    history range) tuple.
+    history range, preprocess config) tuple.
 
     Universe = sorted code list. last_date = max of any stock's max date.
 
-    Mask config is **not** part of the key — factor panels are now mask-
+    ``preprocess_cfg`` is included only when non-None **and** not all-off — an
+    all-off cfg omits the ``"preprocess"`` key from the sig dict entirely so the
+    hash is byte-identical to the pre-PR baseline (existing
+    ``factor_panels/<sig>/`` caches remain valid).
+
+    Mask config is **not** part of the key — factor panels are mask-
     independent (mask only affects labels downstream of factor computation).
     """
+    from stockpool.ml.preprocess import _is_all_off
+
     codes = sorted(pool_data.keys())
     last_date = pd.Timestamp.min
     for df in pool_data.values():
@@ -196,14 +222,14 @@ def _factor_panel_sig(
             if d > last_date:
                 last_date = d
     last_iso = "" if last_date is pd.Timestamp.min else last_date.date().isoformat()
-    blob = json.dumps(
-        {
-            "factors": sorted(factor_names),
-            "codes": codes,
-            "last_date": last_iso,
-        },
-        sort_keys=True,
-    ).encode("utf-8")
+    blob_dict: dict = {
+        "factors": sorted(factor_names),
+        "codes": codes,
+        "last_date": last_iso,
+    }
+    if preprocess_cfg is not None and not _is_all_off(preprocess_cfg):
+        blob_dict["preprocess"] = preprocess_cfg.model_dump()
+    blob = json.dumps(blob_dict, sort_keys=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:12], last_iso
 
 
