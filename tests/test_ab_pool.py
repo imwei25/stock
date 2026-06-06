@@ -287,7 +287,11 @@ from stockpool.ab_pool import build_ab_pool, load_ab_pool
 
 
 def _stub_app_cfg(tmp_path: Path) -> "AppConfig":
-    """Build a minimal AppConfig with cache_dir = tmp_path / 'data'."""
+    """Build a minimal AppConfig with cache_dir = tmp_path / 'data'.
+
+    Also resolves ``factors_file`` to an absolute path so the cfg can be
+    dumped + reloaded from a different cwd (subprocess CLI tests).
+    """
     yaml_text = (Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8")
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(yaml_text, encoding="utf-8")
@@ -296,6 +300,13 @@ def _stub_app_cfg(tmp_path: Path) -> "AppConfig":
     data_dir.mkdir(exist_ok=True)
     cfg.data.cache_dir = str(data_dir)
     cfg.ab_pool.cache_path = str(data_dir / "ab_pool.parquet")
+    # Make factors_file absolute so model_dump → reload from a different cwd
+    # still resolves the selection JSON.
+    ff = cfg.strategy.ml_factor.factors_file
+    if ff:
+        cfg.strategy.ml_factor.factors_file = str(
+            (Path(__file__).parent.parent / ff).resolve()
+        )
     return cfg
 
 
@@ -464,3 +475,91 @@ def test_render_html_empty_df(tmp_path):
     html = out_path.read_text(encoding="utf-8")
     assert "POOL_DATA" in html
     assert "[]" in html  # empty JSON array
+
+
+# ============================================================================
+# Task 7: CLI subcommand `ab-pool build` / `ab-pool show`
+# ============================================================================
+import subprocess
+import sys
+
+
+def _run_cli(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    """Run `python -m stockpool` with the given args from a tmp cwd."""
+    proj_root = Path(__file__).parent.parent
+    env = {"PYTHONPATH": str(proj_root / "src")}
+    import os
+    env.update(os.environ)
+    return subprocess.run(
+        [sys.executable, "-m", "stockpool", *args],
+        cwd=cwd, capture_output=True, text=True, env=env,
+    )
+
+
+def test_cli_ab_pool_build_missing_universe(tmp_path):
+    """Build without universe.parquet → exit 1, helpful message."""
+    cfg = _stub_app_cfg(tmp_path)
+    cfg_path = tmp_path / "config.yaml"
+    # Re-dump cfg with updated cache_dir
+    import yaml as _yaml
+    _yaml.safe_dump(cfg.model_dump(mode="python"),
+                    open(cfg_path, "w", encoding="utf-8"), allow_unicode=True)
+    res = _run_cli(["ab-pool", "build", "--config", str(cfg_path)], cwd=tmp_path)
+    assert res.returncode == 1
+    assert "universe.parquet" in (res.stderr + res.stdout)
+
+
+def test_cli_ab_pool_build_idempotent_guard(tmp_path):
+    cfg = _stub_app_cfg(tmp_path)
+    cache_path = Path(cfg.ab_pool.cache_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(b"old")
+    cfg_path = tmp_path / "config.yaml"
+    import yaml as _yaml
+    _yaml.safe_dump(cfg.model_dump(mode="python"),
+                    open(cfg_path, "w", encoding="utf-8"), allow_unicode=True)
+    res = _run_cli(["ab-pool", "build", "--config", str(cfg_path)], cwd=tmp_path)
+    assert res.returncode == 1
+    assert "--refresh" in (res.stderr + res.stdout)
+
+
+def test_cli_ab_pool_show_missing_parquet(tmp_path):
+    cfg = _stub_app_cfg(tmp_path)
+    cfg_path = tmp_path / "config.yaml"
+    import yaml as _yaml
+    _yaml.safe_dump(cfg.model_dump(mode="python"),
+                    open(cfg_path, "w", encoding="utf-8"), allow_unicode=True)
+    res = _run_cli(["ab-pool", "show", "--config", str(cfg_path)], cwd=tmp_path)
+    assert res.returncode == 1
+    assert "ab-pool build" in (res.stderr + res.stdout)
+
+
+def test_cli_ab_pool_show_renders(tmp_path, monkeypatch):
+    """End-to-end: write a parquet directly, call show, assert HTML created."""
+    cfg = _stub_app_cfg(tmp_path)
+    cache_path = Path(cfg.ab_pool.cache_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame([{"code": "600519", "name": "贵州茅台", "industry": "食品饮料",
+                        "circ_mv": 2e12, "avg_amount_20d": 5e9,
+                        "source_tag": "mcap+liq", "build_date": "2026-06-06"}])
+    df.to_parquet(cache_path)
+
+    cfg_path = tmp_path / "config.yaml"
+    import yaml as _yaml
+    _yaml.safe_dump(cfg.model_dump(mode="python"),
+                    open(cfg_path, "w", encoding="utf-8"), allow_unicode=True)
+    # Disable browser auto-open via env var (will be read by cmd_ab_pool_show)
+    import os
+    env = {**os.environ, "STOCKPOOL_NO_BROWSER": "1"}
+    proj_root = Path(__file__).parent.parent
+    env["PYTHONPATH"] = str(proj_root / "src")
+    res = subprocess.run(
+        [sys.executable, "-m", "stockpool", "ab-pool", "show",
+         "--config", str(cfg_path)],
+        cwd=tmp_path, capture_output=True, text=True, env=env,
+    )
+    assert res.returncode == 0, res.stderr
+    # Output: reports/ab_pool.html relative to cwd
+    out_html = tmp_path / "reports" / "ab_pool.html"
+    assert out_html.exists()
+    assert "贵州茅台" in out_html.read_text(encoding="utf-8")

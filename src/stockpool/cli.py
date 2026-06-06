@@ -19,6 +19,8 @@ from stockpool.ab import (
     run_ab,
     run_single_arm,
 )
+from stockpool.ab_pool import build_ab_pool, load_ab_pool
+from stockpool.ab_pool_report import render_ab_pool_html
 from stockpool.backtest import compute_hit_rates
 from stockpool.backtest_composite import verdict_bucket_stats, walk_forward_verdicts
 from stockpool.backtest_report import render_backtest_report
@@ -346,6 +348,81 @@ def cmd_ab(args: argparse.Namespace) -> int:
     out = render_ab_report(result, output_dir=out_root)
     log.info("AB report written: %s", out)
     log.info("Latest also at: %s", out_root / "latest.html")
+    return 0
+
+
+def cmd_ab_pool_build(args: argparse.Namespace) -> int:
+    """Build data/ab_pool.parquet (stratified ~100-stock pool).
+
+    Exit codes:
+      0 — built successfully
+      1 — preflight failure (universe.parquet missing, cache exists w/o --refresh)
+      2 — config invalid or data source / runtime failure
+    """
+    try:
+        cfg = load_config(args.config)
+    except Exception:
+        log.exception("config invalid")
+        return 2
+    try:
+        out_path = build_ab_pool(cfg, refresh=args.refresh)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    except FileExistsError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    except Exception:
+        log.exception("ab-pool build failed")
+        return 2
+    df = load_ab_pool(out_path)
+    print(f"✓ Built ab_pool: {len(df)} codes across "
+          f"{df['industry'].nunique()} industries, saved to {out_path}")
+    return 0
+
+
+def cmd_ab_pool_show(args: argparse.Namespace) -> int:
+    """Render reports/ab_pool.html from the persisted ab_pool.parquet.
+
+    Set STOCKPOOL_NO_BROWSER=1 to suppress browser auto-open (useful for tests
+    and headless environments).
+
+    Exit codes:
+      0 — HTML rendered (and browser opened unless suppressed)
+      1 — ab_pool.parquet missing (run `ab-pool build` first)
+      2 — config invalid
+    """
+    import os
+    import webbrowser
+
+    try:
+        cfg = load_config(args.config)
+    except Exception:
+        log.exception("config invalid")
+        return 2
+    try:
+        df = load_ab_pool(cfg.ab_pool.cache_path)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+    out_dir = Path(cfg.report.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "ab_pool.html"
+    render_ab_pool_html(df, out_path)
+    # Also write a "latest" alias
+    latest = out_dir / "ab_pool_latest.html"
+    latest.write_text(out_path.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"AB pool HTML: {out_path}")
+
+    if not os.environ.get("STOCKPOOL_NO_BROWSER"):
+        try:
+            webbrowser.open(out_path.resolve().as_uri())
+        except Exception as e:
+            log.warning("webbrowser.open failed: %s", e)
     return 0
 
 
@@ -1041,6 +1118,28 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ab.add_argument("--no-share-pool", action="store_true",
                       help="Force each arm to load its own universe / factor panel")
     p_ab.set_defaults(func=cmd_ab)
+
+    p_ab_pool = sub.add_parser(
+        "ab-pool",
+        help="Build / show the AB candidate pool (stratified ~100-stock pool)",
+    )
+    ab_pool_sub = p_ab_pool.add_subparsers(dest="ab_pool_action", required=True)
+
+    p_ab_pool_build = ab_pool_sub.add_parser(
+        "build", help="Build data/ab_pool.parquet (manual rebuild only)",
+    )
+    p_ab_pool_build.add_argument("--config", default="config.yaml")
+    p_ab_pool_build.add_argument(
+        "--refresh", action="store_true",
+        help="Overwrite existing ab_pool.parquet",
+    )
+    p_ab_pool_build.set_defaults(func=cmd_ab_pool_build)
+
+    p_ab_pool_show = ab_pool_sub.add_parser(
+        "show", help="Render reports/ab_pool.html and open in browser",
+    )
+    p_ab_pool_show.add_argument("--config", default="config.yaml")
+    p_ab_pool_show.set_defaults(func=cmd_ab_pool_show)
 
     p_pb = sub.add_parser(
         "portfolio-backtest",
