@@ -139,6 +139,8 @@ P0-2 把 PR-B1(LGB selector)和 PR-B2(LGB weighter)合并测,显示 -0.203 sharp
 
 ## P4-1: 因子预处理 Phase 1(winsorize + cs_zscore + industry_neutralize)— ⚠️ INDECISIVE
 
+> [SUPERSEDED 2026-06-06 by P4-1b — setup was misconfigured (training_universe=pool with 16 stocks caused single-member-industry demean-to-zero + AB share logic bug); see P4-1b below]
+
 **日期**: 2026-06-06
 **配置**: `ab_preprocess.yaml`(training_universe=pool, lasso+ic, holding_days=10, 16 票)
 **报告**: `reports/ab/2026-06-06.html`
@@ -175,6 +177,42 @@ P0-2 把 PR-B1(LGB selector)和 PR-B2(LGB weighter)合并测,显示 -0.203 sharp
 
 ---
 
+## P4-1b: 因子预处理 Phase 1.5 重跑 (winsorize + cs_zscore on full universe) — ✅ PASS
+
+**日期**: 2026-06-06
+**配置**: `ab_preprocess.yaml`(training_universe=all, lasso+ic, holding_days=10, 4358 训练股 / 16 应用股)
+**报告**: `reports/ab/2026-06-06.html`
+
+| 指标 | baseline | with_preprocess | Δ |
+|---|---|---|---|
+| Sharpe (mean) | +0.066 | +0.311 | **+0.245** |
+| Sharpe (median) | +0.259 | +0.498 | **+0.239** |
+| Total return (mean) | +5.11% | +7.76% | **+2.64%** |
+| Max drawdown (mean) | +9.61% | +9.24% | **-0.38pp** |
+| Stocks won (B>A) | - | - | **11/16** |
+| 0-trade stocks in B | 0 | 0 | ✅ 修复 |
+
+**Pass criteria 判定:**
+- Δsharpe ≥ +0.05: ✅(+0.245)
+- Total return 同向: ✅(+5.11% / +7.76%)
+- Stocks won > n/2: ✅(11/16)
+- Drawdown 不退化 > 3pp: ✅(改善 0.38pp)
+
+**Verdict: ✅ PASS** — cross-sec winsorize + zscore 在全市场 4358 票上净贡献 sharpe +0.245、return +2.64%。
+
+**P4-1 → P4-1b 关键修复**(详见 commits 75606e6..33c0841):
+1. **n_codes 太少导致预处理退化**:16 票 cfg.stocks 里 5 票各占独苗细分行业,`industry_neutralize_panel` 内部 `groupby(industry).transform(s - s.mean())` 对单成员组 demean = 0,5 票全部因子被砍成 0 → 0 trades。
+   修复:`PreprocessConfig.min_pool_size: int = Field(default=200)` runtime guard,n_codes < 200 时三步全跳 + warning。
+2. **AB 共享 factor_panel bug**:`_decide_pool_sharing` 只比 factors 列表,不比 preprocess,两 arm preprocess 不同时第二个 arm 拿到的是第一个 arm 的 raw panel(P4-1b 第一次重跑时被 bit-identical metrics 暴露)。
+   修复:加 `p_a == p_b` (model_dump 比较) 共享 barrier;伴随修 sector_map 在 shared-universe 路径未注入的次生 bug。
+3. **AB yaml setup 切到合理 universe**:`training_universe: pool → all`(16 票 → 4358 票),`with_preprocess` arm `industry_neutralize: true → false`(单成员细分行业风险即使在大池下仍存在,Phase 2 全市场参照设计前默认关)。
+
+**结论**:cross-sec 预处理本身是有效的,只是必须在合理宽度的截面(几百到几千股)上做。`industry_neutralize` 暂留作 opt-in,默认 false。
+
+**默认值变更**:`config.yaml` 的 `strategy.ml_factor.preprocess` 段已更新为默认开启 winsorize + zscore(参考 ab_preprocess.yaml with_preprocess arm 的配置)。
+
+---
+
 ## §5 工程结论(2026-05-24)
 
 经过 7 个 A/B 对照(P0-1 / P0-2 / P1-1 / P1-2 / P2-1 / P3-1 / P3-2,P3-2 重跑两次),得到的**当前默认 sweet spot**:
@@ -189,7 +227,10 @@ strategy:
     selector: {type: lasso}       # ❌ lightgbm 倒退(F2 默认回退)
     weighter: {type: ic}          # ❌ lightgbm 倒退(F2 默认回退)
     share_pool_fit: true          # (未单独验证,但配合 pooled+pool 工作良好)
-    preprocess: { ... }            # ⚠️ Phase 1 indecisive (P4-1),保持全关
+    preprocess:                    # ✅ P4-1b PASS — winsorize+zscore 开启(industry_neutralize 待 Phase 2)
+      winsorize: [0.01, 0.99]
+      zscore: true
+      industry_neutralize: false
 ```
 
 **未来重新启用 LGB / universe=all 的前提**:

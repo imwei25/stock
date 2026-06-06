@@ -198,3 +198,10 @@ strategy:
     buy_verdicts:     ["buy", "strong_buy"]
     sell_verdicts:    ["sell", "strong_sell"]
     refresh_verdicts: ["strong_buy"]
+
+    # 截面预处理(P4-1b ✅ PASS: winsorize + zscore → +0.245 sharpe / +2.64% return on 4358-票训练池)
+    preprocess:
+      winsorize: [0.01, 0.99]
+      zscore: true
+      industry_neutralize: false  # P1.5: keep off, single-member sub-industries risk demean-to-zero
+      # min_pool_size: 200  # default; cs preprocessing skipped when n_codes < this

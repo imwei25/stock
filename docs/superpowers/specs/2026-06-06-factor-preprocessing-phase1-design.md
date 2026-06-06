@@ -384,3 +384,19 @@ Each of these is a candidate for a follow-up spec if Phase 1 validates positivel
 - Prior AB verdict tradition: `docs/ab_validation_results.md`, `docs/ab_validation_runbook.md`
 - Mask design precedent: `docs/superpowers/specs/2026-05-31-tradability-mask-design.md`
 - Related research: `docs/research/2026-05-31-a-share-quant-survey-comparison.md` §3.4
+
+---
+
+## Phase 1.5 Amendments (2026-06-06)
+
+After Phase 1 AB came back INDECISIVE (P4-1), root-cause analysis surfaced two bugs that invalidated the test setup:
+
+1. **Small-pool single-member-industry bug**: with 16-stock pools, common sub-industries have only 1 representative; `industry_neutralize_panel` demeans single-member groups to zero (`x - mean({x}) = 0`), wiping all factor signal. Fix: `PreprocessConfig.min_pool_size: int = Field(default=200)` — `apply_preprocess_pipeline` skips all 3 steps with a warning when `n_codes < min_pool_size`. Caller (`build_factor_panel`) passes `n_codes=len(pool_data)`.
+
+2. **AB share-without-preprocess bug**: `ab/runner.py:_decide_pool_sharing` only compared factors lists, not preprocess. Two arms with different preprocess silently shared the first arm's raw factor_panel. Fix: `p_a == p_b` (model_dump comparison) as a sharing barrier. Side-fix: `_prepare_pool_for_arm`'s shared-universe path also missed calling `set_sector_map`, restored.
+
+3. **AB methodology fix**: `ab_preprocess.yaml` changed to `training_universe=all` (4358 stocks) and `with_preprocess.industry_neutralize=false`. The original "single A/B all-on" was structurally wrong for cs preprocessing on a small pool.
+
+**P4-1b verdict: ✅ PASS** (Δsharpe=+0.245, see `docs/ab_validation_results.md`).
+
+Industry neutralize remains opt-in pending the "global-reference panel" follow-up — even on full universe, single-member 细分行业 (e.g., specialty chemicals subgroup with 1 stock in cfg.stocks but many in market) can still trigger demean-to-zero. The cleaner fix is to compute industry mean over a wide reference panel (e.g., training_universe=all) regardless of application pool size — captured in Phase 2 spec backlog.

@@ -367,3 +367,11 @@ See `docs/ab_validation_results.md` P4-1 for full metrics.
 
 Phase 2 (市值中性) 不应直接上;先做 Phase 1.5:阈值校准 + per-step ablation。
 默认 `preprocess` 段保持全关。
+
+### Phase 1.5 Update (2026-06-06)
+
+P4-1 verdict invalidated by discovery of two bugs (small-pool single-member-industry demean + AB share-without-preprocess). Phase 1.5 added a runtime size guard (`PreprocessConfig.min_pool_size` default 200) and fixed the share logic. Rerun on `training_universe=all` with winsorize+cs_zscore only (industry_neutralize remains off for now):
+
+**P4-1b: ✅ PASS** — Δsharpe=+0.245 / Δreturn=+2.64% / 11/16 stocks won / 0 zero-trade.
+
+See `docs/ab_validation_results.md` P4-1b for full table. Phase 2 (industry_neutralize with global-reference design) still pending. Phase 1 deliverable is now validated.
