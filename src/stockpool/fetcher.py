@@ -431,12 +431,16 @@ def fetch_universe(
     force_refresh: bool = False,
     max_workers: int = 8,
     progress_every: int = 200,
+    warmup_days: int = 0,
 ) -> dict[str, pd.DataFrame]:
     """Bulk-fetch daily bars for many stocks in parallel, with per-stock caching.
 
     Each stock reuses the same parquet cache as `fetch_daily`, so subsequent
     calls only do incremental updates. Errors on individual stocks are logged
     and skipped — the returned dict contains only successful pulls.
+
+    The warmup_days parameter is forwarded to each per-stock fetch_daily call,
+    so each stock will return history_days + warmup_days bars.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -460,6 +464,7 @@ def fetch_universe(
             df = fetch_daily(
                 code, history_days, cache_dir,
                 force_refresh=force_refresh, source=source,
+                warmup_days=warmup_days,
             )
             return code, df, None
         except Exception as e:  # noqa: BLE001
@@ -489,12 +494,17 @@ def fetch_universe(
 def load_universe_cache(
     cache_dir: str | Path,
     history_days: int | None = None,
+    warmup_days: int = 0,
 ) -> dict[str, pd.DataFrame]:
     """Load every cached ``<code>_daily.parquet`` under ``cache_dir`` into memory.
 
     Skips files that fail to read. Used by ML strategies when
     ``training_universe='all'`` so the training pool comes from the previously-
     fetched full A-share cache, decoupled from the application stock pool.
+
+    When history_days is set, the returned DataFrames are tailed to
+    history_days + warmup_days rows. Without history_days, the full
+    cached parquet is returned unchanged.
     """
     cache = Path(cache_dir)
     if not cache.exists():
@@ -504,8 +514,10 @@ def load_universe_cache(
         code = path.stem.replace("_daily", "")
         try:
             df = pd.read_parquet(path)
-            if history_days is not None and len(df) > history_days:
-                df = df.tail(history_days).reset_index(drop=True)
+            if history_days is not None:
+                effective_len = history_days + warmup_days
+                if len(df) > effective_len:
+                    df = df.tail(effective_len).reset_index(drop=True)
             out[code] = df
         except Exception as e:
             log.warning("Universe cache: failed to read %s (%s)", path, e)

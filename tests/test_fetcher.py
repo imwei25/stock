@@ -340,3 +340,70 @@ def test_fetch_sector_daily_with_warmup(tmp_path, monkeypatch):
         force_refresh=True, warmup_days=50,
     )
     assert len(out) == 250
+
+
+# ---------------------------------------------------------------------------
+# warmup_days tests (Task W3: universe loaders)
+# ---------------------------------------------------------------------------
+
+def test_fetch_universe_threads_warmup_days(tmp_path, monkeypatch):
+    """fetch_universe forwards warmup_days to per-stock fetch_daily."""
+    from stockpool import fetcher
+
+    captured = []
+    real_fetch_daily = fetcher.fetch_daily
+
+    def spy(code, history_days, cache_dir, **kw):
+        captured.append((code, history_days, kw.get("warmup_days", 0)))
+        # Return synthetic data
+        dates = pd.date_range("2023-01-01", periods=200, freq="B")
+        return pd.DataFrame({
+            "date": dates, "open": [1.0]*200, "high": [1.0]*200,
+            "low": [1.0]*200, "close": [1.0]*200, "volume": [1]*200,
+        })
+
+    monkeypatch.setattr(fetcher, "fetch_daily", spy)
+    fetcher.fetch_universe(
+        ["000001", "000002"], history_days=100,
+        cache_dir=str(tmp_path), warmup_days=50,
+        max_workers=1,
+    )
+    # Each per-stock call should carry warmup_days=50
+    assert all(w == 50 for _c, _h, w in captured), f"warmup_days not threaded: {captured}"
+    assert {c for c, _h, _w in captured} == {"000001", "000002"}
+
+
+def test_load_universe_cache_respects_warmup_days(tmp_path):
+    """load_universe_cache tails to history_days + warmup_days when both given."""
+    from stockpool.fetcher import load_universe_cache
+
+    dates = pd.date_range("2023-01-01", periods=500, freq="B")
+    df = pd.DataFrame({
+        "date": dates, "open": [1.0]*500, "high": [1.0]*500,
+        "low": [1.0]*500, "close": [1.0]*500, "volume": [1]*500,
+    })
+    (tmp_path / "AAAAAA_daily.parquet").parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(tmp_path / "AAAAAA_daily.parquet")
+
+    # Without warmup: 100 bars
+    out = load_universe_cache(str(tmp_path), history_days=100)
+    assert len(out["AAAAAA"]) == 100
+
+    # With warmup 50: 150 bars
+    out = load_universe_cache(str(tmp_path), history_days=100, warmup_days=50)
+    assert len(out["AAAAAA"]) == 150
+
+
+def test_load_universe_cache_default_warmup_zero(tmp_path):
+    """load_universe_cache default (no warmup) keeps existing behavior."""
+    from stockpool.fetcher import load_universe_cache
+
+    dates = pd.date_range("2023-01-01", periods=200, freq="B")
+    df = pd.DataFrame({
+        "date": dates, "open": [1.0]*200, "high": [1.0]*200,
+        "low": [1.0]*200, "close": [1.0]*200, "volume": [1]*200,
+    })
+    df.to_parquet(tmp_path / "BBBBBB_daily.parquet")
+
+    out = load_universe_cache(str(tmp_path), history_days=50)
+    assert len(out["BBBBBB"]) == 50  # warmup default 0 → just history_days
