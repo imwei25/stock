@@ -99,3 +99,45 @@ def test_backtest_continues_after_per_stock_failure(tmp_path, isolated_cache, mo
     html = latest.read_text(encoding="utf-8")
     assert "605589" in html
     assert "000001" not in html  # failed stock not in report
+
+
+def test_backtest_stocks_trims_warmup_bars(monkeypatch):
+    """When cfg.data.warmup_days > 0, daily passed to simulate_* is trimmed."""
+    import numpy as np
+    from stockpool.config import load_config, StrategyConfig
+    from stockpool import backtest_runner
+
+    cfg = load_config(str(PROJECT_ROOT / "config.yaml"))
+    # Force composite_verdict so simulate_equity_curve is the code path taken
+    # (ml_factor requires a sector_map and full pool context which we don't have here).
+    cfg = cfg.model_copy(update={
+        "data": cfg.data.model_copy(update={"warmup_days": 100}),
+        "strategy": StrategyConfig(name="composite_verdict"),
+    })
+
+    captured_lens = []
+    real_sim = backtest_runner.simulate_equity_curve
+    def spy_sim(wf, **kw):
+        captured_lens.append(len(wf))
+        return real_sim(wf, **kw)
+    monkeypatch.setattr(backtest_runner, "simulate_equity_curve", spy_sim)
+
+    dates = pd.date_range("2022-01-01", periods=600, freq="B")
+    close = 100 + np.cumsum(np.random.default_rng(0).standard_normal(600))
+    pool_data = {
+        cfg.stocks[0].code: pd.DataFrame({
+            "date": dates, "open": close, "high": close * 1.01, "low": close * 0.99,
+            "close": close, "volume": [1_000_000] * 600,
+        }),
+    }
+
+    per_stock, failed = backtest_runner.backtest_stocks(
+        cfg, cfg.stocks[:1], pool_data, None, shared_cache={}, refresh=False,
+    )
+    assert len(per_stock) == 1, f"expected 1 success, got {failed}"
+    # daily was trimmed from 600 to 500 (600 - warmup_days=100) before walk_forward_verdicts.
+    # wf may further drop indicator warmup; just verify it's <= 500.
+    assert captured_lens, "simulate_equity_curve was not called"
+    assert captured_lens[0] <= 500, (
+        f"simulate got wf len {captured_lens[0]} — expected ≤ 500 after warmup trim"
+    )

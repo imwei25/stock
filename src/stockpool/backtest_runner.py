@@ -132,7 +132,16 @@ def backtest_stocks(
                 daily = fetch_daily(
                     s.code, cfg.data.history_days, cfg.data.cache_dir,
                     force_refresh=refresh, source=cfg.data.source,
+                    warmup_days=cfg.data.warmup_days,
                 )
+            # P2: trim warmup region — factor panel keeps full data for training,
+            # but per-stock backtest iteration only spans the history_days window.
+            if (
+                daily is not None
+                and cfg.data.warmup_days > 0
+                and len(daily) > cfg.data.warmup_days
+            ):
+                daily = daily.iloc[cfg.data.warmup_days:].reset_index(drop=True)
             if cfg.strategy.name == "composite_verdict":
                 wf = walk_forward_verdicts(
                     daily, cfg.weights, cfg.scoring, cfg.verdicts, cfg.indicators,

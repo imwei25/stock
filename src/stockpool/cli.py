@@ -128,6 +128,10 @@ def _analyze_one(
             context=context,
         )
 
+    # P2: trim warmup region before indicator / strategy pipelines.
+    if cfg.data.warmup_days > 0 and len(daily) > cfg.data.warmup_days:
+        daily = daily.iloc[cfg.data.warmup_days:].reset_index(drop=True)
+
     if len(daily) < 30:
         warnings.append(f"历史数据不足 ({len(daily)} 根),指标可能不可靠")
 
