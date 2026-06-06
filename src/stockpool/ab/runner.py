@@ -76,9 +76,13 @@ def _decide_pool_sharing(arm_cfgs: list[AppConfig]) -> dict:
     ):
         f_a = list(arm_cfgs[0].strategy.ml_factor.factors)
         f_b = list(arm_cfgs[1].strategy.ml_factor.factors)
-        # Mask is no longer a sharing barrier — factor panels are mask-agnostic
+        # Mask is not a sharing barrier — factor panels are mask-agnostic
         # (mask only affects labels downstream of factor computation).
-        if f_a == f_b:
+        # Preprocess IS a barrier — different preprocess produces different
+        # panel values; sharing would silently apply arm_a's preprocess to arm_b.
+        p_a = arm_cfgs[0].strategy.ml_factor.preprocess.model_dump()
+        p_b = arm_cfgs[1].strategy.ml_factor.preprocess.model_dump()
+        if f_a == f_b and p_a == p_b:
             shared_factors = f_a
 
     return {"load_universe": load_universe, "shared_factors": shared_factors}

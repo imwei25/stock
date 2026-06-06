@@ -325,6 +325,61 @@ def test_pool_plan_one_ml_per_stock_does_not_load_universe(tmp_path):
     assert plan["load_universe"] is False
 
 
+def test_decide_pool_sharing_blocked_by_preprocess_difference(tmp_path):
+    """Arms with different preprocess settings can't share factor_panel."""
+    from stockpool.ab.runner import _decide_pool_sharing
+    from stockpool.config import MLFactorConfig, PreprocessConfig
+
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+
+    def _make_preprocess_cfg(preprocess):
+        ml = MLFactorConfig(
+            panel_mode="pooled", training_universe="all",
+            factors=["momentum_20"], preprocess=preprocess,
+        )
+        arm = ArmOverride(
+            strategy=StrategyConfig(name="ml_factor", ml_factor=ml),
+            backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+        )
+        return build_effective_cfg(base, arm)
+
+    cfg_off = _make_preprocess_cfg(PreprocessConfig())
+    cfg_on = _make_preprocess_cfg(PreprocessConfig(zscore=True))
+
+    plan = _decide_pool_sharing([cfg_off, cfg_on])
+    assert plan["shared_factors"] is None, (
+        "Arms with different preprocess must not share factor_panel "
+        "(would silently apply arm_a's preprocess to arm_b)"
+    )
+
+
+def test_decide_pool_sharing_allowed_when_preprocess_matches(tmp_path):
+    """Arms with identical preprocess settings can share factor_panel."""
+    from stockpool.ab.runner import _decide_pool_sharing
+    from stockpool.config import MLFactorConfig, PreprocessConfig
+
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+
+    def _make_preprocess_cfg(preprocess):
+        ml = MLFactorConfig(
+            panel_mode="pooled", training_universe="all",
+            factors=["momentum_20"], preprocess=preprocess,
+        )
+        arm = ArmOverride(
+            strategy=StrategyConfig(name="ml_factor", ml_factor=ml),
+            backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+        )
+        return build_effective_cfg(base, arm)
+
+    cfg_a = _make_preprocess_cfg(PreprocessConfig(zscore=True))
+    cfg_b = _make_preprocess_cfg(PreprocessConfig(zscore=True))
+
+    plan = _decide_pool_sharing([cfg_a, cfg_b])
+    assert plan["shared_factors"] == ["momentum_20"]
+
+
 def test_run_ab_does_not_inject_universe_into_pool_arm(
     tmp_path, isolated_cache_two_stocks, monkeypatch,
 ):
