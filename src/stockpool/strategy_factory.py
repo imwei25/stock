@@ -238,6 +238,7 @@ def load_or_build_factor_panel(
     pool_data: Mapping[str, pd.DataFrame],
     cache_dir: str | Path,
     refresh: bool = False,
+    preprocess_cfg: "PreprocessConfig | None" = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     """Disk-cached wrapper around ``build_factor_panel`` + ``build_close_panel``.
 
@@ -257,7 +258,7 @@ def load_or_build_factor_panel(
     if not pool_data:
         return {}, pd.DataFrame()
 
-    sig, last_iso = _factor_panel_sig(factor_names, pool_data)
+    sig, last_iso = _factor_panel_sig(factor_names, pool_data, preprocess_cfg=preprocess_cfg)
     root = Path(cache_dir) / "factor_panels" / sig
     manifest_path = root / "manifest.json"
 
@@ -297,7 +298,7 @@ def load_or_build_factor_panel(
 
     log.info("Building factor panel: %d factors × %d stocks (sig=%s)",
              len(factor_names), len(pool_data), sig)
-    factor_panel = build_factor_panel(factor_names, pool_data)
+    factor_panel = build_factor_panel(factor_names, pool_data, preprocess_cfg=preprocess_cfg)
     close_panel = build_close_panel(pool_data)
 
     root.mkdir(parents=True, exist_ok=True)

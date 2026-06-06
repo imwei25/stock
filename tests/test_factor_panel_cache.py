@@ -362,3 +362,24 @@ def test_build_factor_panel_passes_preprocess(monkeypatch):
         ["momentum_20"], pool, preprocess_cfg=PreprocessConfig(),
     )
     assert called == {}
+
+
+def test_load_or_build_factor_panel_threads_preprocess(tmp_path):
+    """When preprocess_cfg is on, two calls produce different sig dirs."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.strategy_factory import load_or_build_factor_panel
+    pool = _pool(["S001", "S002"])
+
+    # Off
+    fp_off, _ = load_or_build_factor_panel(
+        ["momentum_20"], pool, str(tmp_path),
+        preprocess_cfg=PreprocessConfig(),
+    )
+    # On
+    fp_on, _ = load_or_build_factor_panel(
+        ["momentum_20"], pool, str(tmp_path),
+        preprocess_cfg=PreprocessConfig(zscore=True),
+    )
+    # Two distinct sig dirs created
+    sig_dirs = list((tmp_path / "factor_panels").iterdir())
+    assert len(sig_dirs) == 2
