@@ -167,36 +167,79 @@ def mcap_neutralize_panel(
 
 
 def industry_neutralize_panel(
-    df: pd.DataFrame, sector_map: Mapping[str, str],
+    df: pd.DataFrame,
+    sector_map: Mapping[str, str],
+    log_mcap: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Per-day within-industry demean.
+    """Per-day within-industry demean OR joint OLS Y ~ industry + log_mcap.
 
     Args:
         df: T × N factor wide-frame (columns = codes).
         sector_map: ``{code: industry_label}``. Codes absent from the map
             fall into a single ``"_unknown_"`` bucket and are demeaned together.
+        log_mcap: optional T × N log(market_cap). When provided, the per-day
+            transform switches from group demean to OLS residualisation against
+            ``[industry_dummies(drop_first), log_mcap]``. Days that fail OLS
+            preconditions (< 10 valid codes or rank deficient) fall back to
+            the legacy group-demean path for that day.
 
     Returns:
-        Same-shape DataFrame, each cell ``= x - mean(x within industry on day)``.
+        Same-shape DataFrame.
 
     Raises:
         ValueError: if ``sector_map`` is empty (caller catches and skips).
     """
     if not sector_map:
         raise ValueError("sector_map is empty; cannot industry-neutralize")
+
+    if log_mcap is None:
+        # Legacy fast path — group demean (bit-for-bit unchanged).
+        industries = pd.Series(
+            {c: sector_map.get(c, "_unknown_") for c in df.columns},
+            name="industry",
+        )
+        transposed = df.T.copy()
+        transposed["__industry__"] = industries
+        date_cols = [c for c in transposed.columns if c != "__industry__"]
+        demeaned = transposed.groupby("__industry__")[date_cols].transform(
+            lambda s: s - s.mean()
+        )
+        return demeaned.T
+
+    # OLS path: build one-hot industry dummies (drop first to avoid singularity)
     industries = pd.Series(
         {c: sector_map.get(c, "_unknown_") for c in df.columns},
-        name="industry",
     )
-    # Transpose so each industry is contiguous rows; groupby + transform demean.
-    transposed = df.T.copy()
-    transposed["__industry__"] = industries
-    # For each day column, subtract per-industry mean.
-    date_cols = [c for c in transposed.columns if c != "__industry__"]
-    demeaned = transposed.groupby("__industry__")[date_cols].transform(
-        lambda s: s - s.mean()
-    )
-    return demeaned.T
+    dummies = pd.get_dummies(industries, prefix="ind", drop_first=True, dtype=float)
+    # dummies index = codes; columns = ind_<label> minus reference
+
+    log_mcap_aligned = log_mcap.reindex(index=df.index, columns=df.columns)
+    out = df.astype(float).copy()
+    fallback_days = 0
+
+    # Pre-compute group-demean output once for fallback rows
+    legacy_fallback = industry_neutralize_panel(df, sector_map, log_mcap=None)
+
+    for date in df.index:
+        y = df.loc[date]
+        m = log_mcap_aligned.loc[date]
+        X = dummies.copy()
+        X["intercept"] = 1.0
+        X["log_mcap"] = m.values
+        resid, used_ols = _per_day_ols_residual(y, X)
+        if used_ols:
+            out.loc[date] = resid
+        else:
+            out.loc[date] = legacy_fallback.loc[date]
+            fallback_days += 1
+
+    if fallback_days:
+        log.warning(
+            "industry_neutralize_panel(log_mcap=...): OLS fallback on %d / %d days "
+            "(degenerate cross-section); used group demean for those days",
+            fallback_days, len(df.index),
+        )
+    return out
 
 
 def _is_all_off(cfg: "PreprocessConfig") -> bool:

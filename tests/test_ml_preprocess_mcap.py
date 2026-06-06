@@ -94,3 +94,69 @@ def test_mcap_neutralize_days_are_independent():
         "mutating log_mcap on day 1 produced identical residuals — "
         "function may be ignoring log_mcap input"
     )
+
+
+def test_industry_neutralize_legacy_behavior_unchanged_when_log_mcap_none():
+    """log_mcap=None must produce bit-for-bit identical output to the pre-PR code path."""
+    from stockpool.ml.preprocess import industry_neutralize_panel
+    df = _panel(3, 20, seed=10)
+    sector_map = {c: f"IND{i % 4}" for i, c in enumerate(df.columns)}
+    legacy = industry_neutralize_panel(df, sector_map)  # no log_mcap kwarg
+    explicit_none = industry_neutralize_panel(df, sector_map, log_mcap=None)
+    pd.testing.assert_frame_equal(legacy, explicit_none)
+
+
+def test_industry_neutralize_joint_ols_residual_orthogonal_to_inputs():
+    """Y = 3 * log_mcap + 1.5 * industry_effect + noise →
+    residuals ~ noise, ~uncorrelated with log_mcap and industry membership."""
+    from stockpool.ml.preprocess import industry_neutralize_panel
+    rng = np.random.default_rng(11)
+    dates = pd.date_range("2025-01-01", periods=3, freq="B")
+    codes = [f"S{i:03d}" for i in range(60)]
+    sector_map = {c: f"IND{i % 4}" for i, c in enumerate(codes)}
+    industry_offset = pd.Series(
+        {c: float({"IND0": -1.0, "IND1": 0.0, "IND2": 1.0, "IND3": 2.0}[sector_map[c]])
+         for c in codes}
+    )
+    log_mcap = pd.DataFrame(
+        rng.standard_normal((3, 60)) * 0.5 + 10.0, index=dates, columns=codes,
+    )
+    noise = pd.DataFrame(
+        rng.standard_normal((3, 60)) * 0.1, index=dates, columns=codes,
+    )
+    y = 3.0 * log_mcap + industry_offset.values[None, :] * 1.5 + noise
+
+    resid = industry_neutralize_panel(y, sector_map, log_mcap=log_mcap)
+
+    # Residual should be uncorrelated with log_mcap per day
+    for d in dates:
+        r = resid.loc[d]
+        m = log_mcap.loc[d]
+        corr = np.corrcoef(r.values, m.values)[0, 1]
+        assert abs(corr) < 0.1, f"residual ~ log_mcap on {d}: corr={corr}"
+
+    # Per-industry mean of residual should be ~0 (industry demeaned)
+    for d in dates:
+        for ind in {"IND0", "IND1", "IND2", "IND3"}:
+            members = [c for c in codes if sector_map[c] == ind]
+            assert abs(resid.loc[d, members].mean()) < 0.1
+
+
+def test_industry_neutralize_single_member_industry_keeps_original_value():
+    """A single-member industry must NOT be silently demeaned to 0;
+    its code is excluded from the regression and the original y is kept."""
+    from stockpool.ml.preprocess import industry_neutralize_panel
+    rng = np.random.default_rng(12)
+    dates = pd.date_range("2025-01-01", periods=2, freq="B")
+    codes = [f"S{i:03d}" for i in range(30)]
+    sector_map = {c: "BIG" for c in codes[:-1]}
+    sector_map[codes[-1]] = "LONELY"
+    log_mcap = pd.DataFrame(
+        rng.standard_normal((2, 30)) * 0.5 + 10.0, index=dates, columns=codes,
+    )
+    df = pd.DataFrame(
+        rng.standard_normal((2, 30)), index=dates, columns=codes,
+    )
+    out = industry_neutralize_panel(df, sector_map, log_mcap=log_mcap)
+    # The lonely code should keep its original value (NOT silently zeroed)
+    pd.testing.assert_series_equal(out[codes[-1]], df[codes[-1]])
