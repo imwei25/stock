@@ -169,6 +169,7 @@ def build_factor_panel(
     }
     return preproc_mod.apply_preprocess_pipeline(
         raw, preprocess_cfg, sector_map=sector_map, factor_types=types_map,
+        n_codes=len(pool_data),
     )
 
 

@@ -342,10 +342,10 @@ def test_build_factor_panel_passes_preprocess(monkeypatch):
     called = {}
     real_apply = preproc_mod.apply_preprocess_pipeline
 
-    def spy(fp, cfg, sector_map=None, factor_types=None):
+    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None):
         called["cfg"] = cfg
         called["n_factors"] = len(fp)
-        return real_apply(fp, cfg, sector_map=sector_map, factor_types=factor_types)
+        return real_apply(fp, cfg, sector_map=sector_map, factor_types=factor_types, n_codes=n_codes)
 
     monkeypatch.setattr(preproc_mod, "apply_preprocess_pipeline", spy)
 
@@ -383,3 +383,29 @@ def test_load_or_build_factor_panel_threads_preprocess(tmp_path):
     # Two distinct sig dirs created
     sig_dirs = list((tmp_path / "factor_panels").iterdir())
     assert len(sig_dirs) == 2
+
+
+def test_build_factor_panel_passes_n_codes_to_pipeline(monkeypatch):
+    """build_factor_panel forwards n_codes=len(pool_data) so the size guard
+    activates downstream."""
+    from stockpool.config import PreprocessConfig
+    from stockpool import strategy_factory
+    from stockpool.ml import preprocess as preproc_mod
+
+    pool = _pool(["S001", "S002", "S003"])
+
+    captured = {}
+    real = preproc_mod.apply_preprocess_pipeline
+
+    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None):
+        captured["n_codes"] = n_codes
+        return real(fp, cfg, sector_map=sector_map,
+                    factor_types=factor_types, n_codes=n_codes)
+
+    monkeypatch.setattr(preproc_mod, "apply_preprocess_pipeline", spy)
+
+    cfg = PreprocessConfig(zscore=True, min_pool_size=0)  # guard off so spy returns transformed values
+    strategy_factory.build_factor_panel(["momentum_20"], pool, preprocess_cfg=cfg)
+    assert captured["n_codes"] == 3, (
+        f"build_factor_panel should pass n_codes=len(pool_data)=3, got {captured['n_codes']}"
+    )
