@@ -125,6 +125,7 @@ def run_single_arm(
             factor_panel, close_panel = load_or_build_factor_panel(
                 effective_cfg.strategy.ml_factor.factors, pool_data,
                 effective_cfg.data.cache_dir,
+                preprocess_cfg=effective_cfg.strategy.ml_factor.preprocess,
             )
         shared_cache: dict = {}
         legacy = build_strategy(

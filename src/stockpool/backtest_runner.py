@@ -90,6 +90,7 @@ def prepare_pool(
     factor_panel, close_panel = load_or_build_factor_panel(
         ml_cfg.factors, pool_data, cfg.data.cache_dir,
         refresh=refresh_factor_panel,
+        preprocess_cfg=ml_cfg.preprocess,
     )
     return pool_data, factor_panel, close_panel
 
