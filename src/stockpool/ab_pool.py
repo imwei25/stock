@@ -8,11 +8,14 @@ See docs/superpowers/specs/2026-06-06-ab-candidate-pool-design.md.
 """
 from __future__ import annotations
 
+import logging
 from datetime import date as _date
 from typing import Literal
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
+
+log = logging.getLogger("stockpool")
 
 
 class AbPoolConfig(BaseModel):
@@ -65,3 +68,48 @@ def _apply_hard_filters(
     out = out[ipo_ts <= cutoff]
     out = out[out["avg_amount_20d"] >= cfg.min_avg_amount_20d]
     return out.reset_index(drop=True)
+
+
+def _stratified_select(df: pd.DataFrame, cfg: AbPoolConfig) -> pd.DataFrame:
+    """Per-industry top-N by 流通市值 ∪ top-N by 20日均额, row-merged on overlap.
+
+    Overlap semantics: a stock that appears in both top lists yields a SINGLE
+    output row with source_tag="mcap+liq" (no row duplication). Buckets
+    smaller than 2N contribute what they have.
+
+    Skips "未知" bucket entirely when cfg.include_unknown_industry=False.
+    """
+    rows: list[dict] = []
+    for industry, bucket in df.groupby("industry", sort=False):
+        if industry == "未知" and not cfg.include_unknown_industry:
+            continue
+        top_mcap = set(
+            bucket.nlargest(cfg.per_industry_top_mcap, "circ_mv")["code"]
+        )
+        top_liq = set(
+            bucket.nlargest(cfg.per_industry_top_liq, "avg_amount_20d")["code"]
+        )
+        selected = top_mcap | top_liq
+        if not selected:
+            log.warning("ab_pool: industry %r yielded 0 selections", industry)
+            continue
+        for r in bucket[bucket["code"].isin(selected)].itertuples(index=False):
+            in_mcap = r.code in top_mcap
+            in_liq = r.code in top_liq
+            tag = "mcap+liq" if (in_mcap and in_liq) else (
+                "mcap" if in_mcap else "liq"
+            )
+            rows.append({
+                "code": r.code,
+                "name": r.name,
+                "industry": industry,
+                "circ_mv": r.circ_mv,
+                "avg_amount_20d": r.avg_amount_20d,
+                "source_tag": tag,
+            })
+    if not rows:
+        return pd.DataFrame(
+            columns=["code", "name", "industry", "circ_mv",
+                     "avg_amount_20d", "source_tag"]
+        )
+    return pd.DataFrame(rows)

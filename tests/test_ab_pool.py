@@ -126,3 +126,99 @@ def test_hard_filters_st_variants():
     ])
     out = _apply_hard_filters(df, cfg, today=today)
     assert list(out["code"]) == ["1"]
+
+
+from stockpool.ab_pool import _stratified_select
+
+
+def test_stratified_no_overlap():
+    cfg = AbPoolConfig()
+    df = pd.DataFrame([
+        # 银行: 4 stocks, mcap-rank distinct from liq-rank
+        {"code": "B1", "name": "B1", "industry": "银行", "circ_mv": 9, "avg_amount_20d": 1},
+        {"code": "B2", "name": "B2", "industry": "银行", "circ_mv": 8, "avg_amount_20d": 2},
+        {"code": "B3", "name": "B3", "industry": "银行", "circ_mv": 1, "avg_amount_20d": 9},
+        {"code": "B4", "name": "B4", "industry": "银行", "circ_mv": 2, "avg_amount_20d": 8},
+    ])
+    out = _stratified_select(df, cfg)
+    # Expect 4 rows: top-2 mcap = {B1, B2}, top-2 liq = {B3, B4}, no overlap
+    assert set(out["code"]) == {"B1", "B2", "B3", "B4"}
+    assert dict(zip(out["code"], out["source_tag"])) == {
+        "B1": "mcap", "B2": "mcap", "B3": "liq", "B4": "liq",
+    }
+
+
+def test_stratified_full_overlap_3_rows():
+    """Top-2 mcap fully overlaps top-2 liq → 1 shared + bucket yields 3 rows."""
+    cfg = AbPoolConfig()
+    df = pd.DataFrame([
+        # 银行: top-2 by mcap = {B1, B2}; top-2 by liq = {B1, B3}
+        {"code": "B1", "name": "B1", "industry": "银行", "circ_mv": 9, "avg_amount_20d": 9},
+        {"code": "B2", "name": "B2", "industry": "银行", "circ_mv": 8, "avg_amount_20d": 1},
+        {"code": "B3", "name": "B3", "industry": "银行", "circ_mv": 1, "avg_amount_20d": 8},
+    ])
+    out = _stratified_select(df, cfg)
+    assert set(out["code"]) == {"B1", "B2", "B3"}
+    tags = dict(zip(out["code"], out["source_tag"]))
+    assert tags["B1"] == "mcap+liq"
+    assert tags["B2"] == "mcap"
+    assert tags["B3"] == "liq"
+
+
+def test_stratified_multiple_industries():
+    cfg = AbPoolConfig()
+    df = pd.DataFrame([
+        {"code": "B1", "name": "B1", "industry": "银行", "circ_mv": 9, "avg_amount_20d": 9},
+        {"code": "B2", "name": "B2", "industry": "银行", "circ_mv": 8, "avg_amount_20d": 8},
+        {"code": "F1", "name": "F1", "industry": "食品", "circ_mv": 5, "avg_amount_20d": 5},
+        {"code": "F2", "name": "F2", "industry": "食品", "circ_mv": 4, "avg_amount_20d": 4},
+    ])
+    out = _stratified_select(df, cfg)
+    assert set(out["code"]) == {"B1", "B2", "F1", "F2"}
+    assert set(out[out["industry"] == "银行"]["code"]) == {"B1", "B2"}
+    assert set(out[out["industry"] == "食品"]["code"]) == {"F1", "F2"}
+
+
+def test_stratified_small_bucket_partial_fill():
+    """Bucket with only 1 stock contributes 1 row (no error, no warning escalation)."""
+    cfg = AbPoolConfig()
+    df = pd.DataFrame([
+        {"code": "X1", "name": "X1", "industry": "稀有", "circ_mv": 1, "avg_amount_20d": 1},
+        {"code": "B1", "name": "B1", "industry": "银行", "circ_mv": 9, "avg_amount_20d": 9},
+        {"code": "B2", "name": "B2", "industry": "银行", "circ_mv": 8, "avg_amount_20d": 8},
+    ])
+    out = _stratified_select(df, cfg)
+    assert "X1" in set(out["code"])
+
+
+def test_stratified_unknown_industry_included():
+    cfg = AbPoolConfig(include_unknown_industry=True)
+    df = pd.DataFrame([
+        {"code": "U1", "name": "U1", "industry": "未知", "circ_mv": 5, "avg_amount_20d": 5},
+        {"code": "U2", "name": "U2", "industry": "未知", "circ_mv": 4, "avg_amount_20d": 4},
+        {"code": "B1", "name": "B1", "industry": "银行", "circ_mv": 9, "avg_amount_20d": 9},
+    ])
+    out = _stratified_select(df, cfg)
+    assert {"U1", "U2"}.issubset(set(out["code"]))
+
+
+def test_stratified_unknown_industry_excluded():
+    cfg = AbPoolConfig(include_unknown_industry=False)
+    df = pd.DataFrame([
+        {"code": "U1", "name": "U1", "industry": "未知", "circ_mv": 5, "avg_amount_20d": 5},
+        {"code": "B1", "name": "B1", "industry": "银行", "circ_mv": 9, "avg_amount_20d": 9},
+    ])
+    out = _stratified_select(df, cfg)
+    assert "U1" not in set(out["code"])
+    assert "B1" in set(out["code"])
+
+
+def test_stratified_output_columns():
+    cfg = AbPoolConfig()
+    df = pd.DataFrame([
+        {"code": "B1", "name": "B1", "industry": "银行", "circ_mv": 9, "avg_amount_20d": 9},
+        {"code": "B2", "name": "B2", "industry": "银行", "circ_mv": 8, "avg_amount_20d": 8},
+    ])
+    out = _stratified_select(df, cfg)
+    assert set(out.columns) >= {"code", "name", "industry", "circ_mv",
+                                "avg_amount_20d", "source_tag"}
