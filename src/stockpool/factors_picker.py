@@ -17,12 +17,26 @@ from __future__ import annotations
 
 import html
 import http.server
+import inspect
 import json
+import textwrap
 import threading
 import webbrowser
 from pathlib import Path
 
 from stockpool.factors import all_sources, all_types, list_specs
+
+
+def _extract_formula(cls: type) -> str:
+    """提取 Factor 子类的 ``compute`` 方法源码作为"公式"展示。
+
+    源码即公式 — 对于公式因子这是最直接的呈现方式。失败时返回空串。
+    """
+    try:
+        src = inspect.getsource(cls.compute)
+    except (OSError, TypeError):
+        return ""
+    return textwrap.dedent(src).rstrip()
 
 
 def _factor_payload() -> list[dict]:
@@ -35,6 +49,7 @@ def _factor_payload() -> list[dict]:
             "sources": list(spec.sources),
             "types": list(spec.types),
             "description": spec.description,
+            "formula": _extract_formula(spec.cls),
         })
     return out
 
@@ -75,8 +90,26 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .card .top { display: flex; align-items: flex-start; gap: 8px; }
   .card .name { font-family: ui-monospace, Menlo, Consolas, monospace;
                 font-weight: 600; font-size: 14px; }
-  .card .desc { color: #57606a; font-size: 12.5px; margin: 6px 0 8px;
+  .card .tabs { display: flex; gap: 0; margin: 8px 0 0;
+                border-bottom: 1px solid #e1e4e8; }
+  .card .tab-btn { background: transparent; border: none; padding: 4px 10px;
+                   font-size: 12px; color: #57606a; cursor: pointer;
+                   border-bottom: 2px solid transparent; margin-bottom: -1px;
+                   border-radius: 0; }
+  .card .tab-btn.active { color: #0969da; border-bottom-color: #0969da;
+                          font-weight: 600; }
+  .card .tab-btn:hover { background: #f6f8fa; }
+  .card .tab-panel { display: none; padding-top: 8px; }
+  .card .tab-panel.active { display: block; }
+  .card .desc { color: #57606a; font-size: 12.5px; margin: 0 0 8px;
                 line-height: 1.45; }
+  .card pre.formula { background: #f6f8fa; color: #1f2328; padding: 8px 10px;
+                      border-radius: 4px; font-size: 11.5px; line-height: 1.4;
+                      margin: 0 0 8px; overflow-x: auto;
+                      font-family: ui-monospace, Menlo, Consolas, monospace;
+                      max-height: 220px; }
+  .card pre.formula.empty { color: #8b949e; font-style: italic; padding: 8px;
+                            font-family: inherit; background: transparent; }
   .tag { display: inline-block; padding: 1px 7px; font-size: 11px;
          border-radius: 10px; background: #eef2f6; color: #1f2328;
          margin-right: 4px; }
@@ -132,6 +165,12 @@ const STORAGE_KEY = "stockpool_factor_selection_v1";
 let selected = new Set();
 let activeSources = new Set();
 let activeTypes = new Set();
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
 
 function loadState() {
   try {
@@ -212,14 +251,26 @@ function renderFactors() {
   } else {
     container.innerHTML = vis.map(f => {
       const sel = selected.has(f.name) ? "selected" : "";
-      const srcTags = f.sources.map(s => `<span class="tag src">${s}</span>`).join("");
-      const typTags = f.types.map(t => `<span class="tag type">${t}</span>`).join("");
-      return `<div class="card ${sel}" data-name="${f.name}">
+      const nameEsc = escapeHtml(f.name);
+      const descEsc = f.description ? escapeHtml(f.description) : "(无描述)";
+      const srcTags = f.sources.map(s => `<span class="tag src">${escapeHtml(s)}</span>`).join("");
+      const typTags = f.types.map(t => `<span class="tag type">${escapeHtml(t)}</span>`).join("");
+      const formulaBody = f.formula
+        ? `<pre class="formula">${escapeHtml(f.formula)}</pre>`
+        : `<pre class="formula empty">(未提取到公式)</pre>`;
+      return `<div class="card ${sel}" data-name="${nameEsc}">
         <div class="top">
-          <input type="checkbox" ${selected.has(f.name)?"checked":""} data-name="${f.name}">
-          <span class="name">${f.name}</span>
+          <input type="checkbox" ${selected.has(f.name)?"checked":""} data-name="${nameEsc}">
+          <span class="name">${nameEsc}</span>
         </div>
-        <div class="desc">${f.description || "(无描述)"}</div>
+        <div class="tabs">
+          <button type="button" class="tab-btn active" data-tab="intro">简介</button>
+          <button type="button" class="tab-btn" data-tab="formula">公式</button>
+        </div>
+        <div class="tab-panel active" data-panel="intro">
+          <div class="desc">${descEsc}</div>
+        </div>
+        <div class="tab-panel" data-panel="formula">${formulaBody}</div>
         <div>${srcTags}${typTags}</div>
       </div>`;
     }).join("");
@@ -228,6 +279,16 @@ function renderFactors() {
         const nm = e.target.dataset.name;
         if (e.target.checked) selected.add(nm); else selected.delete(nm);
         saveState(); updateCount(); renderFactors();
+      };
+    });
+    container.querySelectorAll(".tab-btn").forEach(btn => {
+      btn.onclick = e => {
+        const card = e.target.closest(".card");
+        const tab = e.target.dataset.tab;
+        card.querySelectorAll(".tab-btn").forEach(b =>
+          b.classList.toggle("active", b.dataset.tab === tab));
+        card.querySelectorAll(".tab-panel").forEach(p =>
+          p.classList.toggle("active", p.dataset.panel === tab));
       };
     });
   }
