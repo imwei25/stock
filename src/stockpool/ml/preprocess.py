@@ -53,3 +53,30 @@ def winsorize_panel(
     hi_q = df.quantile(upper, axis=1)
     out = df.clip(lower=lo_q, upper=hi_q, axis=0)
     return out
+
+
+def cs_zscore_panel(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-day cross-sectional z-score: ``(x - μ_t) / σ_t``.
+
+    Args:
+        df: T × N factor wide-frame.
+
+    Returns:
+        Same-shape DataFrame. Rows where ``σ_t < 1e-12`` (constant
+        cross-section, all-NaN, or single non-NaN cell) return 0 — this
+        deterministically neutralizes a degenerate day rather than producing
+        ``±inf``/``NaN``. NaN cells stay NaN.
+
+        ``σ`` uses ``ddof=0`` (matches ``standardize_fit`` upstream).
+    """
+    mu = df.mean(axis=1, skipna=True)
+    sigma = df.std(axis=1, ddof=0, skipna=True)
+    # Avoid div-by-zero: replace tiny σ with 1, then zero those rows out.
+    sigma_safe = sigma.where(sigma >= 1e-12, 1.0)
+    out = df.sub(mu, axis=0).div(sigma_safe, axis=0)
+    degenerate = sigma < 1e-12
+    if degenerate.any():
+        # For degenerate rows, force non-NaN cells to 0 (NaN cells stay NaN).
+        for d in df.index[degenerate]:
+            out.loc[d] = out.loc[d].where(df.loc[d].isna(), 0.0)
+    return out

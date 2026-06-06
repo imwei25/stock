@@ -54,3 +54,44 @@ def test_winsorize_preserves_index_columns():
     assert (out.index == df.index).all()
     assert list(out.columns) == list(df.columns)
     assert out.shape == df.shape
+
+
+def test_cs_zscore_mean_zero_std_one():
+    """After per-day cs zscore, each row has μ ≈ 0 and σ ≈ 1."""
+    from stockpool.ml.preprocess import cs_zscore_panel
+    df = _make_panel(n_days=3, n_stocks=50, seed=3)
+    out = cs_zscore_panel(df)
+    for d in df.index:
+        row = out.loc[d].dropna()
+        assert abs(row.mean()) < 1e-9
+        assert abs(row.std(ddof=0) - 1.0) < 1e-9
+
+
+def test_cs_zscore_constant_row_returns_zero():
+    """A day where every stock has identical value → returns zeros (σ < 1e-12)."""
+    from stockpool.ml.preprocess import cs_zscore_panel
+    df = _make_panel(n_days=3, n_stocks=10, seed=4)
+    df.iloc[1] = 7.5  # constant row
+    out = cs_zscore_panel(df)
+    assert (out.iloc[1] == 0.0).all()
+
+
+def test_cs_zscore_handles_nan():
+    """Partial NaN row: zscore computed on non-NaN values, NaN positions stay NaN."""
+    from stockpool.ml.preprocess import cs_zscore_panel
+    df = _make_panel(n_days=2, n_stocks=10, seed=5)
+    df.iloc[0, :3] = np.nan
+    out = cs_zscore_panel(df)
+    assert out.iloc[0, :3].isna().all()
+    valid = out.iloc[0, 3:]
+    assert abs(valid.mean()) < 1e-9
+    assert abs(valid.std(ddof=0) - 1.0) < 1e-9
+
+
+def test_cs_zscore_preserves_index_columns():
+    from stockpool.ml.preprocess import cs_zscore_panel
+    df = _make_panel()
+    out = cs_zscore_panel(df)
+    assert (out.index == df.index).all()
+    assert list(out.columns) == list(df.columns)
+    assert out.shape == df.shape
