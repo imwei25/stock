@@ -351,3 +351,19 @@ def symmetric_orthogonalize(X: pd.DataFrame) -> pd.DataFrame:
 - `docs/handoff/2026-05-31-mask-ab-investigation.md` 已经做了 mask-first 改造,但只覆盖标签层 — 本文的 Phase 1-3 是因子输入层的对应工作
 
 **优先级建议**: Phase 1 是最高 ROI 的下一步工作,代码量 < 200 行(含测试),预期带来 +0.05~0.15 sharpe,且改动可通过 A/B 完全验证。
+
+---
+
+## Phase 1 Outcome (2026-06-06)
+
+Validated via `ab_preprocess.yaml` (16 票, training_universe=pool, lasso+ic, holding_days=10).
+**Verdict: ⚠️ INDECISIVE** (|Δsharpe| = 0.013, threshold +0.05).
+See `docs/ab_validation_results.md` P4-1 for full metrics.
+
+**核心发现**:
+1. 大幅 drawdown 改善(-8.63pp)— winsorize 收紧极端值有效
+2. 但 5/16 只票零交易 — 怀疑 verdict thresholds(`strong_buy: 0.9`)未适配 z-score 后的 score 分布
+3. Mean sharpe / total return 持平偏负 — alpha 没明显提升
+
+Phase 2 (市值中性) 不应直接上;先做 Phase 1.5:阈值校准 + per-step ablation。
+默认 `preprocess` 段保持全关。

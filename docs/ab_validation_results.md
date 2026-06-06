@@ -137,6 +137,44 @@ P0-2 把 PR-B1(LGB selector)和 PR-B2(LGB weighter)合并测,显示 -0.203 sharp
 4. **`training_universe` 默认不切**:✅ 保持 `pool`,P3-2 重跑 16 股 sharpe 退 0.24 / return 退 14%,不应切到 `all`。`training_universe=all` 保留为 opt-in。
 5. **写进 strategy_improvement_2026.md §6 路线**:把 P0-1 ~ P3-2 的 verdict 标记为已完成验证;明确 F2 PR-B 系列 + `training_universe=all` 在当前 16 股 × 500bar 上未带来净收益,挪到 follow-up "调超参 + 扩股池 + 更广 universe 同时调参" 之后再启用。
 
+## P4-1: 因子预处理 Phase 1(winsorize + cs_zscore + industry_neutralize)— ⚠️ INDECISIVE
+
+**日期**: 2026-06-06
+**配置**: `ab_preprocess.yaml`(training_universe=pool, lasso+ic, holding_days=10, 16 票)
+**报告**: `reports/ab/2026-06-06.html`
+
+| 指标 | baseline | with_preprocess | Δ |
+|---|---|---|---|
+| Sharpe (mean) | +0.457 | +0.470 | **+0.013** |
+| Sharpe (median) | +0.333 | +0.344 | +0.011 |
+| Total return (mean) | +18.71% | +15.13% | **-3.59%** |
+| Max drawdown (mean) | +15.09% | +6.45% | **-8.63pp** ✅ |
+| Stocks won (B>A) | - | - | **6/16** |
+| Trade count (mean) | 70 | 60 | -10 |
+| 0-trade stocks in B | 0 | 5 | +5 🚨 |
+
+**Pass criteria 判定**(spec §7.3):
+- Δsharpe ≥ +0.05: ❌(实测 +0.013)
+- Total return 同向: ❌(sharpe ↑ 微幅 / return ↓)
+- Stocks won > n/2: ❌(6/16)
+- Drawdown 不退化 > 3pp: ✅(改善 8.63pp)
+
+**Verdict: ⚠️ INDECISIVE**(|Δsharpe| < 0.05 → 走 ablation 路径)
+
+**关键观察**:
+1. **回撤大幅改善但 alpha 持平/微负**:winsorize 收紧极端持仓 → drawdown 显著降低,符合理论。但 alpha 没动 — 单看 risk-adjusted 数字没有结论。
+2. **5 票零交易**:with_preprocess 下 5 只票完全不交易(sharpe=0、trade_count=0)。最可能原因:`thresholds.strong_buy=0.9` 是为**原始因子合成 score** 校准的,z-score 后 score 分布变平(mean=0, std=1),0.9 阈值映射到 ~80th 分位,触发频率骤降。需 Phase 1.5 改用分位阈值或重校准。
+3. **结果在少数股集中,不广泛**:Δ sharpe 单股范围 -1.04 ~ +1.52,极度分散。说明改进不是稳健 alpha 而是 lucky stocks。
+
+**不切默认值。** `config.yaml` 不动 `preprocess` 段(保持全关)。
+
+**下一步(Phase 1.5)**:
+- **优先级 1 — 阈值校准**:在 `with_preprocess` arm 把 `thresholds.{strong_buy, buy, sell, strong_sell}` 改为 z-score 分位(e.g., `0.5σ / 0.2σ / -0.2σ / -0.5σ`),重跑 AB 看 5 票零交易问题是否解决
+- **优先级 2 — Per-step ablation**:三个 sub-A/B,每个只开一步(winsorize 单独 / zscore 单独 / industry_neutralize 单独),归因哪一步贡献了 drawdown 改进、哪一步带来了交易缺失
+- **优先级 3 — 扩 universe=all 重跑**:cross-sectional 预处理在 16 票上 cross-section 太薄,扩到 4000+ 票看 winsorize 是否还是 no-op
+
+---
+
 ## §5 工程结论(2026-05-24)
 
 经过 7 个 A/B 对照(P0-1 / P0-2 / P1-1 / P1-2 / P2-1 / P3-1 / P3-2,P3-2 重跑两次),得到的**当前默认 sweet spot**:
@@ -151,6 +189,7 @@ strategy:
     selector: {type: lasso}       # ❌ lightgbm 倒退(F2 默认回退)
     weighter: {type: ic}          # ❌ lightgbm 倒退(F2 默认回退)
     share_pool_fit: true          # (未单独验证,但配合 pooled+pool 工作良好)
+    preprocess: { ... }            # ⚠️ Phase 1 indecisive (P4-1),保持全关
 ```
 
 **未来重新启用 LGB / universe=all 的前提**:

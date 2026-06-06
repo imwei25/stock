@@ -454,6 +454,26 @@ portfolio_backtest:
 
 缓存:翻 `mask.enabled` 会改变 `cfg.content_hash` 和 ml_model sig hash → 自动重训 + 重算 score_panel。`factor_panel` 不变(mask 不影响因子值)。
 
+### 因子预处理 (Phase 1, opt-in)
+
+Phase 1 因子预处理(winsorize / cs_zscore / industry_neutralize)可在 `strategy.ml_factor.preprocess` 段开关,默认全关。
+详见 `docs/superpowers/specs/2026-06-06-factor-preprocessing-phase1-design.md`。
+
+```yaml
+strategy:
+  name: ml_factor
+  ml_factor:
+    # ...其他字段
+    preprocess:
+      winsorize: [0.01, 0.99]   # null = 关闭
+      zscore: true              # 截面 z-score
+      industry_neutralize: true # 跳过 factor types 含 "fundamental" 的因子
+```
+
+**注意**:⚠️ Phase 1 AB 验证结果为 INDECISIVE(Δsharpe=+0.013,阈值 +0.05),默认保持全关。
+主要问题:z-score 后 score 分布变平,`thresholds.strong_buy=0.9` 触发频率骤降,16 票中 5 票零交易。
+Phase 1.5 将做阈值校准 + per-step ablation,见 `docs/ab_validation_results.md` P4-1。
+
 ## ⚠️ 免责声明
 
 本工具产出基于公开行情数据的技术指标计算,信号与打分仅供个人技术分析参考,
