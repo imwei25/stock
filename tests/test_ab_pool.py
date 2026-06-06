@@ -420,3 +420,47 @@ def test_build_all_buckets_empty(tmp_path, monkeypatch):
                         lambda *_a, **_k: {})
     with pytest.raises(RuntimeError, match="empty"):
         build_ab_pool(cfg, refresh=False)
+
+
+# ============================================================================
+# Task 6: HTML renderer (render_ab_pool_html)
+# ============================================================================
+from stockpool.ab_pool_report import render_ab_pool_html
+
+
+def test_render_html_smoke(tmp_path):
+    df = pd.DataFrame([
+        {"code": "600519", "name": "贵州茅台", "industry": "食品饮料",
+         "circ_mv": 2.1e12, "avg_amount_20d": 5e9,
+         "source_tag": "mcap+liq", "build_date": "2026-06-06"},
+        {"code": "000001", "name": "平安银行", "industry": "银行",
+         "circ_mv": 3e11, "avg_amount_20d": 8e8,
+         "source_tag": "liq", "build_date": "2026-06-06"},
+    ])
+    out_path = tmp_path / "ab_pool.html"
+    render_ab_pool_html(df, out_path)
+    html = out_path.read_text(encoding="utf-8")
+
+    # Inline JSON data
+    assert "POOL_DATA" in html
+    assert "600519" in html
+    assert "贵州茅台" in html
+    # Three filter inputs
+    assert 'id="filter-industry"' in html
+    assert 'id="filter-code"' in html
+    assert 'id="filter-name"' in html
+    # Build date footer
+    assert "2026-06-06" in html
+    # Table header
+    assert "代码" in html and "流通市值" in html
+
+
+def test_render_html_empty_df(tmp_path):
+    """Empty df should still produce a valid HTML page."""
+    df = pd.DataFrame(columns=["code", "name", "industry", "circ_mv",
+                                "avg_amount_20d", "source_tag", "build_date"])
+    out_path = tmp_path / "ab_pool.html"
+    render_ab_pool_html(df, out_path)
+    html = out_path.read_text(encoding="utf-8")
+    assert "POOL_DATA" in html
+    assert "[]" in html  # empty JSON array
