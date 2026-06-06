@@ -354,6 +354,21 @@ F2 PR-B1 引入了 LightGBM selector,PR-B2 引入了 LightGBM weighter,默认值
 
 **关于 `weighter.contributions()`**:在 LGB weighter 下返回 SHAP 值,在 IC/IR/Equal 线性 weighter 下返回 `standardised(X) * weights`。两者形状一致(行 = 样本,列 = 因子),但 LGB 行和 ≈ `predict(X) - base_value`(SHAP convention)而非完全等于 `predict(X)`。
 
+### AB 候选池(可选)
+
+per-stock AB 默认在 `cfg.stocks`(几只)上对比,样本太小;全市场又太慢。
+中间方案:构建一个 ~100 票的行业分层候选池,AB 对比时通过开关复用。
+
+```bash
+# 一次性构建(需先 fetch-universe)
+python -m stockpool ab-pool build
+# 浏览器查看池子内容(支持行业/代码/名称筛选)
+python -m stockpool ab-pool show
+```
+
+在 `ab.yaml` 或 `portfolio_ab.yaml` 顶层加 `use_ab_pool: true` 即启用。
+池子静态、手动重建(`--refresh`),保证历史 AB 结果可复现。
+
 ### 对比两个策略 — A/B testing
 
 `stockpool ab` 在**同一份 stocks / data / indicators / context** 下并行跑两个策略,
