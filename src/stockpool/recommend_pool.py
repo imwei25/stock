@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -43,13 +44,16 @@ def compute_or_load_pool_b(
     run_date: date,
     pool_data: Mapping[str, pd.DataFrame] | None = None,
     factor_panel: Mapping[str, pd.DataFrame] | None = None,
+    close_panel: pd.DataFrame | None = None,
 ) -> list[PoolBEntry]:
     """Return current week's Pool B top-N, computing + caching if needed.
 
-    ``pool_data`` / ``factor_panel`` are *strategy training inputs* (built by
-    ``cli._prepare_ml_pool`` for ml_factor + training_universe=all). They are
-    passed through to ``build_strategy`` so the strategy uses real cross-sec
-    factor values at predict time. They do **not** define the iteration
+    ``pool_data`` / ``factor_panel`` / ``close_panel`` are *strategy training
+    inputs* (built by ``cli._prepare_ml_pool`` for ml_factor +
+    training_universe=all). They are passed through to ``build_strategy`` so
+    the strategy uses real cross-sec factor values at predict time AND avoids
+    rebuilding the close panel (4000+ stock pandas copy/reindex) on every
+    per-stock ``build_strategy`` call. They do **not** define the iteration
     universe — Pool B always iterates the full ``load_universe_cache`` output.
     """
     cfg_pool = cfg.recommend_pool
@@ -64,7 +68,7 @@ def compute_or_load_pool_b(
                     cache_path)
         return []
 
-    entries = _compute_pool_b(cfg, pool_data, factor_panel)
+    entries = _compute_pool_b(cfg, pool_data, factor_panel, close_panel)
     _write_cache(cache_path, entries)
     log.info("Pool B written: %s (%d entries)", cache_path, len(entries))
     return entries
@@ -80,6 +84,7 @@ def _compute_pool_b(
     cfg: AppConfig,
     pool_data: Mapping[str, pd.DataFrame] | None,
     factor_panel: Mapping[str, pd.DataFrame] | None,
+    close_panel: pd.DataFrame | None = None,
 ) -> list[PoolBEntry]:
     cfg_pool = cfg.recommend_pool
 
@@ -115,6 +120,7 @@ def _compute_pool_b(
     scored = _score_universe(
         cfg, survivors, name_map, industry_map,
         pool_data=pool_data, factor_panel=factor_panel,
+        close_panel=close_panel,
     )
 
     pool_a_codes = {s.code for s in cfg.stocks}
@@ -179,6 +185,7 @@ def _score_universe(
     industry_map: Mapping[str, str],
     pool_data: Mapping[str, pd.DataFrame] | None,
     factor_panel: Mapping[str, pd.DataFrame] | None,
+    close_panel: pd.DataFrame | None = None,
 ) -> list[dict]:
     """For each survivor, call current strategy's predict_latest. Return rows
     sorted by ``final_score`` descending. Per-stock failures are logged and
@@ -186,14 +193,24 @@ def _score_universe(
     shared_cache: dict = {}
     rows: list[dict] = []
     fail_count = 0
+    total = len(survivors)
+    t_build = 0.0
+    t_predict = 0.0
+    t_loop_start = time.perf_counter()
+    print(f"[TIME] Pool B scoring start: {total} stocks", flush=True)
 
     for i, (code, daily) in enumerate(survivors.items(), 1):
         try:
+            _t = time.perf_counter()
             strategy = build_strategy(
                 cfg, pool_data=pool_data, current_stock_code=code,
-                factor_panel=factor_panel, shared_cache=shared_cache,
+                factor_panel=factor_panel, close_panel=close_panel,
+                shared_cache=shared_cache,
             )
+            t_build += time.perf_counter() - _t
+            _t = time.perf_counter()
             latest = strategy.predict_latest(daily)
+            t_predict += time.perf_counter() - _t
             score = latest.get("final_score", latest.get("score"))
             verdict = latest.get("signal", "neutral")
             if score is None:
@@ -213,10 +230,18 @@ def _score_universe(
         except Exception as e:  # noqa: BLE001
             fail_count += 1
             log.debug("Pool B: predict failed for %s (%s)", code, e)
-        if i % 500 == 0:
-            log.info("Pool B scoring progress: %d/%d (ok=%d fail=%d)",
-                     i, len(survivors), len(rows), fail_count)
+        if i % 200 == 0:
+            elapsed = time.perf_counter() - t_loop_start
+            eta = elapsed / i * (total - i)
+            print(f"[TIME] Pool B {i}/{total} ok={len(rows)} fail={fail_count} "
+                  f"elapsed={elapsed:.1f}s build_avg={t_build/i*1000:.1f}ms "
+                  f"predict_avg={t_predict/i*1000:.1f}ms ETA={eta:.0f}s",
+                  flush=True)
 
+    total_loop = time.perf_counter() - t_loop_start
+    print(f"[TIME] Pool B scoring done: {total_loop:.1f}s total "
+          f"(build_total={t_build:.1f}s predict_total={t_predict:.1f}s "
+          f"ok={len(rows)} fail={fail_count})", flush=True)
     log.info("Pool B scoring done: ok=%d fail=%d", len(rows), fail_count)
     rows.sort(key=lambda r: r["final_score"], reverse=True)
     return rows

@@ -93,7 +93,7 @@ class _StubStrategy:
 
 def _patch_strategy(monkeypatch, scores: dict[str, float]):
     def _builder(cfg, pool_data=None, current_stock_code=None,
-                 factor_panel=None, shared_cache=None):
+                 factor_panel=None, close_panel=None, shared_cache=None):
         return _StubStrategy(current_stock_code, scores)
     monkeypatch.setattr(recommend_pool, "build_strategy", _builder)
 
@@ -295,7 +295,7 @@ def test_per_stock_predict_failure_skipped(monkeypatch, tmp_path):
             return {"signal": "buy", "final_score": 0.5}
 
     def _builder(cfg, pool_data=None, current_stock_code=None,
-                 factor_panel=None, shared_cache=None):
+                 factor_panel=None, close_panel=None, shared_cache=None):
         return _FailingFor000002(current_stock_code)
     monkeypatch.setattr(recommend_pool, "build_strategy", _builder)
 
@@ -379,7 +379,8 @@ def test_refresh_always_bypasses_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(
         recommend_pool, "build_strategy",
         lambda cfg, pool_data=None, current_stock_code=None,
-               factor_panel=None, shared_cache=None: _Counting(current_stock_code),
+               factor_panel=None, close_panel=None,
+               shared_cache=None: _Counting(current_stock_code),
     )
 
     recommend_pool.compute_or_load_pool_b(cfg, date(2026, 5, 4))

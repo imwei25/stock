@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 import traceback
 from datetime import date
 from pathlib import Path
@@ -100,6 +101,7 @@ def _analyze_one(
     factor_panel: dict | None = None,
     close_panel: pd.DataFrame | None = None,
     shared_cache: dict | None = None,
+    sector_context_cache: dict[str, "ContextSignal | str"] | None = None,
 ) -> StockAnalysis:
     """Full per-stock pipeline. Single failures are caught → verdict=neutral + warnings."""
     warnings: list[str] = []
@@ -186,21 +188,27 @@ def _analyze_one(
         warnings.append(f"综合评级回测失败: {e}")
 
     if stock.sector:
-        try:
-            sector_df = fetch_sector_daily(
-                stock.sector, cfg.data.history_days,
-                cfg.data.cache_dir, force_refresh,
-                source=cfg.data.source,
-            )
-            d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(sector_df, cfg)
-            context.append(ContextSignal(
-                label=f"{stock.sector}板块",
-                daily_score=d_s, weekly_score=w_s,
-                final_score=f_s, verdict=v,
-                triggers_daily=trig_d,
-            ))
-        except Exception as e:
-            warnings.append(f"板块({stock.sector})数据失败: {e}")
+        cached = (sector_context_cache or {}).get(stock.sector)
+        if isinstance(cached, ContextSignal):
+            context.append(cached)
+        elif isinstance(cached, str):
+            warnings.append(f"板块({stock.sector})数据失败: {cached}")
+        else:
+            try:
+                sector_df = fetch_sector_daily(
+                    stock.sector, cfg.data.history_days,
+                    cfg.data.cache_dir, force_refresh,
+                    source=cfg.data.source,
+                )
+                d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(sector_df, cfg)
+                context.append(ContextSignal(
+                    label=f"{stock.sector}板块",
+                    daily_score=d_s, weekly_score=w_s,
+                    final_score=f_s, verdict=v,
+                    triggers_daily=trig_d,
+                ))
+            except Exception as e:
+                warnings.append(f"板块({stock.sector})数据失败: {e}")
 
     return StockAnalysis(
         code=stock.code, name=stock.name,
@@ -848,6 +856,8 @@ def cmd_factors_pick_by_ic(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    _t_total = time.perf_counter()
+    _t = time.perf_counter()
     cfg = load_config(args.config)
 
     today = date.today()
@@ -868,7 +878,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not stocks:
             log.error("No stocks match --stocks filter: %s", args.stocks)
             return 2
+    print(f"[TIME] setup+config: {time.perf_counter()-_t:.2f}s", flush=True)
 
+    _t = time.perf_counter()
     market_context: list[ContextSignal] = []
     for idx_cfg in cfg.context.indices:
         try:
@@ -887,13 +899,45 @@ def cmd_run(args: argparse.Namespace) -> int:
             log.info("Market index %s: %s (%+.1f)", idx_cfg.name, v, f_s)
         except Exception as e:
             log.warning("Market index %s failed: %s", idx_cfg.code, e)
+    print(f"[TIME] market_index_context ({len(cfg.context.indices)} indices): "
+          f"{time.perf_counter()-_t:.2f}s", flush=True)
 
     # For ml_factor in pooled mode the strategy needs every stock's history
     # to build cross-sectional factors at predict time. Pool composition is
     # decided by ``training_universe`` (pool vs full A-share cache).
+    _t = time.perf_counter()
     pool_data, factor_panel, close_panel = _prepare_ml_pool(cfg, stocks, args.refresh)
+    print(f"[TIME] _prepare_ml_pool (pool_data={len(pool_data) if pool_data else 0} stocks, "
+          f"factor_panel={len(factor_panel) if factor_panel else 0} factors): "
+          f"{time.perf_counter()-_t:.2f}s", flush=True)
     shared_cache: dict = {}
 
+    # Pre-fetch + compute each unique sector once. Same ContextSignal is shared
+    # across all stocks in that sector, saving redundant fetch_sector_daily calls.
+    _t = time.perf_counter()
+    sector_context_cache: dict[str, "ContextSignal | str"] = {}
+    unique_sectors = sorted({s.sector for s in stocks if s.sector})
+    for sector in unique_sectors:
+        try:
+            sector_df = fetch_sector_daily(
+                sector, cfg.data.history_days,
+                cfg.data.cache_dir, args.refresh,
+                source=cfg.data.source,
+            )
+            d_s, w_s, f_s, v, trig_d, _ = _compute_verdict(sector_df, cfg)
+            sector_context_cache[sector] = ContextSignal(
+                label=f"{sector}板块",
+                daily_score=d_s, weekly_score=w_s,
+                final_score=f_s, verdict=v,
+                triggers_daily=trig_d,
+            )
+        except Exception as e:  # noqa: BLE001
+            sector_context_cache[sector] = str(e)
+            log.warning("Sector %s pre-fetch failed: %s", sector, e)
+    print(f"[TIME] sector_context prefetch ({len(unique_sectors)} unique sectors): "
+          f"{time.perf_counter()-_t:.2f}s", flush=True)
+
+    _t = time.perf_counter()
     analyses: list[StockAnalysis] = []
     for s in stocks:
         log.info("Analyzing %s (%s)...", s.code, s.name)
@@ -905,6 +949,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 factor_panel=factor_panel,
                 close_panel=close_panel,
                 shared_cache=shared_cache,
+                sector_context_cache=sector_context_cache,
             ))
         except Exception as e:
             log.error("Unexpected failure on %s: %s\n%s", s.code, e, traceback.format_exc())
@@ -915,20 +960,26 @@ def cmd_run(args: argparse.Namespace) -> int:
                 warnings=[f"未预期错误: {e}"],
                 context=list(market_context),
             ))
+    print(f"[TIME] per_stock_loop ({len(stocks)} stocks): "
+          f"{time.perf_counter()-_t:.2f}s", flush=True)
 
+    _t = time.perf_counter()
     pool_b: list[PoolBEntry] = []
     if cfg.recommend_pool.enabled:
         try:
             pool_b = compute_or_load_pool_b(
                 cfg, today,
                 pool_data=pool_data, factor_panel=factor_panel,
+                close_panel=close_panel,
             )
             log.info("Pool B: %d stocks (top_n=%d)",
                      len(pool_b), cfg.recommend_pool.top_n)
         except Exception as e:
             log.error("Pool B failed (continuing without it): %s\n%s",
                       e, traceback.format_exc())
+    print(f"[TIME] pool_b (len={len(pool_b)}): {time.perf_counter()-_t:.2f}s", flush=True)
 
+    _t = time.perf_counter()
     out = render_report(
         analyses, run_date=run_date,
         config_path=Path(args.config), config_hash=cfg.content_hash,
@@ -938,6 +989,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         market_context=market_context,
         pool_b=pool_b or None,
     )
+    print(f"[TIME] render_report: {time.perf_counter()-_t:.2f}s", flush=True)
+    print(f"[TIME] TOTAL cmd_run: {time.perf_counter()-_t_total:.2f}s", flush=True)
     log.info("Report written: %s", out)
     log.info("Latest also at: %s", Path(cfg.report.output_dir) / "latest.html")
     return 0

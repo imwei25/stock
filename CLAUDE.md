@@ -90,7 +90,7 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 | `src/stockpool/factors_picker.py` | **HTML 因子选择器** + `factors` CLI 子命令 |
 | `src/stockpool/industry_map.py` | `code → 行业` 映射;多源(`auto` / `baostock` / `akshare`);缓存到 `data/stock_industry_map.parquet`,>30 天过期自动重拉。**mootdx 路径无效**:TDX 服务器对 `block_hy.dat` 返回 0 字节 |
 | `src/stockpool/ipo_dates.py` | `code → IPO 日期` 映射(baostock `query_stock_basic`,5500+ 股一次性,~3-5 秒);缓存 `data/ipo_dates.parquet` 30 天有效。当 `cfg.strategy.ml_factor.mask.enabled=true` 且 `cache_dir` 可用时,`MLFactorStrategy._get_ipo_dates` 自动加载并传给 `_listing_mask`,避免后者 `first_valid_index` 启发式把缓存窗口短的成熟股错认成新上市(panel union 早于该股缓存起点时会触发 bug,可使 mask=False 比例虚高到 50%)|
-| `src/stockpool/recommend_pool.py` | **Pool B**(全市场量化推荐池):漏斗 + 排序 + 周缓存;`compute_or_load_pool_b` 顶层 API |
+| `src/stockpool/recommend_pool.py` | **Pool B**(全市场量化推荐池):漏斗 + 排序 + 周缓存;`compute_or_load_pool_b` 顶层 API。接收 caller 预算好的 `pool_data` / `factor_panel` / `close_panel`,沿 `_compute_pool_b` → `_score_universe` → `build_strategy` 一路透传,避免每股重跑 `build_close_panel(4000+ 股)` (~3s/股 × 4000 ≈ 3 小时 → 32 秒)。日志会按 200 股粒度打印 `[TIME] Pool B i/total ... build_avg=Xms predict_avg=Yms ETA=Zs` 便于观察长循环进度 |
 | `src/stockpool/factors_analysis.py` | **因子分析**: 滚动 IC / IR / half-life / 相关性 / regime 切片;`analyze_factors` + `pick_top_factors` |
 | `src/stockpool/factors_analysis_report.py` | pyecharts HTML 报告: 排名表 + IC 时序 + 相关性 heatmap + regime 拆分 |
 | `src/stockpool/panel.py` | **Panel** 数据结构 (T×N 宽表 dict) + `build_panel_from_cache`。**+** `compute_tradability_mask` / `apply_mask` / `_limit_threshold` / `_listing_mask` 支持按板块(主板 ±10% / 创业板+科创 ±20%)的可交易性 mask。`_listing_mask` 接 `ipo_dates: Mapping[str, Timestamp] | None`,有真实 IPO 日期时按 IPO + 366 自然日(≈252 交易日)cutoff 屏蔽新股;无 ipo_dates 时退化到 first_valid_index 启发式(打 warning)。**注意(2026-05-31 重构)**:mask **不** 应用到因子输入面板 — 时间序列因子需要看真实 close(涨停日 +9.9% 本身是有用信号)。Mask 只在 `forward_return_panel` 的双向标签检查(`mask[t] ∧ mask[t+horizon]`)和训练样本 dropna 上生效。`apply_mask` 仍是公开工具,供有特殊需求的因子 `compute` 方法按需调用。详见 `docs/handoff/2026-05-31-mask-ab-investigation.md` 的演变记录 |
@@ -194,6 +194,8 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 - `composite_verdict`:直接算最后一根 bar(快,等价于老逻辑)
 - `ml_factor`:从 `<cache_dir>/ml_models/<sig>_<code>.pkl` 加载已训练 pipeline+quantiles,**每个自然月最多重训一次**(同月内 predict-only,跨月自动重训并覆写缓存);`<sig>` = 8 位 MLFactorConfig 哈希,改 factors/horizon/selector/weighter/thresholds 等任一项即失效
 - `pooled` 模式下 `cmd_run` 会预加载整池 `pool_data` 喂给 `build_strategy`,保证 cross-sec 因子有真实横截面值
+- `cmd_run` 在 per-stock loop 之前**一次性预算** `sector_context_cache: {sector_name: ContextSignal}`(对 `cfg.stocks` 里出现的所有 unique sector 各调一次 `fetch_sector_daily` + `_compute_verdict`),`_analyze_one` 收到 cache 后直接复用,失败时 cache 里存的是错误 str,append warning 到对应股 — 避免多个股共享同板块时重复拉取
+- **顶层各阶段计时**:`cmd_run` 会按 `[TIME] setup+config / market_index_context / _prepare_ml_pool / sector_context prefetch / per_stock_loop / pool_b / render_report / TOTAL cmd_run` 打印 stdout,便于排查 `python -m stockpool run` 速度回归。Pool B 内部按 200 股粒度也会打 `[TIME] Pool B i/total ... build_avg= predict_avg= ETA=` 进度
 - **Partial NaN 容忍**(`generate_signals` 和 `predict_latest`):predict 路径不再要求 X 行所有因子都非 NaN — 用 fill 0 对 NaN 列做 impute(归一化后 0 是中性值),仅在**整行** NaN 时才返 `signal=neutral, score=NaN`。原因:`selection.json` 含 alpha_037 这种 200 日 rolling correlation 因子,warmup 必然 36% NaN 比例,严格 `notna().all()` 会让模型 100% 拒绝预测 → 0 trade。
 - **`generate_signals` 同时输出 `score` 和 `final_score`**(两列数值相同),便于 portfolio 的 `precompute_scores_from_legacy`(默认读 `final_score`)直接对接,无需特殊代码路径
 - **`IndustryRelativeStrengthFactor`** 在 `get_sector_map()` 为空时**raise**(不再 silent 返全 NaN),防止 factor_panel cache 中毒 — sector_map 必须在 build factor_panel 前由 caller 通过 `factors.context.set_sector_map(...)` 注入(`backtest_runner.prepare_pool` / `cli.cmd_portfolio_*` / `recommend_pool` 都已做)
@@ -201,7 +203,7 @@ python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
 **Pool B(全市场量化推荐池)**在 `render_report` 之前由 `recommend_pool.compute_or_load_pool_b` 计算:
 - 始终用 `load_universe_cache(cfg.data.cache_dir)` 作为**应用池**(独立于 strategy 训练池)
 - 漏斗:**流动性**(近 20 日 `vol*close*100` ≥ `min_avg_amount_20d`) → **ST 二次防御**(name 含 ST) → 调当前 strategy 的 `predict_latest` 打分 → **行业上限贪心**(score 降序扫描,每行业 ≤ `max_per_industry`,收满 `top_n` 即停)
-- 复用 `cli._prepare_ml_pool` 给 strategy 的 `pool_data` / `factor_panel`(ml_factor + training_universe=all 时跨 4000 票 cross-sec 真实横截面),不重复加载
+- 复用 `cli._prepare_ml_pool` 给 strategy 的 `pool_data` / `factor_panel` / **`close_panel`**(ml_factor + training_universe=all 时跨 4000 票 cross-sec 真实横截面),不重复加载。`close_panel` 必须透传 — 否则 `build_strategy` 会在每股调用里重跑 `build_close_panel(4000+ 股)`(每股 ~3s,4007 股 → ~3 小时;透传后 build_avg 降到 ~3ms)
 - 缓存键 `poolb_<content_hash>_<isoyear>w<isoweek>.parquet`;同周 + 同 yaml 直接读盘,跨周或改 yaml 自动重算
 - 失败隔离:per-stock predict 异常只 log warning 跳过该股;Pool B 整体失败不影响 Pool A 日报
 
