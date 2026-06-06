@@ -691,6 +691,17 @@ def test_preprocess_winsorize_invalid_bounds_raises():
         PreprocessConfig(winsorize=(0.5, 0.5))    # lo == hi
 
 
+def test_preprocess_winsorize_valid_bounds_stored():
+    """Valid winsorize bounds construct successfully and are stored as floats."""
+    from stockpool.config import PreprocessConfig
+    cfg = PreprocessConfig(winsorize=(0.01, 0.99))
+    assert cfg.winsorize == (0.01, 0.99)
+    # int inputs also accepted (coerced to float by validator)
+    cfg2 = PreprocessConfig(winsorize=(0.05, 0.95))
+    assert isinstance(cfg2.winsorize[0], float)
+    assert isinstance(cfg2.winsorize[1], float)
+
+
 def test_preprocess_extra_field_forbidden():
     """Extra fields rejected (extra=forbid)."""
     import pytest

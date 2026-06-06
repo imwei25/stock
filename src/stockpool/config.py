@@ -381,7 +381,7 @@ class PreprocessConfig(BaseModel):
 
     @field_validator("winsorize")
     @classmethod
-    def _check_winsorize_bounds(cls, v):
+    def _check_winsorize_bounds(cls, v: tuple[float, float] | None) -> tuple[float, float] | None:
         if v is None:
             return None
         lo, hi = v
