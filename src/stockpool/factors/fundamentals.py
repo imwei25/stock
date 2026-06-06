@@ -57,6 +57,12 @@ def _pit_align(
     pivot.index = pd.DatetimeIndex(pivot.index)
     pivot = pivot.sort_index()
 
+    # ffill within pivot so that a code announced on date A fills later rows
+    # that previously had NaN (e.g. a different code announced on date B > A).
+    # Without this, per-column reindex ffill misses values in sparse pivots
+    # where each code has a different pubDate.
+    pivot = pivot.ffill()
+
     # reindex(method='ffill') 保证 PIT: 日 t 只能看到 pubDate ≤ t 的财报
     aligned = pivot.reindex(panel_close.index, method="ffill")
     return aligned.reindex(columns=panel_close.columns)
