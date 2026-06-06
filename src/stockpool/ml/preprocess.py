@@ -82,6 +82,90 @@ def cs_zscore_panel(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _per_day_ols_residual(
+    y: pd.Series, X: pd.DataFrame,
+) -> tuple[pd.Series, bool]:
+    """Per-day OLS residualisation. Returns (residual, used_ols).
+
+    ``y`` and ``X`` share the same index (codes for one date). Drops rows where
+    y is NaN or any X column is NaN. Requires >= 10 valid rows AND X to be
+    strictly tall (more rows than columns) — otherwise returns y unchanged with
+    used_ols=False so callers can fall back / count degenerate days.
+
+    Single-member dummy columns (column-sum == 1) are dropped along with the
+    corresponding row to avoid those codes being demeaned to their own value
+    (a silent zero-out, see Phase 1.5 incident).
+    """
+    valid_mask = y.notna() & X.notna().all(axis=1)
+    y_v = y[valid_mask]
+    X_v = X.loc[valid_mask]
+
+    if len(y_v) < 10:
+        return y, False
+
+    # Drop dummies that have only one member among the valid rows;
+    # drop those rows too (those single-member codes get y unchanged).
+    col_sums = X_v.sum(axis=0)
+    single_member_cols = col_sums.index[col_sums == 1].tolist()
+    if single_member_cols:
+        # The row(s) where the single-member dummy is hot — these codes are not
+        # represented in the regression and keep their original y.
+        single_member_rows = X_v.index[
+            X_v[single_member_cols].any(axis=1)
+        ].tolist()
+        X_v = X_v.drop(columns=single_member_cols).drop(index=single_member_rows)
+        y_v = y_v.drop(index=single_member_rows)
+
+    if len(y_v) < 10 or X_v.shape[0] <= X_v.shape[1]:
+        return y, False
+
+    coef, *_ = np.linalg.lstsq(X_v.values, y_v.values, rcond=None)
+    resid_v = y_v.values - X_v.values @ coef
+
+    out = y.copy()
+    out.loc[y_v.index] = resid_v
+    return out, True
+
+
+def mcap_neutralize_panel(
+    df: pd.DataFrame, log_mcap: pd.DataFrame,
+) -> pd.DataFrame:
+    """Per-day residualise Y ~ 1 + log_mcap (no industry).
+
+    Args:
+        df: T x N factor wide-frame (date index, code columns).
+        log_mcap: T x N log-market-cap aligned to df's index. Codes that appear
+            in ``df.columns`` but not in ``log_mcap.columns`` are treated as NaN
+            and dropped per day.
+
+    Returns:
+        Same shape as df. NaN cells stay NaN. Days that fail the OLS preconditions
+        (< 10 valid codes or rank deficiency) return their original df rows
+        unchanged; aggregate fallback count is logged at WARNING level once per call.
+    """
+    if df.empty:
+        return df.copy()
+    log_mcap_aligned = log_mcap.reindex(index=df.index, columns=df.columns)
+    out = df.copy()
+    fallback_days = 0
+    for date in df.index:
+        y = df.loc[date]
+        m = log_mcap_aligned.loc[date]
+        X = pd.DataFrame({"intercept": 1.0, "log_mcap": m.values}, index=y.index)
+        resid, used_ols = _per_day_ols_residual(y, X)
+        if used_ols:
+            out.loc[date] = resid
+        else:
+            fallback_days += 1
+    if fallback_days:
+        log.warning(
+            "mcap_neutralize_panel: fallback on %d / %d days "
+            "(degenerate cross-section: < 10 valid codes or rank deficient)",
+            fallback_days, len(df.index),
+        )
+    return out
+
+
 def industry_neutralize_panel(
     df: pd.DataFrame, sector_map: Mapping[str, str],
 ) -> pd.DataFrame:
