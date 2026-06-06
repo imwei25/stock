@@ -720,3 +720,26 @@ def test_ml_factor_config_includes_preprocess_default():
     assert cfg.preprocess.winsorize is None
     assert cfg.preprocess.zscore is False
     assert cfg.preprocess.industry_neutralize is False
+
+
+def test_preprocess_config_min_pool_size_default_200():
+    """min_pool_size defaults to 200 (Phase 1.5 size guard threshold)."""
+    from stockpool.config import PreprocessConfig
+    cfg = PreprocessConfig()
+    assert cfg.min_pool_size == 200
+
+
+def test_preprocess_config_min_pool_size_negative_raises():
+    """min_pool_size must be >= 0."""
+    import pytest
+    from pydantic import ValidationError
+    from stockpool.config import PreprocessConfig
+    with pytest.raises(ValidationError):
+        PreprocessConfig(min_pool_size=-1)
+
+
+def test_preprocess_config_min_pool_size_zero_allowed():
+    """min_pool_size=0 is valid (disables guard, used by unit tests)."""
+    from stockpool.config import PreprocessConfig
+    cfg = PreprocessConfig(min_pool_size=0)
+    assert cfg.min_pool_size == 0

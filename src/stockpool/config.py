@@ -378,6 +378,11 @@ class PreprocessConfig(BaseModel):
     winsorize: tuple[float, float] | None = None
     zscore: bool = False
     industry_neutralize: bool = False
+    min_pool_size: int = Field(default=200, ge=0)
+    # n_codes < min_pool_size 时 winsorize / cs_zscore / industry_neutralize
+    # 全部跳过(估计不稳)。industry_neutralize 即使在大池子也建议保持
+    # 默认 false:单成员细分行业会触发 silent demean-to-zero bug(P4-1 verdict)。
+    # Phase 1.5 全市场参照设计落地前不推荐启用 industry_neutralize。
 
     @field_validator("winsorize")
     @classmethod
