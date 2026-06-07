@@ -132,38 +132,70 @@ def mcap_neutralize_panel(
 ) -> pd.DataFrame:
     """Per-day residualise Y ~ 1 + log_mcap (no industry).
 
+    Vectorised closed-form OLS: single regressor + intercept has an analytical
+    solution identical to ``numpy.linalg.lstsq`` (β = cov(y, x) / var(x),
+    α = ȳ − β·x̄, ε = y − α − β·x). Operates on the entire (T × N) panel via
+    masked numpy sums — no per-day Python loop, no lstsq calls.
+
     Args:
-        df: T x N factor wide-frame (date index, code columns).
-        log_mcap: T x N log-market-cap aligned to df's index. Codes that appear
+        df: T × N factor wide-frame (date index, code columns).
+        log_mcap: T × N log-market-cap aligned to df's index. Codes that appear
             in ``df.columns`` but not in ``log_mcap.columns`` are treated as NaN
             and dropped per day.
 
     Returns:
         Same shape as df. NaN cells stay NaN. Days that fail the OLS preconditions
-        (< 10 valid codes or rank deficiency) return their original df rows
+        (< 10 valid codes or var(log_mcap) ≈ 0) return their original df rows
         unchanged; aggregate fallback count is logged at WARNING level once per call.
+        Cells where log_mcap is NaN but the factor is valid keep the original
+        factor value (matches the per-row OLS path which excludes those codes).
     """
     if df.empty:
         return df.copy()
+
     log_mcap_aligned = log_mcap.reindex(index=df.index, columns=df.columns)
-    out = df.astype(float).copy()
-    fallback_days = 0
-    for date in df.index:
-        y = df.loc[date]
-        m = log_mcap_aligned.loc[date]
-        X = pd.DataFrame({"intercept": 1.0, "log_mcap": m.values}, index=y.index)
-        resid, used_ols = _per_day_ols_residual(y, X)
-        if used_ols:
-            out.loc[date] = resid
-        else:
-            fallback_days += 1
+    Y = df.astype(float).values         # (T, N)
+    X = log_mcap_aligned.values          # (T, N)
+
+    valid = ~(np.isnan(Y) | np.isnan(X))  # (T, N)
+    n_valid = valid.sum(axis=1)            # (T,)
+
+    # Per-day means via masked sums; invalid cells zeroed before sum so they
+    # contribute nothing. ``safe_n`` keeps division well-defined on rows with
+    # n_valid == 0 (those rows fall back below anyway).
+    Y_z = np.where(valid, Y, 0.0)
+    X_z = np.where(valid, X, 0.0)
+    safe_n = np.where(n_valid > 0, n_valid, 1)
+    mu_y = Y_z.sum(axis=1) / safe_n        # (T,)
+    mu_x = X_z.sum(axis=1) / safe_n        # (T,)
+
+    Y_c = np.where(valid, Y - mu_y[:, None], 0.0)
+    X_c = np.where(valid, X - mu_x[:, None], 0.0)
+    var_x = (X_c ** 2).sum(axis=1) / safe_n       # (T,)
+    cov_xy = (X_c * Y_c).sum(axis=1) / safe_n     # (T,)
+
+    safe_var = np.where(var_x > 1e-12, var_x, 1.0)
+    beta = cov_xy / safe_var               # (T,)
+    alpha = mu_y - beta * mu_x             # (T,)
+
+    resid = Y - alpha[:, None] - beta[:, None] * X   # NaN-in-X/Y → NaN
+
+    fallback_mask = (n_valid < 10) | (var_x <= 1e-12)
+    out = np.where(fallback_mask[:, None], Y, resid)
+    # Preserve original Y where only X is missing on a non-fallback day — the
+    # per-row OLS variant excluded those codes from the regression, leaving
+    # their original values untouched.
+    cell_preserve = np.isnan(X) & ~np.isnan(Y)
+    out = np.where(cell_preserve, Y, out)
+
+    fallback_days = int(fallback_mask.sum())
     if fallback_days:
         log.warning(
             "mcap_neutralize_panel: fallback on %d / %d days "
-            "(degenerate cross-section: < 10 valid codes or rank deficient)",
+            "(degenerate cross-section: < 10 valid codes or var(log_mcap) ≈ 0)",
             fallback_days, len(df.index),
         )
-    return out
+    return pd.DataFrame(out, index=df.index, columns=df.columns)
 
 
 def industry_neutralize_panel(
