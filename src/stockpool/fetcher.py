@@ -510,7 +510,18 @@ def load_universe_cache(
     if not cache.exists():
         return {}
     out: dict[str, pd.DataFrame] = {}
-    for path in cache.glob("*_daily.parquet"):
+    paths = list(cache.glob("*_daily.parquet"))
+    try:
+        from tqdm import tqdm
+        path_iter = tqdm(
+            paths,
+            desc="load_universe_cache",
+            unit="parquet",
+            mininterval=1.0,
+        )
+    except ImportError:
+        path_iter = paths
+    for path in path_iter:
         code = path.stem.replace("_daily", "")
         try:
             df = pd.read_parquet(path)

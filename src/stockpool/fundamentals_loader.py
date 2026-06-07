@@ -123,7 +123,17 @@ def _fetch_table(table: str, codes: list[str] | None) -> pd.DataFrame:
         # 拉最近 16 季(过去 4 年)
         today = pd.Timestamp.today()
         quarters = _recent_quarters(today, n=16)
-        for code in codes:
+        try:
+            from tqdm import tqdm
+            code_iter = tqdm(
+                codes,
+                desc=f"baostock {table}",
+                unit="code",
+                mininterval=2.0,
+            )
+        except ImportError:
+            code_iter = codes
+        for code in code_iter:
             bs_code = _to_bs_code(code)
             for year, q in quarters:
                 try:

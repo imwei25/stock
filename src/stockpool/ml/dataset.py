@@ -49,7 +49,17 @@ def compute_factor_panel(
     ``docs/handoff/2026-05-31-mask-ab-investigation.md``。
     """
     out: dict[str, pd.DataFrame] = {}
-    for name in factor_names:
+    try:
+        from tqdm import tqdm
+        factor_iter = tqdm(
+            list(factor_names),
+            desc="compute_factor_panel",
+            unit="factor",
+            mininterval=1.0,
+        )
+    except ImportError:
+        factor_iter = factor_names
+    for name in factor_iter:
         f = make_factor(name)
         out[f.name] = f.compute(panel)
     return out
