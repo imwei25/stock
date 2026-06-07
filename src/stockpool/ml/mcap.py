@@ -1,8 +1,13 @@
 """log(market_cap) panel construction for OLS-based neutralization.
 
 mcap = close × totalShare, PIT-aligned by pubDate via the same helper that
-``factors.fundamentals`` uses. Reuses the 30-day baostock balance-table parquet
-cache — no new fetch path.
+``factors.fundamentals`` uses.
+
+NOTE on data source: baostock 的 "balance" 表(``query_balance_data``)是
+*偿债能力指标*(currentRatio / quickRatio / liabilityToAsset 等),并不含
+``totalShare``。``totalShare`` 在 baostock 的 *profit* 表
+(``query_profit_data``)里 —— 那个表除了 ROE / 利润率以外还附带每股股本与
+流通股本。原 spec 把它写成 balance 是受 baostock 表名误导。
 
 See: docs/superpowers/specs/2026-06-06-mcap-neutralization-design.md
 """
@@ -22,7 +27,7 @@ def build_log_mcap_panel(
 
     Args:
         panel: must contain a ``"close"`` T×N wide-frame.
-        cache_dir: passed to ``load_or_build_fundamentals`` for the balance
+        cache_dir: passed to ``load_or_build_fundamentals`` for the profit
             parquet cache. ``None`` skips caching (live fetch each call).
 
     Returns:
@@ -34,11 +39,11 @@ def build_log_mcap_panel(
     from stockpool.factors.fundamentals import _pit_align
 
     close = panel["close"]
-    balance = load_or_build_fundamentals("balance", cache_dir=cache_dir)
-    if balance is None or balance.empty:
+    profit = load_or_build_fundamentals("profit", cache_dir=cache_dir)
+    if profit is None or profit.empty:
         return pd.DataFrame(
             np.nan, index=close.index, columns=close.columns,
         )
-    shares_panel = _pit_align(balance, "totalShare", close)
+    shares_panel = _pit_align(profit, "totalShare", close)
     mcap = close * shares_panel
     return np.log(mcap.where(mcap > 0))

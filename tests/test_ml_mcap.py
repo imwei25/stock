@@ -14,12 +14,17 @@ def _close_panel():
 
 
 def test_build_log_mcap_panel_uses_close_times_total_share(monkeypatch, tmp_path):
-    """mcap = close × totalShare → log(mcap), PIT-aligned by pubDate."""
+    """mcap = close × totalShare → log(mcap), PIT-aligned by pubDate.
+
+    totalShare lives in baostock's *profit* table (despite the name, "balance"
+    in baostock is solvency ratios, not the balance sheet). See ml/mcap.py
+    docstring for details.
+    """
     from stockpool.ml.mcap import build_log_mcap_panel
 
-    # Fake balance table: 6e8 shares for 600000 announced 2024-12-15;
-    #                     1e9 shares for 000001 announced 2024-12-20.
-    fake_balance = pd.DataFrame({
+    # Fake profit table: 6e8 shares for 600000 announced 2024-12-15;
+    #                    1e9 shares for 000001 announced 2024-12-20.
+    fake_profit = pd.DataFrame({
         "code": ["600000", "000001"],
         "pubDate": pd.to_datetime(["2024-12-15", "2024-12-20"]),
         "statDate": pd.to_datetime(["2024-09-30", "2024-09-30"]),
@@ -27,8 +32,8 @@ def test_build_log_mcap_panel_uses_close_times_total_share(monkeypatch, tmp_path
     })
 
     def fake_loader(table, cache_dir=None):
-        assert table == "balance"
-        return fake_balance
+        assert table == "profit"
+        return fake_profit
 
     monkeypatch.setattr(
         "stockpool.fundamentals_loader.load_or_build_fundamentals",

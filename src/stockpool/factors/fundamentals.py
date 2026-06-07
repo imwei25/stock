@@ -176,9 +176,9 @@ class PEFactor(Factor):
 
     def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         from stockpool.fundamentals_loader import load_or_build_fundamentals
+        # NOTE: baostock 的 totalShare 在 *profit* 表里(不是误称的 balance)
         profit = load_or_build_fundamentals("profit", cache_dir=_default_cache_dir())
-        balance = load_or_build_fundamentals("balance", cache_dir=_default_cache_dir())
-        if profit is None or profit.empty or balance is None or balance.empty:
+        if profit is None or profit.empty:
             return pd.DataFrame(
                 np.nan, index=panel["close"].index, columns=panel["close"].columns
             )
@@ -193,7 +193,7 @@ class PEFactor(Factor):
         )
 
         ni_panel = _pit_align(profit, "_ttm", panel["close"])
-        shares_panel = _pit_align(balance, "totalShare", panel["close"])
+        shares_panel = _pit_align(profit, "totalShare", panel["close"])
 
         pe = panel["close"] * shares_panel / ni_panel
         # 亏损 / 缺数据 → NaN
@@ -245,12 +245,13 @@ class MarketCapFactor(Factor):
 
     def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         from stockpool.fundamentals_loader import load_or_build_fundamentals
-        balance = load_or_build_fundamentals("balance", cache_dir=_default_cache_dir())
-        if balance is None or balance.empty:
+        # NOTE: baostock 的 totalShare 在 *profit* 表里(不是误称的 balance)
+        profit = load_or_build_fundamentals("profit", cache_dir=_default_cache_dir())
+        if profit is None or profit.empty:
             return pd.DataFrame(
                 np.nan, index=panel["close"].index, columns=panel["close"].columns,
             )
-        shares_panel = _pit_align(balance, "totalShare", panel["close"])
+        shares_panel = _pit_align(profit, "totalShare", panel["close"])
         return panel["close"] * shares_panel
 
 

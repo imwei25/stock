@@ -30,6 +30,12 @@ _TABLE_TO_BS_FN = {
 # 200 codes ≈ 每 ~30s-1min 落一次,中断恢复粒度足够细,IO 开销也很小。
 _CHECKPOINT_INTERVAL_CODES = 200
 
+# 连续 N 个 code 全部失败(每 code 16 季全是 error_code != "0" 或 empty)
+# 就判定 baostock session 已死,abort 整个 fetch。否则之前那种"baostock 早就
+# 把我们踢了但代码 silently continue 跑完 4000 codes 拿到一堆空气然后落盘
+# 当成功"的事会再发生。
+_DEAD_SESSION_CONSECUTIVE_EMPTY_CODES = 20
+
 
 def load_or_build_fundamentals(
     table: str,
@@ -216,12 +222,16 @@ def _fetch_table(
             )
         except ImportError:
             code_iter = todo_codes
+        consecutive_empty_codes = 0
         for i, code in enumerate(code_iter, start=1):
             bs_code = _to_bs_code(code)
+            rows_for_code = 0
             for year, q in quarters:
                 try:
                     rs = fn(code=bs_code, year=year, quarter=q)
                     if rs.error_code != "0":
+                        # 之前是 silent continue;现在记 warning 但不抛(单季度
+                        # 失败可能就是该公司还没披露,不算异常)
                         continue
                     if all_fields is None and rs.fields:
                         all_fields = list(rs.fields)
@@ -230,9 +240,30 @@ def _fetch_table(
                         # 标准化 code 为 6 位
                         row["code"] = code
                         all_rows.append(row)
+                        rows_for_code += 1
                 except Exception as e:
                     log.warning("baostock %s %s %dQ%d failed: %s",
                                 fn_name, bs_code, year, q, e)
+            # Dead-session detector:某 code 16 季全部空 → 计数;连续 N 个
+            # code 全空就判定 baostock 把我们踢了,abort 整个 fetch
+            # 让 caller 报错。
+            if rows_for_code == 0:
+                consecutive_empty_codes += 1
+                if consecutive_empty_codes >= _DEAD_SESSION_CONSECUTIVE_EMPTY_CODES:
+                    log.error(
+                        "fundamentals(%s): baostock session looks dead — "
+                        "last %d codes returned zero rows; aborting fetch. "
+                        "Partial cache preserved at %s for next retry.",
+                        table, consecutive_empty_codes, partial_path,
+                    )
+                    if partial_path is not None:
+                        _write_partial(all_rows, partial_path)
+                    raise RuntimeError(
+                        f"baostock {table} session dead after "
+                        f"{consecutive_empty_codes} consecutive empty codes"
+                    )
+            else:
+                consecutive_empty_codes = 0
             # 每 N 个 code 落一次 partial,中断恢复粒度足够细
             if partial_path is not None and i % _CHECKPOINT_INTERVAL_CODES == 0:
                 _write_partial(all_rows, partial_path)
