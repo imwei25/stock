@@ -294,3 +294,118 @@ def test_pipeline_n_codes_above_min_runs_normally():
     cfg = PreprocessConfig(zscore=True, min_pool_size=200)
     out = apply_preprocess_pipeline(fp, cfg, n_codes=300)
     pd.testing.assert_frame_equal(out["x"], cs_zscore_panel(df))
+
+
+# ---------------------------------------------------------------------------
+# market_cap_neutralize_panel (Phase 2)
+# ---------------------------------------------------------------------------
+
+def test_mcap_neutralize_residual_orthogonal_to_logmcap():
+    """After neutralize, per-day residual is ~uncorrelated with log_mcap."""
+    from stockpool.ml.preprocess import market_cap_neutralize_panel
+    rng = np.random.default_rng(30)
+    df = _make_panel(n_days=4, n_stocks=80, seed=30)
+    # log_mcap correlated structure; factor = 2*log_mcap + noise so size loads.
+    log_mcap = _make_panel(n_days=4, n_stocks=80, seed=31).abs() + 5.0
+    df = 2.0 * log_mcap + pd.DataFrame(
+        rng.standard_normal(df.shape), index=df.index, columns=df.columns,
+    )
+    out = market_cap_neutralize_panel(df, log_mcap)
+    for d in df.index:
+        r = out.loc[d]
+        m = log_mcap.loc[d]
+        # residual cross-sectional mean ~0 and corr with size ~0
+        assert abs(r.mean()) < 1e-9
+        assert abs(np.corrcoef(r.values, m.values)[0, 1]) < 1e-6
+
+
+def test_mcap_neutralize_removes_pure_size_factor_to_zero():
+    """A factor that IS exactly a*log_mcap+b residualises to ~0."""
+    from stockpool.ml.preprocess import market_cap_neutralize_panel
+    log_mcap = _make_panel(n_days=3, n_stocks=50, seed=32).abs() + 3.0
+    df = 1.7 * log_mcap + 0.5  # perfectly linear in size
+    out = market_cap_neutralize_panel(df, log_mcap)
+    assert (out.abs() < 1e-9).all().all()
+
+
+def test_mcap_neutralize_factor_nan_stays_nan():
+    """NaN factor cells remain NaN after neutralize."""
+    from stockpool.ml.preprocess import market_cap_neutralize_panel
+    df = _make_panel(n_days=2, n_stocks=20, seed=33)
+    log_mcap = _make_panel(n_days=2, n_stocks=20, seed=34).abs() + 2.0
+    df.iloc[0, :3] = np.nan
+    out = market_cap_neutralize_panel(df, log_mcap)
+    assert out.iloc[0, :3].isna().all()
+
+
+def test_mcap_neutralize_missing_size_passes_through():
+    """A stock with NaN log_mcap keeps its raw factor value (no residual)."""
+    from stockpool.ml.preprocess import market_cap_neutralize_panel
+    df = _make_panel(n_days=2, n_stocks=20, seed=35)
+    log_mcap = _make_panel(n_days=2, n_stocks=20, seed=36).abs() + 2.0
+    log_mcap.iloc[:, 5] = np.nan  # one stock has no size data
+    out = market_cap_neutralize_panel(df, log_mcap)
+    # That column unchanged (size unavailable → pass through raw factor).
+    pd.testing.assert_series_equal(
+        out.iloc[:, 5], df.iloc[:, 5], check_names=False,
+    )
+
+
+def test_mcap_neutralize_degenerate_size_falls_back_to_demean():
+    """Constant log_mcap (var≈0) → plain demean (slope 0)."""
+    from stockpool.ml.preprocess import market_cap_neutralize_panel
+    df = _make_panel(n_days=2, n_stocks=30, seed=37)
+    log_mcap = pd.DataFrame(8.0, index=df.index, columns=df.columns)
+    out = market_cap_neutralize_panel(df, log_mcap)
+    for d in df.index:
+        pd.testing.assert_series_equal(
+            out.loc[d], df.loc[d] - df.loc[d].mean(), check_names=False,
+        )
+
+
+def test_mcap_neutralize_reindexes_superset_panel():
+    """log_mcap covering extra rows/cols is reindexed to df."""
+    from stockpool.ml.preprocess import market_cap_neutralize_panel
+    df = _make_panel(n_days=2, n_stocks=10, seed=38)
+    big = _make_panel(n_days=4, n_stocks=20, seed=39).abs() + 4.0
+    big = big.reindex(index=big.index, columns=list(df.columns) + ["X999"])
+    big.loc[:, df.columns] = (
+        _make_panel(n_days=4, n_stocks=10, seed=39).abs().reindex(big.index) + 4.0
+    ).values
+    out = market_cap_neutralize_panel(df, big)
+    assert out.shape == df.shape
+    assert list(out.columns) == list(df.columns)
+
+
+def test_pipeline_mcap_neutralize_skips_fundamental_and_warns(caplog):
+    """market_cap_neutralize on: fundamental factors skipped; missing panel warns."""
+    import logging
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline, market_cap_neutralize_panel
+    df = _make_panel(n_days=3, n_stocks=300, seed=40)
+    log_mcap = _make_panel(n_days=3, n_stocks=300, seed=41).abs() + 3.0
+    fp = {"momentum_20": df.copy(), "pe": df.copy()}
+    factor_types = {"momentum_20": ("momentum",), "pe": ("fundamental",)}
+    cfg = PreprocessConfig(market_cap_neutralize=True)
+    out = apply_preprocess_pipeline(
+        fp, cfg, factor_types=factor_types, n_codes=300, log_mcap_panel=log_mcap,
+    )
+    # momentum neutralised; pe (fundamental) untouched.
+    pd.testing.assert_frame_equal(
+        out["momentum_20"], market_cap_neutralize_panel(df, log_mcap),
+    )
+    pd.testing.assert_frame_equal(out["pe"], df)
+
+    # Missing panel → step skipped with warning.
+    with caplog.at_level(logging.WARNING, logger="stockpool.ml.preprocess"):
+        out2 = apply_preprocess_pipeline(
+            {"x": df.copy()}, cfg, n_codes=300, log_mcap_panel=None,
+        )
+    pd.testing.assert_frame_equal(out2["x"], df)
+    assert any("log_mcap_panel is None" in r.message for r in caplog.records)
+
+
+def test_is_all_off_false_for_market_cap_neutralize():
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import _is_all_off
+    assert _is_all_off(PreprocessConfig(market_cap_neutralize=True)) is False

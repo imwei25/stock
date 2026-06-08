@@ -667,11 +667,20 @@ def test_ml_factor_content_hash_changes_with_mask(tmp_path):
 
 
 def test_preprocess_config_defaults_all_off():
-    """PreprocessConfig with no args has all three steps disabled."""
+    """PreprocessConfig with no args has all four steps disabled."""
     from stockpool.config import PreprocessConfig
     cfg = PreprocessConfig()
     assert cfg.winsorize is None
     assert cfg.zscore is False
+    assert cfg.industry_neutralize is False
+    assert cfg.market_cap_neutralize is False
+
+
+def test_preprocess_market_cap_neutralize_togglable():
+    """market_cap_neutralize is an independent bool switch (Phase 2)."""
+    from stockpool.config import PreprocessConfig
+    cfg = PreprocessConfig(market_cap_neutralize=True)
+    assert cfg.market_cap_neutralize is True
     assert cfg.industry_neutralize is False
 
 

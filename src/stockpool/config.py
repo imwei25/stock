@@ -378,11 +378,20 @@ class PreprocessConfig(BaseModel):
     winsorize: tuple[float, float] | None = None
     zscore: bool = False
     industry_neutralize: bool = False
+    market_cap_neutralize: bool = False
     min_pool_size: int = Field(default=200, ge=0)
-    # n_codes < min_pool_size 时 winsorize / cs_zscore / industry_neutralize
-    # 全部跳过(估计不稳)。industry_neutralize 即使在大池子也建议保持
-    # 默认 false:单成员细分行业会触发 silent demean-to-zero bug(P4-1 verdict)。
-    # Phase 1.5 全市场参照设计落地前不推荐启用 industry_neutralize。
+    # n_codes < min_pool_size 时 winsorize / cs_zscore / industry_neutralize /
+    # market_cap_neutralize 全部跳过(估计不稳)。industry_neutralize 即使在
+    # 大池子也建议保持默认 false:单成员细分行业会触发 silent demean-to-zero
+    # bug(P4-1 verdict)。Phase 1.5 全市场参照设计落地前不推荐启用
+    # industry_neutralize。
+    # market_cap_neutralize(Phase 2,2026-06-08):每日截面把因子对 log(总市值)
+    # 做 OLS 残差化,剥离规模暴露。需 caller 通过
+    # ``factors.context.set_mcap_panel`` 注入 log_mcap 面板(prepare_pool /
+    # ab.runner 在 market_cap_neutralize=True 时从 fundamentals_profit 的
+    # totalShare × close 自动构建);无 mcap 面板时该步静默跳过 + warning。
+    # 与 industry_neutralize 同属 ④ 中性化步,均跳过 types 含 "fundamental"
+    # 的因子(PE/PB 本身就是估值/规模信号,二次中性化会抵消)。
 
     @field_validator("winsorize")
     @classmethod
