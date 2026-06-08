@@ -19,10 +19,19 @@ Run: .venv/Scripts/python.exe scripts/pull_mcap_profit.py
 from __future__ import annotations
 
 import logging
+import socket
 import sys
 import time
+from pathlib import Path
 
 import pandas as pd
+
+# baostock has no per-query timeout; a hung socket read blocks forever (it
+# stalled at stock ~500 in testing). A global socket timeout makes hung reads
+# raise, so the per-quarter try/except moves on instead of freezing the pull.
+socket.setdefaulttimeout(20)
+
+_OUT = Path("data/mcap_shares.parquet")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,24 +59,58 @@ def _to_bs_code(code: str) -> str:
     return f"sh.{code}"
 
 
+def _save(rows: list[dict]) -> None:
+    """Atomic-ish incremental save so a restart can resume."""
+    if not rows:
+        return
+    df = pd.DataFrame(rows)
+    df["totalShare"] = pd.to_numeric(df["totalShare"], errors="coerce")
+    for c in ("pubDate", "statDate"):
+        df[c] = pd.to_datetime(df[c], errors="coerce")
+    df = df.dropna(subset=["totalShare"]).drop_duplicates("code", keep="last")
+    tmp = _OUT.with_suffix(".parquet.tmp")
+    df.to_parquet(tmp, index=False)
+    tmp.replace(_OUT)
+
+
 def main() -> int:
     import baostock as bs
     from stockpool.fetcher import list_universe
 
     universe = list_universe()
     codes = universe["code"].astype(str).str.zfill(6).tolist()
-    log.info("universe: %d codes; pulling latest totalShare each", len(codes))
 
-    lg = bs.login()
-    if lg.error_code != "0":
-        log.error("baostock login failed: %s", lg.error_msg)
+    # Resume: skip codes already saved.
+    rows: list[dict] = []
+    done: set[str] = set()
+    if _OUT.exists():
+        prev = pd.read_parquet(_OUT)
+        prev["code"] = prev["code"].astype(str).str.zfill(6)
+        rows = prev.to_dict("records")
+        done = set(prev["code"])
+    todo = [c for c in codes if c not in done]
+    log.info(
+        "universe: %d codes; %d already done, %d to pull",
+        len(codes), len(done), len(todo),
+    )
+    if not todo:
+        log.info("nothing to do; %s already complete (%d rows)", _OUT, len(rows))
+        return 0
+
+    def _login() -> bool:
+        lg = bs.login()
+        if lg.error_code != "0":
+            log.error("baostock login failed: %s", lg.error_msg)
+            return False
+        return True
+
+    if not _login():
         return 1
 
-    rows: list[dict] = []
     t0 = time.time()
     misses = 0
     try:
-        for i, code in enumerate(codes, 1):
+        for i, code in enumerate(todo, 1):
             bs_code = _to_bs_code(code)
             got = False
             for year, q in _QUARTERS:
@@ -89,32 +132,32 @@ def main() -> int:
                         break
                 except Exception as e:  # noqa: BLE001
                     log.warning("%s %dQ%d failed: %s", bs_code, year, q, e)
+                    # Socket timeout likely killed the session; re-login.
+                    try:
+                        bs.logout()
+                    except Exception:
+                        pass
+                    _login()
             if not got:
                 misses += 1
-            if i % 500 == 0:
+            if i % 250 == 0:
                 rate = (time.time() - t0) / i
-                eta = rate * (len(codes) - i) / 60
+                eta = rate * (len(todo) - i) / 60
                 log.info(
-                    "progress %d/%d (%.0f%%) hits=%d misses=%d ETA=%.0fmin",
-                    i, len(codes), 100 * i / len(codes), len(rows), misses, eta,
+                    "progress %d/%d (%.0f%%) total_rows=%d misses=%d ETA=%.0fmin",
+                    i, len(todo), 100 * i / len(todo), len(rows), misses, eta,
                 )
+                _save(rows)
     finally:
-        bs.logout()
+        try:
+            bs.logout()
+        except Exception:
+            pass
+        _save(rows)
 
-    if not rows:
-        log.error("no totalShare rows pulled")
-        return 1
-
-    df = pd.DataFrame(rows)
-    df["totalShare"] = pd.to_numeric(df["totalShare"], errors="coerce")
-    for c in ("pubDate", "statDate"):
-        df[c] = pd.to_datetime(df[c], errors="coerce")
-    df = df.dropna(subset=["totalShare"]).reset_index(drop=True)
-    out = "data/mcap_shares.parquet"
-    df.to_parquet(out, index=False)
     log.info(
-        "DONE in %.0fs: %d/%d codes with totalShare -> %s",
-        time.time() - t0, len(df), len(codes), out,
+        "DONE in %.0fs: %d total codes with totalShare -> %s",
+        time.time() - t0, len(rows), _OUT,
     )
     return 0
 
