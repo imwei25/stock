@@ -145,8 +145,11 @@ def _prepare_pool_for_arm(
         # skipped (shared-universe path).
         from stockpool.factors.context import set_sector_map
         from stockpool.industry_map import load_or_build_industry_map
+        from stockpool.strategy_factory import maybe_inject_mcap_panel
         sector_map = load_or_build_industry_map(arm_cfg.data.cache_dir, source="auto")
         set_sector_map(sector_map)
+        # Inject log-mcap panel for market_cap_neutralize (no-op unless enabled).
+        maybe_inject_mcap_panel(ml_cfg.preprocess, pool_data, arm_cfg.data.cache_dir)
 
         factor_panel, close_panel = load_or_build_factor_panel(
             ml_cfg.factors, pool_data, arm_cfg.data.cache_dir,

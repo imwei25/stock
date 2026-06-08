@@ -161,16 +161,99 @@ def build_factor_panel(
     if preprocess_cfg is None or preproc_mod._is_all_off(preprocess_cfg):
         return raw
 
-    from stockpool.factors.context import get_sector_map
+    from stockpool.factors.context import get_sector_map, get_mcap_panel
     from stockpool.factors.registry import list_specs
     sector_map = get_sector_map() or None
+    log_mcap = get_mcap_panel() if preprocess_cfg.market_cap_neutralize else None
     types_map = {
         s.base_name: s.types for s in list_specs() if s.base_name in factor_names
     }
     return preproc_mod.apply_preprocess_pipeline(
         raw, preprocess_cfg, sector_map=sector_map, factor_types=types_map,
-        n_codes=len(pool_data),
+        n_codes=len(pool_data), log_mcap_panel=log_mcap,
     )
+
+
+def build_log_mcap_panel(
+    pool_data: Mapping[str, pd.DataFrame],
+    cache_dir: str | Path | None,
+) -> pd.DataFrame | None:
+    """Build a T×N ``log(total_market_cap)`` panel for market-cap neutralize.
+
+    ``market_cap_t = close_t × totalShare``, where ``totalShare`` is the latest
+    snapshot per stock from ``data/mcap_shares.parquet`` (written by
+    ``scripts/pull_mcap_profit.py`` from baostock's profit table). The share
+    count is **broadcast statically** across all dates; only ``close`` (the
+    dominant daily mcap driver) varies day to day. ``log`` is applied so the
+    neutralize OLS regresses on a roughly-normal size variable.
+
+    Two documented approximations (acceptable for a size-neutralization
+    regressor + a directional A/B verdict):
+
+      1. **Static shares.** Using the latest totalShare at historical dates is
+         a mild forward leak, but share counts move slowly and only shift a
+         stock's size bucket — not a tradable signal. Pulling the full PIT
+         quarterly history is a Phase-2.x refinement (~13h baostock pull).
+      2. **Adjusted close.** Cached ``close`` is 前复权, so absolute mcap is
+         scaled by each stock's cumulative adjustment factor; cross-sectional
+         size ranking is therefore approximate.
+
+    Returns ``None`` when the shares snapshot is missing/empty (caller then
+    skips the market_cap_neutralize step with a warning).
+    """
+    if not pool_data or cache_dir is None:
+        return None
+    shares_path = Path(cache_dir) / "mcap_shares.parquet"
+    if not shares_path.exists():
+        log.warning(
+            "build_log_mcap_panel: %s missing (run scripts/pull_mcap_profit.py); "
+            "market_cap_neutralize will skip", shares_path,
+        )
+        return None
+
+    import numpy as np
+
+    snap = pd.read_parquet(shares_path)
+    if snap.empty or "totalShare" not in snap.columns:
+        log.warning("build_log_mcap_panel: %s empty/malformed", shares_path)
+        return None
+    shares = (
+        snap.assign(code=snap["code"].astype(str).str.zfill(6))
+        .dropna(subset=["totalShare"])
+        .drop_duplicates("code", keep="last")
+        .set_index("code")["totalShare"]
+    )
+
+    close_panel = build_close_panel(pool_data)
+    if close_panel.empty:
+        return None
+    # Broadcast static shares across dates; codes without a snapshot → NaN
+    # (those stocks pass through un-neutralized in market_cap_neutralize_panel).
+    shares_row = shares.reindex(close_panel.columns)
+    mcap = close_panel.mul(shares_row, axis=1)
+    mcap = mcap.where(mcap > 0)  # guard non-positive / NaN before log
+    log_mcap = np.log(mcap)
+    n_cov = int(log_mcap.iloc[-1].notna().sum()) if len(log_mcap) else 0
+    log.info(
+        "log_mcap panel built: %d×%d, last-bar coverage %d/%d codes",
+        log_mcap.shape[0], log_mcap.shape[1], n_cov, log_mcap.shape[1],
+    )
+    return log_mcap
+
+
+def maybe_inject_mcap_panel(
+    preprocess_cfg, pool_data: Mapping[str, pd.DataFrame], cache_dir: str | Path | None,
+) -> None:
+    """Build + inject the log-mcap panel into factor context iff needed.
+
+    No-op unless ``preprocess_cfg.market_cap_neutralize`` is True. Mirrors the
+    ``set_sector_map`` injection done by the pool-prep entry points so
+    ``build_factor_panel`` can pick the panel up from context.
+    """
+    from stockpool.factors.context import set_mcap_panel
+    if preprocess_cfg is None or not getattr(preprocess_cfg, "market_cap_neutralize", False):
+        return
+    set_mcap_panel(build_log_mcap_panel(pool_data, cache_dir))
 
 
 def _fundamentals_latest_mtime(cache_dir: str | Path | None) -> str | None:

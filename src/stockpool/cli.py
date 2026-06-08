@@ -447,7 +447,13 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     factor_panel = None
     close_panel = None
     if cfg.strategy.name == "ml_factor" and cfg.strategy.ml_factor.panel_mode == "pooled":
-        from stockpool.strategy_factory import load_or_build_factor_panel
+        from stockpool.strategy_factory import (
+            load_or_build_factor_panel,
+            maybe_inject_mcap_panel,
+        )
+        maybe_inject_mcap_panel(
+            cfg.strategy.ml_factor.preprocess, pool_data, cfg.data.cache_dir,
+        )
         factor_panel, close_panel = load_or_build_factor_panel(
             cfg.strategy.ml_factor.factors, pool_data, cfg.data.cache_dir,
             preprocess_cfg=cfg.strategy.ml_factor.preprocess,

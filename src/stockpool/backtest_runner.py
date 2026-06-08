@@ -87,6 +87,10 @@ def prepare_pool(
     sector_map = load_or_build_industry_map(cfg.data.cache_dir, source="auto")
     set_sector_map(sector_map)
 
+    # Inject log-mcap panel for market_cap_neutralize (no-op unless enabled).
+    from stockpool.strategy_factory import maybe_inject_mcap_panel
+    maybe_inject_mcap_panel(ml_cfg.preprocess, pool_data, cfg.data.cache_dir)
+
     factor_panel, close_panel = load_or_build_factor_panel(
         ml_cfg.factors, pool_data, cfg.data.cache_dir,
         refresh=refresh_factor_panel,

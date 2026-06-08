@@ -33,6 +33,76 @@ def _pool(codes: list[str]) -> dict[str, pd.DataFrame]:
     return {c: _stock_df(seed=i + 1) for i, c in enumerate(codes)}
 
 
+def test_build_log_mcap_panel_static_broadcast(tmp_path):
+    """build_log_mcap_panel = log(close × static totalShare), missing codes NaN."""
+    pool = _pool(["600001", "000002", "300003"])
+    snap = pd.DataFrame({
+        "code": ["600001", "000002"],  # 300003 deliberately absent
+        "totalShare": [1.0e9, 2.0e9],
+        "pubDate": pd.to_datetime(["2026-04-30", "2026-04-30"]),
+        "statDate": pd.to_datetime(["2026-03-31", "2026-03-31"]),
+    })
+    snap.to_parquet(tmp_path / "mcap_shares.parquet", index=False)
+
+    out = sf.build_log_mcap_panel(pool, tmp_path)
+    assert out is not None
+    cp = sf.build_close_panel(pool)
+    # mapped codes = log(close × shares); unmapped (300003) = all NaN.
+    expected = np.log(cp["600001"] * 1.0e9)
+    pd.testing.assert_series_equal(out["600001"], expected, check_names=False)
+    assert out["300003"].isna().all()
+
+
+def test_build_log_mcap_panel_missing_snapshot_returns_none(tmp_path):
+    """No mcap_shares.parquet → None (caller skips the step)."""
+    pool = _pool(["S001"])
+    assert sf.build_log_mcap_panel(pool, tmp_path) is None
+
+
+def test_maybe_inject_mcap_panel_noop_when_disabled(tmp_path):
+    """maybe_inject_mcap_panel does nothing when market_cap_neutralize is off."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.factors.context import set_mcap_panel, get_mcap_panel
+    set_mcap_panel(None)
+    try:
+        sf.maybe_inject_mcap_panel(PreprocessConfig(), _pool(["S001"]), tmp_path)
+        assert get_mcap_panel() is None
+    finally:
+        set_mcap_panel(None)
+
+
+def test_build_factor_panel_picks_up_context_mcap_panel(monkeypatch):
+    """market_cap_neutralize=True → build_factor_panel reads context mcap panel."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.factors.context import set_mcap_panel, get_mcap_panel
+    from stockpool.ml import preprocess as preproc_mod
+
+    pool = _pool([f"S{i:03d}" for i in range(8)])
+    # Build a matching log_mcap panel over the union of dates/codes.
+    cp = sf.build_close_panel(pool)
+    rng = np.random.default_rng(7)
+    log_mcap = pd.DataFrame(
+        rng.uniform(20, 26, cp.shape), index=cp.index, columns=cp.columns,
+    )
+    set_mcap_panel(log_mcap)
+    try:
+        captured = {}
+        real = preproc_mod.apply_preprocess_pipeline
+
+        def spy(fp, cfg, **kw):
+            captured["log_mcap_panel"] = kw.get("log_mcap_panel")
+            return real(fp, cfg, **kw)
+
+        monkeypatch.setattr(preproc_mod, "apply_preprocess_pipeline", spy)
+        cfg = PreprocessConfig(market_cap_neutralize=True, min_pool_size=0)
+        sf.build_factor_panel(["momentum_5"], pool, preprocess_cfg=cfg)
+        # The context panel was threaded into the pipeline.
+        assert captured["log_mcap_panel"] is get_mcap_panel()
+        assert captured["log_mcap_panel"] is not None
+    finally:
+        set_mcap_panel(None)
+
+
 def test_first_call_writes_manifest_and_parquets(tmp_path):
     pool = _pool(["A", "B"])
     factors = ["momentum_5", "alpha_003"]
@@ -342,7 +412,7 @@ def test_build_factor_panel_passes_preprocess(monkeypatch):
     called = {}
     real_apply = preproc_mod.apply_preprocess_pipeline
 
-    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None):
+    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None, log_mcap_panel=None):
         called["cfg"] = cfg
         called["n_factors"] = len(fp)
         return real_apply(fp, cfg, sector_map=sector_map, factor_types=factor_types, n_codes=n_codes)
@@ -397,7 +467,7 @@ def test_build_factor_panel_passes_n_codes_to_pipeline(monkeypatch):
     captured = {}
     real = preproc_mod.apply_preprocess_pipeline
 
-    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None):
+    def spy(fp, cfg, sector_map=None, factor_types=None, n_codes=None, log_mcap_panel=None):
         captured["n_codes"] = n_codes
         return real(fp, cfg, sector_map=sector_map,
                     factor_types=factor_types, n_codes=n_codes)
