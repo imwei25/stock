@@ -467,19 +467,22 @@ strategy:
     preprocess:
       winsorize: [0.01, 0.99]    # 每日截面去极值;null = 关闭
       zscore: true               # 每日截面 z-score
-      industry_neutralize: false # 行业内 demean(跳过 fundamental 因子)
-      market_cap_neutralize: false  # 对 log(总市值) OLS 残差化(跳过 fundamental 因子)
+      industry_neutralize: false # 行业内 demean(实测有害,默认关)
+      market_cap_neutralize: true   # 对 log(总市值) OLS 残差化(P4-3 PASS,默认开)
       min_pool_size: 200         # n_codes < 此值时整条流水线跳过(小池子退化保护)
 ```
 
-- **winsorize / zscore**:已默认开启,见 `docs/ab_validation_results.md` P4-1b。
-- **industry_neutralize**:默认关 — 单成员细分行业会触发 silent demean-to-zero,全市场参照设计前不建议开。
-- **market_cap_neutralize**(Phase 2):每日截面把因子对 log(总市值) 做 OLS 残差化,剥离规模暴露。
+- **winsorize / zscore**:默认开启,见 `docs/ab_validation_results.md` P4-1b。
+- **market_cap_neutralize**(Phase 2,**默认开启**):每日截面把因子对 log(总市值) 做 OLS 残差化,剥离规模暴露。
   需先拉市值数据:`python scripts/pull_mcap_profit.py`(从 baostock profit 表拉全市场最新 `totalShare`
-  到 `data/mcap_shares.parquet`,串行 ~50-75 min)。mcap = `close × totalShare`(shares 静态广播)。
-  无 `mcap_shares.parquet` 时该步静默跳过 + warning。
+  到 `data/mcap_shares.parquet`,串行 ~40 min;该文件已随仓库提交,clone 后通常无需重拉)。
+  mcap = `close × totalShare`(shares 静态广播)。**无 `mcap_shares.parquet` 时该步静默跳过 + warning**,不报错。
+  A/B 验证:P4-3 在 base 之上 Δsharpe +0.156(PASS);P4-2 优于 industry neutralize Δsharpe +0.249。
+- **industry_neutralize**:默认**关** — A/B 实测有害(与 selection 里的 `industry_relative_strength` 因子冲突,
+  对全体因子再行业 demean 抹掉了有效的行业内 alpha);且单成员细分行业仍有 silent demean-to-zero 风险。
 
-A/B 对比 industry vs market_cap 中性化:`python -m stockpool ab --config ab_neutralize.yaml`。
+A/B 对比 industry vs market_cap 中性化:`python -m stockpool ab --config ab_neutralize.yaml`;
+确认 base vs market_cap:`python -m stockpool ab --config ab_neutralize_confirm.yaml`。
 改 `preprocess` 任一字段会进入 `factor_panels/<sig>/` 缓存 key → 自动重算。
 详见 `docs/superpowers/specs/2026-06-06-factor-preprocessing-phase1-design.md`。
 

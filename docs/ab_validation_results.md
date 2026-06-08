@@ -213,6 +213,69 @@ P0-2 把 PR-B1(LGB selector)和 PR-B2(LGB weighter)合并测,显示 -0.203 sharp
 
 ---
 
+## P4-2: Phase 2 中性化对比 — industry vs market_cap neutralize — ✅ market_cap 胜
+
+**日期**: 2026-06-09
+**配置**: `ab_neutralize.yaml`(training_universe=all 4357 训练股 / 16 应用股,lasso+ic,holding_days=10,两 arm 均在 winsorize+zscore base 之上)
+**报告**: `reports/ab/2026-06-09.html`
+**市值数据**: `data/mcap_shares.parquet`(baostock profit.totalShare 最新快照,4373 票;mcap=close×totalShare,shares 静态广播,close 日频 PIT;中位覆盖 4273/4357 票)
+
+| 指标 | industry (A) | market_cap (B) | Δ (B−A) | B 胜 |
+|---|---|---|---|---|
+| Sharpe (mean) | +0.154 | **+0.403** | **+0.249** | 13/16 |
+| Total return (mean) | +6.31% | **+10.31%** | **+3.99%** | 13/16 |
+| Annualized return | +2.90% | +4.92% | +2.02% | 13/16 |
+| Max drawdown (mean) | 12.04% | **8.43%** | **−3.60pp** | 14/16 |
+| Win rate | 59.56% | 64.86% | +5.30pp | 12/16 |
+| Avg trade ret % | +1.43 | +2.47 | +1.04 | 12/16 |
+| Trade count | 72 | 72 | 0 | — |
+
+**Verdict: ✅ market_cap neutralize 全面优于 industry neutralize** — Δsharpe +0.249 / Δreturn +3.99% / 回撤改善 3.60pp / 13(或 14)/16 票胜出。
+
+**跨 run 旁证(非同 run,谨慎解读)**:对照 P4-1b 的 no-neutralize base(winsorize+zscore,sharpe +0.311 / return +7.76%):
+- `industry_neutralize` 把 sharpe 从 +0.311 拖到 +0.154 → **行业中性在本 setup 里有害**(可能因 selection.json 已含 `industry_relative_strength_20`,再对全体因子行业 demean 反而抹掉了有效的行业内 alpha)。
+- `market_cap_neutralize` 把 sharpe 提到 +0.403(+0.09 over base)、return 提到 +10.31%(+2.55%)→ **市值中性看似在 base 之上继续加分**。
+
+→ 见 **P4-3 同 run 确认**(下)。
+
+---
+
+## P4-3: 确认 base vs market_cap neutralize(同 run)— ✅ PASS,默认开启
+
+**日期**: 2026-06-09
+**配置**: `ab_neutralize_confirm.yaml`(同 P4-2 setup;arm A = base winsorize+zscore 无中性,arm B = + market_cap;市值面板 cache 命中 P4-2 的 sig=de6f40b0020c)
+**报告**: `reports/ab/2026-06-09.html`(覆盖了 P4-2 的同名报告;P4-2 指标已录于上)
+
+| 指标 | base (A) | market_cap (B) | Δ (B−A) | B 胜 |
+|---|---|---|---|---|
+| Sharpe (mean) | +0.247 | **+0.403** | **+0.156** | 11/16 |
+| Total return (mean) | +6.71% | **+10.31%** | **+3.60%** | 12/16 |
+| Annualized return | +3.21% | +4.92% | +1.71% | 12/16 |
+| Max drawdown (mean) | 9.34% | **8.43%** | **−0.91pp** | 10/16 |
+| Win rate | 63.27% | 64.86% | +1.59pp | 10/16 |
+| Avg trade ret % | +1.78 | +2.47 | +0.69 | 13/16 |
+| Trade count | 67 | 72 | +4 | — |
+
+**Pass criteria 判定**(同 P4-1b 标准):
+- Δsharpe ≥ +0.05: ✅(+0.156)
+- Total return 同向: ✅(+6.71% / +10.31%)
+- Stocks won > n/2: ✅(11–12/16)
+- Drawdown 不退化 > 3pp: ✅(改善 0.91pp)
+
+**Verdict: ✅ PASS** — `market_cap_neutralize` 在 winsorize+zscore base 之上净贡献 sharpe +0.156 / return +3.60% / 回撤改善 0.91pp。
+
+**Phase 2 总结(回答 "按市值 vs industry neutralize"):**
+- ✅ **market_cap_neutralize**:在 base 之上加分(P4-3 PASS),且全面优于 industry(P4-2,Δsharpe +0.249)。→ **默认开启**。
+- ❌ **industry_neutralize**:在本 setup 下有害(P4-2:0.154 vs base 0.247/0.311),怀疑与 selection.json 已含 `industry_relative_strength_20` 冲突(对全体因子再行业 demean 抹掉了有效的行业内 alpha)。→ **维持默认 false**。
+
+**默认值变更**:`config.yaml` 的 `strategy.ml_factor.preprocess.market_cap_neutralize` 翻为 `true`(industry_neutralize 维持 false)。运行时需 `data/mcap_shares.parquet`(已 commit;`scripts/pull_mcap_profit.py` 重生成),缺失时该步静默跳过 + warning。
+
+**后续(Phase 2.x,可选精修)**:当前 mcap 用最新股本静态广播 + 前复权 close(见 P4-2 已知近似)。若要更严谨,可在全 PIT profit 落地后(`scripts/pull_fundamentals.py`)改用按季 PIT 的 totalShare + 原始 close 重算 mcap,再 A/B 确认增益是否进一步扩大。
+
+**已知近似(影响幅度有限,见 `build_log_mcap_panel` docstring)**:(1) shares 用最新快照静态广播(历史日期轻度前视,但股本缓变,仅影响 size 分桶);(2) close 为前复权,绝对 mcap 被各股复权因子缩放,截面 size 排序为近似。两近似对 **两 arm 对称**(industry arm 不用 mcap;但 base/market_cap 对比时只有 market_cap 用),directional 结论可靠;若 P4-3 确认有效,再考虑用全 PIT profit + 原始 close 精修(Phase 2.x)。
+
+---
+
 ## §5 工程结论(2026-05-24)
 
 经过 7 个 A/B 对照(P0-1 / P0-2 / P1-1 / P1-2 / P2-1 / P3-1 / P3-2,P3-2 重跑两次),得到的**当前默认 sweet spot**:
@@ -227,10 +290,11 @@ strategy:
     selector: {type: lasso}       # ❌ lightgbm 倒退(F2 默认回退)
     weighter: {type: ic}          # ❌ lightgbm 倒退(F2 默认回退)
     share_pool_fit: true          # (未单独验证,但配合 pooled+pool 工作良好)
-    preprocess:                    # ✅ P4-1b PASS — winsorize+zscore 开启(industry_neutralize 待 Phase 2)
+    preprocess:                    # ✅ P4-1b: winsorize+zscore;✅ P4-3: market_cap 开启
       winsorize: [0.01, 0.99]
       zscore: true
-      industry_neutralize: false
+      industry_neutralize: false   # ❌ P4-2 有害(与 industry_relative_strength 因子冲突)
+      market_cap_neutralize: true  # ✅ P4-3 PASS(Δsharpe +0.156 over base)
 ```
 
 **未来重新启用 LGB / universe=all 的前提**:

@@ -233,10 +233,19 @@ def build_log_mcap_panel(
     mcap = close_panel.mul(shares_row, axis=1)
     mcap = mcap.where(mcap > 0)  # guard non-positive / NaN before log
     log_mcap = np.log(mcap)
-    n_cov = int(log_mcap.iloc[-1].notna().sum()) if len(log_mcap) else 0
+    # Report MEDIAN coverage, not last-bar: the trailing edge is sparse when
+    # the universe cache (built on some past date) is older than the freshly
+    # fetched application stocks, so only those few stocks have a close on the
+    # latest bars. Median reflects the bulk of the window that actually drives
+    # neutralization.
+    if len(log_mcap):
+        cov = log_mcap.notna().sum(axis=1)
+        med, last = int(cov.median()), int(cov.iloc[-1])
+    else:
+        med = last = 0
     log.info(
-        "log_mcap panel built: %d×%d, last-bar coverage %d/%d codes",
-        log_mcap.shape[0], log_mcap.shape[1], n_cov, log_mcap.shape[1],
+        "log_mcap panel built: %d×%d, median coverage %d/%d codes (last-bar %d)",
+        log_mcap.shape[0], log_mcap.shape[1], med, log_mcap.shape[1], last,
     )
     return log_mcap
 

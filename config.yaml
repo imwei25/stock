@@ -203,5 +203,6 @@ strategy:
     preprocess:
       winsorize: [0.01, 0.99]
       zscore: true
-      industry_neutralize: false  # P1.5: keep off, single-member sub-industries risk demean-to-zero
+      industry_neutralize: false   # P4-2: harmful here (conflicts w/ industry_relative_strength factor)
+      market_cap_neutralize: true  # P4-3 PASS: +0.156 sharpe over base; needs data/mcap_shares.parquet
       # min_pool_size: 200  # default; cs preprocessing skipped when n_codes < this

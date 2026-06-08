@@ -374,4 +374,29 @@ P4-1 verdict invalidated by discovery of two bugs (small-pool single-member-indu
 
 **P4-1b: ✅ PASS** — Δsharpe=+0.245 / Δreturn=+2.64% / 11/16 stocks won / 0 zero-trade.
 
-See `docs/ab_validation_results.md` P4-1b for full table. Phase 2 (industry_neutralize with global-reference design) still pending. Phase 1 deliverable is now validated.
+See `docs/ab_validation_results.md` P4-1b for full table. Phase 1 deliverable is now validated.
+
+### Phase 2 Outcome (2026-06-09) — market-cap neutralization
+
+Implemented `market_cap_neutralize` (per-day cross-sectional OLS residual on
+`log(market_cap)`; mcap = `close × totalShare`, totalShare from a baostock
+profit-table snapshot, `data/mcap_shares.parquet`). Two A/Bs on
+training_universe=all (4357 stocks, on top of the winsorize+zscore base):
+
+- **P4-2** (`ab_neutralize.yaml`, industry vs market_cap): **market_cap wins** —
+  Δsharpe +0.249, Δreturn +3.99%, drawdown −3.60pp, 13/16 stocks won.
+- **P4-3** (`ab_neutralize_confirm.yaml`, base vs market_cap): **✅ PASS** —
+  Δsharpe +0.156, Δreturn +3.60%, drawdown −0.91pp, 11–12/16 won.
+
+**Verdict**: `market_cap_neutralize` enabled by default in `config.yaml`;
+`industry_neutralize` stays **off** — it *regressed* here (P4-2: 0.154 vs base
+0.247), most likely because the live `selection.json` already carries an
+`industry_relative_strength_20` factor, so blanket within-industry demeaning of
+every factor erased the useful intra-industry alpha. This is the empirical
+answer to §1.4's "neutralization is not free" caveat: size neutralization helped,
+industry neutralization hurt, on this factor set.
+
+The §1.4 gap "市值中性完全没有 — 没有 market_cap 数据通路" is now closed (with the
+static-shares + adjusted-close approximations noted in
+`strategy_factory.build_log_mcap_panel`; a full-PIT refinement is Phase 2.x).
+See `docs/ab_validation_results.md` P4-2 / P4-3 for full tables.
