@@ -454,10 +454,10 @@ portfolio_backtest:
 
 缓存:翻 `mask.enabled` 会改变 `cfg.content_hash` 和 ml_model sig hash → 自动重训 + 重算 score_panel。`factor_panel` 不变(mask 不影响因子值)。
 
-### 因子预处理 (Phase 1, opt-in)
+### 因子预处理 (preprocess)
 
-Phase 1 因子预处理(winsorize / cs_zscore / industry_neutralize)可在 `strategy.ml_factor.preprocess` 段开关,默认全关。
-详见 `docs/superpowers/specs/2026-06-06-factor-preprocessing-phase1-design.md`。
+截面预处理在 `strategy.ml_factor.preprocess` 段开关。`winsorize + zscore` 经 A/B 验证
+(P4-1b,4358-票训练池)**默认开启**(+0.245 sharpe / +2.64% return);两个中性化步默认关。
 
 ```yaml
 strategy:
@@ -465,14 +465,23 @@ strategy:
   ml_factor:
     # ...其他字段
     preprocess:
-      winsorize: [0.01, 0.99]   # null = 关闭
-      zscore: true              # 截面 z-score
-      industry_neutralize: true # 跳过 factor types 含 "fundamental" 的因子
+      winsorize: [0.01, 0.99]    # 每日截面去极值;null = 关闭
+      zscore: true               # 每日截面 z-score
+      industry_neutralize: false # 行业内 demean(跳过 fundamental 因子)
+      market_cap_neutralize: false  # 对 log(总市值) OLS 残差化(跳过 fundamental 因子)
+      min_pool_size: 200         # n_codes < 此值时整条流水线跳过(小池子退化保护)
 ```
 
-**注意**:⚠️ Phase 1 AB 验证结果为 INDECISIVE(Δsharpe=+0.013,阈值 +0.05),默认保持全关。
-主要问题:z-score 后 score 分布变平,`thresholds.strong_buy=0.9` 触发频率骤降,16 票中 5 票零交易。
-Phase 1.5 将做阈值校准 + per-step ablation,见 `docs/ab_validation_results.md` P4-1。
+- **winsorize / zscore**:已默认开启,见 `docs/ab_validation_results.md` P4-1b。
+- **industry_neutralize**:默认关 — 单成员细分行业会触发 silent demean-to-zero,全市场参照设计前不建议开。
+- **market_cap_neutralize**(Phase 2):每日截面把因子对 log(总市值) 做 OLS 残差化,剥离规模暴露。
+  需先拉市值数据:`python scripts/pull_mcap_profit.py`(从 baostock profit 表拉全市场最新 `totalShare`
+  到 `data/mcap_shares.parquet`,串行 ~50-75 min)。mcap = `close × totalShare`(shares 静态广播)。
+  无 `mcap_shares.parquet` 时该步静默跳过 + warning。
+
+A/B 对比 industry vs market_cap 中性化:`python -m stockpool ab --config ab_neutralize.yaml`。
+改 `preprocess` 任一字段会进入 `factor_panels/<sig>/` 缓存 key → 自动重算。
+详见 `docs/superpowers/specs/2026-06-06-factor-preprocessing-phase1-design.md`。
 
 ## ⚠️ 免责声明
 
