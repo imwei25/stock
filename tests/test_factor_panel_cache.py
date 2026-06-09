@@ -401,6 +401,22 @@ def test_cache_invalidates_on_preprocess_change():
     assert sig_a != sig_b
 
 
+def test_cache_sig_changes_on_symmetric_orthogonalize():
+    """Flipping symmetric_orthogonalize yields a distinct factor-panel sig."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.strategy_factory import _factor_panel_sig
+    pool = _pool(["S001"])
+    sig_off, _ = _factor_panel_sig(
+        ["momentum_20"], pool,
+        preprocess_cfg=PreprocessConfig(zscore=True),
+    )
+    sig_on, _ = _factor_panel_sig(
+        ["momentum_20"], pool,
+        preprocess_cfg=PreprocessConfig(zscore=True, symmetric_orthogonalize=True),
+    )
+    assert sig_off != sig_on
+
+
 def test_build_factor_panel_passes_preprocess(monkeypatch):
     """build_factor_panel routes preprocess_cfg through apply_preprocess_pipeline."""
     from stockpool.config import PreprocessConfig
