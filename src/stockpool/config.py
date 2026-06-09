@@ -380,6 +380,13 @@ class PreprocessConfig(BaseModel):
     industry_neutralize: bool = False
     market_cap_neutralize: bool = False
     min_pool_size: int = Field(default=200, ge=0)
+    symmetric_orthogonalize: bool = False
+    # symmetric_orthogonalize (2026-06-10): per-day cross-sectional Löwdin
+    # 对称正交化 — jointly decorrelates the non-fundamental factors so the
+    # weighter sees mutually-orthogonal inputs. Runs as the FINAL preprocess
+    # step (after winsorize/zscore/neutralize). Order-independent, stateless
+    # per day → look-ahead safe. Default False (opt-in). Fundamental-tagged
+    # factors pass through untouched (same as the neutralize steps).
     # n_codes < min_pool_size 时 winsorize / cs_zscore / industry_neutralize /
     # market_cap_neutralize 全部跳过(估计不稳)。industry_neutralize 即使在
     # 大池子也建议保持默认 false:单成员细分行业会触发 silent demean-to-zero

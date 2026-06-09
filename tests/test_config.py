@@ -674,6 +674,7 @@ def test_preprocess_config_defaults_all_off():
     assert cfg.zscore is False
     assert cfg.industry_neutralize is False
     assert cfg.market_cap_neutralize is False
+    assert cfg.symmetric_orthogonalize is False
 
 
 def test_preprocess_market_cap_neutralize_togglable():
@@ -682,6 +683,21 @@ def test_preprocess_market_cap_neutralize_togglable():
     cfg = PreprocessConfig(market_cap_neutralize=True)
     assert cfg.market_cap_neutralize is True
     assert cfg.industry_neutralize is False
+
+
+def test_preprocess_symmetric_orthogonalize_default_off():
+    """symmetric_orthogonalize defaults to False."""
+    from stockpool.config import PreprocessConfig
+    cfg = PreprocessConfig()
+    assert cfg.symmetric_orthogonalize is False
+
+
+def test_preprocess_symmetric_orthogonalize_togglable():
+    """symmetric_orthogonalize is an independent bool switch."""
+    from stockpool.config import PreprocessConfig
+    cfg = PreprocessConfig(symmetric_orthogonalize=True)
+    assert cfg.symmetric_orthogonalize is True
+    assert cfg.market_cap_neutralize is False
 
 
 def test_preprocess_winsorize_invalid_bounds_raises():
