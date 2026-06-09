@@ -409,3 +409,9 @@ def test_is_all_off_false_for_market_cap_neutralize():
     from stockpool.config import PreprocessConfig
     from stockpool.ml.preprocess import _is_all_off
     assert _is_all_off(PreprocessConfig(market_cap_neutralize=True)) is False
+
+
+def test_is_all_off_false_for_symmetric_orthogonalize():
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import _is_all_off
+    assert _is_all_off(PreprocessConfig(symmetric_orthogonalize=True)) is False

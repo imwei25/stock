@@ -181,6 +181,7 @@ def _is_all_off(cfg: "PreprocessConfig") -> bool:
         and cfg.zscore is False
         and cfg.industry_neutralize is False
         and cfg.market_cap_neutralize is False
+        and cfg.symmetric_orthogonalize is False
     )
 
 
