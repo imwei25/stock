@@ -405,6 +405,38 @@ def test_pipeline_mcap_neutralize_skips_fundamental_and_warns(caplog):
     assert any("log_mcap_panel is None" in r.message for r in caplog.records)
 
 
+def test_pipeline_runs_orthogonalize_last():
+    """symmetric_orthogonalize=True → pipeline output factors are decorrelated."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline
+    rng = np.random.default_rng(7)
+    dates = pd.date_range("2025-01-01", periods=3, freq="B")
+    codes = [f"S{i:03d}" for i in range(300)]
+    base = rng.standard_normal((3, 300))
+    noise = rng.standard_normal((3, 300))
+    f1 = pd.DataFrame(base, index=dates, columns=codes)
+    f2 = pd.DataFrame(0.8 * base + 0.6 * noise, index=dates, columns=codes)
+    cfg = PreprocessConfig(symmetric_orthogonalize=True)
+    out = apply_preprocess_pipeline(
+        {"f1": f1, "f2": f2}, cfg, n_codes=300,
+    )
+    d = dates[0]
+    a = out["f1"].loc[d].to_numpy(); b = out["f2"].loc[d].to_numpy()
+    ca = (a - a.mean()) / a.std(ddof=0); cb = (b - b.mean()) / b.std(ddof=0)
+    assert abs(float((ca * cb).mean())) < 1e-6
+
+
+def test_pipeline_orthogonalize_skipped_by_size_guard():
+    """min_pool_size guard skips orthogonalization on a tiny pool."""
+    from stockpool.config import PreprocessConfig
+    from stockpool.ml.preprocess import apply_preprocess_pipeline
+    df = _make_panel(n_days=3, n_stocks=10, seed=8)
+    cfg = PreprocessConfig(symmetric_orthogonalize=True, min_pool_size=200)
+    out = apply_preprocess_pipeline({"f1": df.copy(), "f2": df.copy()},
+                                    cfg, n_codes=10)
+    pd.testing.assert_frame_equal(out["f1"], df)
+
+
 def test_is_all_off_false_for_market_cap_neutralize():
     from stockpool.config import PreprocessConfig
     from stockpool.ml.preprocess import _is_all_off

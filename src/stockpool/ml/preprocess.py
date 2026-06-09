@@ -326,6 +326,7 @@ def apply_preprocess_pipeline(
             "market_cap_neutralize=True but log_mcap_panel is None; "
             "skipping that step (other steps still applied if enabled)"
         )
+    do_ortho = cfg.symmetric_orthogonalize
 
     for name, df in factor_panel.items():
         work = df
@@ -341,4 +342,6 @@ def apply_preprocess_pipeline(
         if do_mcap and not is_fundamental:
             work = market_cap_neutralize_panel(work, log_mcap_panel)
         out[name] = work
+    if do_ortho:
+        out = symmetric_orthogonalize_panel(out, factor_types=factor_types)
     return out
