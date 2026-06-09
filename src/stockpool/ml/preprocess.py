@@ -174,6 +174,85 @@ def market_cap_neutralize_panel(
     return resid
 
 
+def symmetric_orthogonalize_panel(
+    factor_panel: dict[str, pd.DataFrame],
+    factor_types: Mapping[str, tuple[str, ...]] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Per-day cross-sectional symmetric (Löwdin) orthogonalization.
+
+    Jointly decorrelates the **non-fundamental** factors so that, on each day,
+    the cross-sectional correlation between any two output factors is ~0, while
+    each output factor stays maximally close to its (standardised) input
+    (order-independent — unlike Gram-Schmidt). Fundamental-tagged factors pass
+    through untouched (orthogonalising PE/PB against momentum muddies the
+    intrinsic valuation signal — same rationale as the neutralize steps).
+
+    Stateless per day (each day computes its own transform from that day's
+    cross-section only) → look-ahead safe; the predict path reading the same
+    cached panel is automatically consistent with training.
+
+    Args:
+        factor_panel: ``{factor_name: T × N DataFrame}`` (date index, code cols).
+        factor_types: ``{factor_name: (type_tag, ...)}``; names whose tags include
+            ``"fundamental"`` are excluded from orthogonalization (copied through).
+
+    Returns:
+        New dict, same keys. Non-fundamental factors decorrelated per day;
+        fundamental factors and the input frames are never mutated.
+
+        Per-day fallbacks (day returned unchanged for the affected factors):
+          * fewer jointly-valid stocks than factors (``N_valid < K``) → cannot
+            form a full-rank correlation matrix;
+          * all-NaN / empty day.
+        On a non-degenerate day, cells where any non-fundamental factor is NaN
+        are set NaN across all non-fundamental factors (they leave the valid
+        subset and are dropped downstream at stack_panel_to_xy anyway).
+    """
+    types = factor_types or {}
+    nf_names = [
+        n for n in factor_panel
+        if "fundamental" not in types.get(n, ())
+    ]
+    out: dict[str, pd.DataFrame] = {n: factor_panel[n].copy() for n in factor_panel}
+    K = len(nf_names)
+    if K == 0:
+        return out
+
+    ref = factor_panel[nf_names[0]]
+    dates, codes = ref.index, ref.columns
+    cube = np.stack(
+        [factor_panel[n].reindex(index=dates, columns=codes).to_numpy(dtype=float)
+         for n in nf_names],
+        axis=-1,
+    )  # shape (T, N, K)
+
+    transformed = cube.copy()
+    for ti in range(cube.shape[0]):
+        day = cube[ti]                          # (N, K)
+        valid = ~np.isnan(day).any(axis=1)      # stocks with all K factors present
+        n_valid = int(valid.sum())
+        if n_valid < K or n_valid == 0:
+            continue                            # passthrough this day (keep raw)
+        F = day[valid]                          # (n_valid, K)
+        mu = F.mean(axis=0)
+        sigma = F.std(axis=0, ddof=0)
+        sigma = np.where(sigma < 1e-12, 1.0, sigma)
+        Fs = (F - mu) / sigma                   # per-day z-score
+        M = (Fs.T @ Fs) / n_valid               # (K, K) correlation matrix
+        eigvals, eigvecs = np.linalg.eigh(M)
+        eigvals = np.maximum(eigvals, 1e-10)    # floor to keep S finite
+        S = eigvecs @ np.diag(eigvals ** -0.5) @ eigvecs.T
+        transformed[ti][valid] = Fs @ S
+        # Stocks missing any non-fundamental factor leave the valid subset →
+        # NaN them across ALL non-fundamental factors so the day is consistent
+        # (dropped downstream at stack_panel_to_xy anyway).
+        transformed[ti][~valid] = np.nan
+
+    for k, name in enumerate(nf_names):
+        out[name] = pd.DataFrame(transformed[:, :, k], index=dates, columns=codes)
+    return out
+
+
 def _is_all_off(cfg: "PreprocessConfig") -> bool:
     """True when every step is disabled (cfg semantically a no-op)."""
     return (
