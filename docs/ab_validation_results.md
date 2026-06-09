@@ -278,6 +278,54 @@ P0-2 把 PR-B1(LGB selector)和 PR-B2(LGB weighter)合并测,显示 -0.203 sharp
 
 ---
 
+## P4-4: 对称正交化 (symmetric / Löwdin orthogonalize) — ⚪ NEUTRAL,默认保持 OFF
+
+**问题**:在已验证的生产默认 preprocess(winsorize + cs_zscore + market_cap_neutralize)之上,
+对选定因子做**逐日截面对称正交化**(去除因子间相关性)是否还能加分?
+
+**Setup**:`ab_orthogonalize.yaml`。两 arm 均 `training_universe=all`(~4377 票,full PIT 横截面),
+应用/回测池 = `config.yaml` 全 16 票,`equity_curve_holding_days=10`,factors = `reports/selection.json`(20 因子)。
+- arm `base`:`symmetric_orthogonalize: false`
+- arm `ortho`:`symmetric_orthogonalize: true`(其余完全相同)
+
+正交化作为 preprocess 流水线**最后一步**(winsorize→zscore→mcap→orthogonalize),joint 跨因子逐日
+`F_orth = F_std · M^(-1/2)`(M = 标准化截面相关矩阵,`eigh` + 特征值 floor 1e-10)。两 arm factor_panel
+sig 独立(base `2d8bcec3f665` / ortho `d55d2ce41832`),缓存隔离已验证。
+
+**聚合(16 只共同股)**:
+
+| Metric | base mean | ortho mean | base median | ortho median | Δ mean (ortho−base) | base/ortho wins |
+|---|---|---|---|---|---|---|
+| Total return | +6.84% | +6.33% | +5.72% | +7.20% | −0.51% | 10 / 6 |
+| Annualized return | +3.12% | +2.92% | +2.85% | +3.57% | −0.20% | 10 / 6 |
+| Sharpe | +0.188 | +0.195 | +0.166 | +0.236 | **+0.007** | 8 / 8 |
+| Max drawdown(越低越好) | 11.19% | 9.66% | 8.48% | 6.58% | −1.53% | 6 / 10 |
+| Win rate | 59.09% | 56.46% | 60.66% | 60.11% | −2.63% | 11 / 5 |
+| Avg trade ret % | +1.61 | +1.79 | +0.98 | +1.63 | +0.18 | 8 / 8 |
+| Trade count | 69 | 66 | 65 | 65 | −3 | — |
+
+**Pass criteria 判定**(同 P4-3 标准):
+- Δsharpe ≥ +0.05: ❌(+0.007,基本持平)
+- Total return 同向不退化: ⚠️(mean −0.51% 略退,median +1.48% 改善)
+- Stocks won > n/2: ⚪(Sharpe 8-8 平手;return base 10-6 略优)
+- Drawdown 不退化:✅(改善 1.53pp,ortho 10-6 胜)
+
+**Verdict: ⚪ NEUTRAL** — 头部 Δsharpe mean +0.007 落在噪声内,未达 +0.05 加分门槛。
+正交化**改善回撤 + 中位 Sharpe/return + 单笔均收**,但**略降 mean return 与胜率**,净效应持平。
+→ **`symmetric_orthogonalize` 默认保持 false。**
+
+**归因**:`selection.json` 的 20 个因子源自 `pick-by-ic`(带 `max_corr` 去相关筛) + Lasso 稀疏选择,
+本身已较解耦,留给正交化可去除的冗余有限,故增益不显著。模块本身实现正确(逐日正交性、order-independence、
+近奇异 floor 等单测全过),功能可用 —— 后续若换一组**高相关**的原始因子(未经去相关筛)做选择,
+或扩大应用池(16 → 50+)降低噪声,值得重测。
+
+**先小后大两阶段**:smoke(3 票)Δsharpe mean −0.042,full(16 票)+0.007 —— 小样本方向不稳,
+印证 16 票应用池仍偏小、AB 无显著性检验(设计如此),结论取 directional 即可。
+
+**已知局限**:应用池仅 16 票,无 p 值;mcap 近似同 P4-2/P4-3(最新股本静态广播 + 前复权 close)。
+
+---
+
 ## §5 工程结论(2026-05-24)
 
 经过 7 个 A/B 对照(P0-1 / P0-2 / P1-1 / P1-2 / P2-1 / P3-1 / P3-2,P3-2 重跑两次),得到的**当前默认 sweet spot**:
