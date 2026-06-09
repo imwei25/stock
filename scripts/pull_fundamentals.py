@@ -103,17 +103,30 @@ def pull_table(table: str, codes: list[str], quarters: list[tuple[int, int]]) ->
         log.info("[%s] already complete (%d rows)", table, len(rows))
         return
 
-    def _login() -> bool:
-        lg = bs.login()
-        if lg.error_code != "0":
-            log.error("[%s] baostock login failed: %s", table, lg.error_msg)
-            return False
-        return True
+    def _login_retry(attempts: int = 6, base_delay: float = 20.0) -> bool:
+        """Login with exponential backoff. baostock throttles after long pulls
+        ('网络接收错误'); wait it out rather than skipping the whole table."""
+        for a in range(1, attempts + 1):
+            try:
+                bs.logout()
+            except Exception:
+                pass
+            lg = bs.login()
+            if lg.error_code == "0":
+                return True
+            delay = min(base_delay * (2 ** (a - 1)), 600.0)
+            log.warning("[%s] login failed (%s); attempt %d/%d, sleeping %.0fs",
+                        table, lg.error_msg, a, attempts, delay)
+            time.sleep(delay)
+        return False
 
-    if not _login():
+    if not _login_retry():
+        log.error("[%s] login unrecoverable; skipping table (resume later)", table)
+        _save(rows, out)
         return
     fn = getattr(bs, fn_name)
     t0 = time.time()
+    consec_fail = 0  # consecutive query failures (exception OR bad error_code)
     try:
         for i, code in enumerate(todo, 1):
             bs_code = _to_bs_code(code)
@@ -121,19 +134,31 @@ def pull_table(table: str, codes: list[str], quarters: list[tuple[int, int]]) ->
                 try:
                     rs = fn(code=bs_code, year=year, quarter=q)
                     if rs.error_code != "0":
-                        continue
+                        # Not an exception — baostock returns a bad code when the
+                        # session degrades. Count it so we can back off (the old
+                        # bare `continue` let 875 stocks fly by producing nothing).
+                        consec_fail += 1
+                        raise RuntimeError(f"error_code={rs.error_code} {rs.error_msg}")
+                    consec_fail = 0
                     while rs.next():
                         rec = dict(zip(rs.fields, rs.get_row_data()))
                         rec["code"] = code
                         rows.append(rec)
                 except Exception as e:  # noqa: BLE001
-                    log.warning("[%s] %s %dQ%d failed: %s", table, bs_code, year, q, e)
-                    try:
-                        bs.logout()
-                    except Exception:
-                        pass
-                    _login()
-                    fn = getattr(bs, fn_name)
+                    if not isinstance(e, RuntimeError):
+                        consec_fail += 1
+                    # Sustained failure → baostock throttled; save, back off, relogin.
+                    if consec_fail >= 5:
+                        log.warning("[%s] %d consecutive failures (last: %s); "
+                                    "saving + backing off", table, consec_fail, e)
+                        _save(rows, out)
+                        if not _login_retry():
+                            log.error("[%s] still down after backoff at code %s; "
+                                      "aborting table (resume later)", table, code)
+                            _save(rows, out)
+                            return
+                        fn = getattr(bs, fn_name)
+                        consec_fail = 0
             if i % 250 == 0:
                 rate = (time.time() - t0) / i
                 eta = rate * (len(todo) - i) / 60
