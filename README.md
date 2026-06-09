@@ -469,6 +469,7 @@ strategy:
       zscore: true               # 每日截面 z-score
       industry_neutralize: false # 行业内 demean(实测有害,默认关)
       market_cap_neutralize: true   # 对 log(总市值) OLS 残差化(P4-3 PASS,默认开)
+      symmetric_orthogonalize: false # 逐日截面对称(Löwdin)正交化去相关(P4-4 中性,默认关)
       min_pool_size: 200         # n_codes < 此值时整条流水线跳过(小池子退化保护)
 ```
 
@@ -480,9 +481,14 @@ strategy:
   A/B 验证:P4-3 在 base 之上 Δsharpe +0.156(PASS);P4-2 优于 industry neutralize Δsharpe +0.249。
 - **industry_neutralize**:默认**关** — A/B 实测有害(与 selection 里的 `industry_relative_strength` 因子冲突,
   对全体因子再行业 demean 抹掉了有效的行业内 alpha);且单成员细分行业仍有 silent demean-to-zero 风险。
+- **symmetric_orthogonalize**(2026-06-10,**默认关**):流水线最后一步,对非基本面因子做逐日截面**对称(Löwdin)
+  正交化**去除因子间相关性(`F_std · M^(-1/2)`),之后 IC/IR 加权照常跑在去相关后的因子上。A/B 实测中性
+  (P4-4:Δsharpe mean +0.007,未达 +0.05 门槛——`selection.json` 因子已经 `pick-by-ic` max_corr + Lasso
+  筛过,冗余有限),故默认关闭;换一组高相关原始因子或扩大应用池时值得重测。
 
 A/B 对比 industry vs market_cap 中性化:`python -m stockpool ab --config ab_neutralize.yaml`;
-确认 base vs market_cap:`python -m stockpool ab --config ab_neutralize_confirm.yaml`。
+确认 base vs market_cap:`python -m stockpool ab --config ab_neutralize_confirm.yaml`;
+对称正交化(smoke / full):`python -m stockpool ab --config ab_orthogonalize_small.yaml` / `ab_orthogonalize.yaml`。
 改 `preprocess` 任一字段会进入 `factor_panels/<sig>/` 缓存 key → 自动重算。
 详见 `docs/superpowers/specs/2026-06-06-factor-preprocessing-phase1-design.md`。
 
