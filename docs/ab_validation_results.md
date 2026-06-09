@@ -264,6 +264,8 @@ P0-2 把 PR-B1(LGB selector)和 PR-B2(LGB weighter)合并测,显示 -0.203 sharp
 
 **Verdict: ✅ PASS** — `market_cap_neutralize` 在 winsorize+zscore base 之上净贡献 sharpe +0.156 / return +3.60% / 回撤改善 0.91pp。
 
+**复现确认(2026-06-09 晚,fresh rebuild 非 cache 命中,数据多 1 天)**:Δsharpe **+0.158** / Δreturn **+3.69%** / DD −0.91pp / 11–12/16 胜 —— 与上午几乎完全一致,结论可复现。
+
 **Phase 2 总结(回答 "按市值 vs industry neutralize"):**
 - ✅ **market_cap_neutralize**:在 base 之上加分(P4-3 PASS),且全面优于 industry(P4-2,Δsharpe +0.249)。→ **默认开启**。
 - ❌ **industry_neutralize**:在本 setup 下有害(P4-2:0.154 vs base 0.247/0.311),怀疑与 selection.json 已含 `industry_relative_strength_20` 冲突(对全体因子再行业 demean 抹掉了有效的行业内 alpha)。→ **维持默认 false**。
