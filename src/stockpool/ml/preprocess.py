@@ -186,6 +186,9 @@ def symmetric_orthogonalize_panel(
     (order-independent — unlike Gram-Schmidt). Fundamental-tagged factors pass
     through untouched (orthogonalising PE/PB against momentum muddies the
     intrinsic valuation signal — same rationale as the neutralize steps).
+    On near-singular days (collinear factors) the ``1e-10`` eigenvalue floor
+    keeps the transform finite at the cost of leaving those factors partially
+    correlated — graceful degradation, never NaN/inf.
 
     Stateless per day (each day computes its own transform from that day's
     cross-section only) → look-ahead safe; the predict path reading the same

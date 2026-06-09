@@ -115,3 +115,17 @@ def test_input_not_mutated():
     _ = symmetric_orthogonalize_panel(fp)
     for k in fp:
         pd.testing.assert_frame_equal(fp[k], snap[k])
+
+
+def test_near_collinear_stays_finite():
+    """Near-duplicate factors hit the eigenvalue floor → output stays finite (no NaN/inf)."""
+    from stockpool.ml.preprocess import symmetric_orthogonalize_panel
+    base, dates, codes = _panel(n_days=3, n_stocks=300, seed=11)
+    tiny, _, _ = _panel(n_days=3, n_stocks=300, seed=12)
+    f1 = pd.DataFrame(base, index=dates, columns=codes)
+    # f2 ~ f1 + tiny perturbation → M is near-singular.
+    f2 = pd.DataFrame(base + 1e-9 * tiny, index=dates, columns=codes)
+    out = symmetric_orthogonalize_panel({"f1": f1, "f2": f2})
+    for name in ("f1", "f2"):
+        vals = out[name].to_numpy()
+        assert np.isfinite(vals).all(), f"{name} has non-finite values"
