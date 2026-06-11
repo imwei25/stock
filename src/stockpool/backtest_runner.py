@@ -162,6 +162,7 @@ def backtest_stocks(
                     lot_sizer=build_lot_sizer(cfg.backtest.sizing),
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
                     limit_pct=infer_limit_pct(s.code, st_codes),
+                    entry_mode=cfg.backtest.entry_mode,
                 )
             else:
                 strategy = build_strategy(
@@ -183,6 +184,7 @@ def backtest_stocks(
                     lot_sizer=build_lot_sizer(cfg.backtest.sizing),
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
                     limit_pct=infer_limit_pct(s.code, st_codes),
+                    entry_mode=cfg.backtest.entry_mode,
                 )
             per_stock.append((s.code, s.name, result))
         except Exception as e:

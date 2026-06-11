@@ -32,7 +32,11 @@ def compute_hit_rates(
     if len(df) < 2:
         return {}
 
-    buckets: dict[str, dict] = defaultdict(lambda: {
+    # P2-11: 桶 key = (signal_type, direction)。ma_cross_strong / macd_cross_* /
+    # kdj_normal_cross / boll_* / macd_histogram_expand 都是 ±1 双向复用同一
+    # signal_type,旧实现混进同一桶且 direction 被最后一次触发覆盖 —— 日报
+    # "单信号命中率"在这些信号上是统计噪声。
+    buckets: dict[tuple, dict] = defaultdict(lambda: {
         "count": 0,
         "direction": 0,
         "returns": defaultdict(list),
@@ -41,11 +45,14 @@ def compute_hit_rates(
     closes = df["close"].values
 
     for i in range(1, len(df)):
-        window = df.iloc[max(0, i - 1): i + 1]
+        # P2-11: 窗口 ≥4 行 —— macd_histogram_expand 需要 len(df)>=4,
+        # 旧的 2 行窗口让它永远进不了命中率表,但实时评级又给它计分,
+        # 同一报告两套口径。与实时路径一致地传足够历史(detect 仍只看尾部)。
+        window = df.iloc[max(0, i - 3): i + 1]
         triggers = detect_signals(window, weights)
 
         for t in triggers:
-            b = buckets[t.signal_type]
+            b = buckets[(t.signal_type, t.direction)]
             b["count"] += 1
             b["direction"] = t.direction
             for n in forward_days:
@@ -55,8 +62,11 @@ def compute_hit_rates(
                     b["returns"][n].append(ret_pct)
 
     result: dict[str, dict] = {}
-    for sig, b in buckets.items():
-        entry = {"count": b["count"], "direction": b["direction"]}
+    for (sig_type, direction), b in buckets.items():
+        # 展示 key:双向信号区分多空(如 "macd_cross_above_zero[+]" / "[-]")
+        sig = f"{sig_type}[{'+' if direction >= 0 else '-'}]"
+        entry = {"count": b["count"], "direction": b["direction"],
+                 "signal_type": sig_type}
         for n in forward_days:
             rs = b["returns"][n]
             if rs:

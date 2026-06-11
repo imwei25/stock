@@ -556,6 +556,7 @@ def simulate_strategy_equity_curve(
     lot_sizer: LotSizer | None = None,
     max_concurrent_lots: int | None = None,
     limit_pct: float | None = None,
+    entry_mode: str = "every_bar",
 ) -> EquityResult:
     """Generic equity-curve simulator: runs ``strategy`` for each holding-day cap.
 

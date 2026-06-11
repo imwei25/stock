@@ -456,6 +456,7 @@ class MultiLotBacktestEngine:
         risk_free_rate: float = 0.02,
         max_concurrent_lots: int | None = None,
         limit_pct: float | None = None,
+        entry_mode: str = "every_bar",
     ):
         if lot_sizer is not None and position_size is not None:
             raise ValueError(
@@ -474,6 +475,11 @@ class MultiLotBacktestEngine:
         self.risk_free_rate = risk_free_rate
         self.max_concurrent_lots = max_concurrent_lots
         self.limit_pct = limit_pct  # P1-3,语义同 BacktestEngine
+        # P2-13: "edge" = 仅信号边沿开仓;"every_bar" = legacy 每 buy bar 开新 lot。
+        # 引擎级默认 every_bar 保持直接构造的向后兼容;config 默认 edge。
+        if entry_mode not in ("edge", "every_bar"):
+            raise ValueError(f"entry_mode must be 'edge' or 'every_bar', got {entry_mode!r}")
+        self.entry_mode = entry_mode
 
     def run(self, daily_df: pd.DataFrame, max_holding_days: int) -> BacktestResult:
         signals = self.strategy.generate_signals(daily_df)
@@ -491,6 +497,7 @@ class MultiLotBacktestEngine:
             costs=self.costs,
             risk_free_rate=self.risk_free_rate,
             limit_pct=self.limit_pct,
+            entry_mode=self.entry_mode,
         )
 
     def sweep_holding_days(
@@ -512,6 +519,7 @@ def _simulate_multi_lot(
     costs: TradeCosts,
     risk_free_rate: float,
     limit_pct: float | None = None,
+    entry_mode: str = "every_bar",
 ) -> BacktestResult:
     n = len(signals)
     if n == 0:
@@ -607,8 +615,16 @@ def _simulate_multi_lot(
             limit_pct is not None
             and open_hits_limit_up(open_t, prev_close, limit_pct)
         )
+        # P2-13 edge 模式:信号在 t-2 已是 buy(非边沿)→ 不再加仓。
+        if entry_mode == "edge" and t >= 2 and strategy.should_enter(BarContext(
+            bar_idx=t - 2, date=pd.Timestamp(dates[t - 2]),
+            close=float(closes[t - 2]), signal=sig_values[t - 2],
+        )):
+            buy_blocked = True
         if strategy.should_enter(bctx) and capacity_ok and not buy_blocked:
-            size = lot_sizer(t, opens, closes)
+            # P3-17: sizer 只见执行 bar 之前的 close(物理切片防 look-ahead);
+            # opens 可含执行 bar 自身(那是它的成交价)。
+            size = lot_sizer(t, opens[: t + 1], closes[:t])
             if size > 0 and cash >= size:
                 cash -= size
                 committed = size * (1 - costs.buy_cost)

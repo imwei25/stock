@@ -47,21 +47,31 @@ def _fmt(val, kind: str) -> str:
     return str(val)
 
 
-def _safe_num(v) -> float:
-    """Coerce metric value to float, treating None as 0.0."""
-    return 0.0 if v is None else float(v)
-
-
-def _arm_metrics(arm_result: ArmResult) -> dict[str, dict[str, float]]:
-    """Map code → metrics dict (the single-N dict from EquityResult)."""
+def _arm_metrics(
+    arm_result: ArmResult, N: int | None = None,
+) -> dict[str, dict[str, float]]:
+    """Map code → metrics dict for holding-day ``N``(None = 第一个 N)。"""
     out: dict[str, dict[str, float]] = {}
     for code, _name, res in arm_result.per_stock:
-        N = next(iter(res.metrics))
-        out[code] = res.metrics[N]
+        key = N if N is not None else next(iter(res.metrics))
+        if key in res.metrics:
+            out[code] = res.metrics[key]
     return out
 
 
-def compute_diff_table(arm_a: ArmResult, arm_b: ArmResult) -> dict:
+def shared_holding_days(arm_a: ArmResult, arm_b: ArmResult) -> list[int]:
+    """两 arm 共有的 holding-day N 列表(P2-14:逐 N 出表,不再只取第一个)。"""
+    def _ns(arm):
+        ns: set[int] = set()
+        for _c, _n, res in arm.per_stock:
+            ns.update(res.metrics.keys())
+        return ns
+    return sorted(_ns(arm_a) & _ns(arm_b))
+
+
+def compute_diff_table(
+    arm_a: ArmResult, arm_b: ArmResult, N: int | None = None,
+) -> dict:
     """Aggregate per-metric stats over stocks present in BOTH arms.
 
     Returns a dict:
@@ -73,8 +83,8 @@ def compute_diff_table(arm_a: ArmResult, arm_b: ArmResult) -> dict:
     Each row: label / kind / higher_better / a_mean / a_median / b_mean /
     b_median / diff_mean / a_wins / b_wins.
     """
-    a_metrics = _arm_metrics(arm_a)
-    b_metrics = _arm_metrics(arm_b)
+    a_metrics = _arm_metrics(arm_a, N)
+    b_metrics = _arm_metrics(arm_b, N)
     common = sorted(set(a_metrics) & set(b_metrics))
 
     rows = []
@@ -87,8 +97,22 @@ def compute_diff_table(arm_a: ArmResult, arm_b: ArmResult) -> dict:
                 "diff_mean": None, "a_wins": 0, "b_wins": 0,
             })
             continue
-        a_vals = [_safe_num(a_metrics[c].get(key)) for c in common]
-        b_vals = [_safe_num(b_metrics[c].get(key)) for c in common]
+        # P2-14: None(短窗口年化 / 无交易胜率等)直接跳过该股的配对样本,
+        # 不再按 0 混入均值拉偏小样本统计。
+        pairs = [
+            (a_metrics[c].get(key), b_metrics[c].get(key)) for c in common
+        ]
+        pairs = [(a, b) for a, b in pairs if a is not None and b is not None]
+        if not pairs:
+            rows.append({
+                "label": label, "kind": kind, "higher_better": higher_better,
+                "a_mean": None, "a_median": None,
+                "b_mean": None, "b_median": None,
+                "diff_mean": None, "a_wins": 0, "b_wins": 0,
+            })
+            continue
+        a_vals = [float(a) for a, _ in pairs]
+        b_vals = [float(b) for _, b in pairs]
         a_mean = sum(a_vals) / len(a_vals)
         b_mean = sum(b_vals) / len(b_vals)
         a_med = statistics.median(a_vals)
@@ -145,7 +169,13 @@ def _sharpe_scatter(arm_a: ArmResult, arm_b: ArmResult) -> str:
     common = sorted(set(a_metrics) & set(b_metrics))
     if not common:
         return "<p>No common stocks — scatter omitted.</p>"
-    points = [[a_metrics[c]["sharpe"], b_metrics[c]["sharpe"], c] for c in common]
+    points = [
+        [a_metrics[c]["sharpe"], b_metrics[c]["sharpe"], c] for c in common
+        if a_metrics[c].get("sharpe") is not None
+        and b_metrics[c].get("sharpe") is not None
+    ]
+    if not points:
+        return "<p>No comparable sharpe values ? scatter omitted.</p>"
     vals = [p[0] for p in points] + [p[1] for p in points]
     lo, hi = min(vals), max(vals)
     if lo == hi:
@@ -186,7 +216,11 @@ def _diff_histogram(arm_a: ArmResult, arm_b: ArmResult) -> str:
     a_metrics = _arm_metrics(arm_a)
     b_metrics = _arm_metrics(arm_b)
     common = sorted(set(a_metrics) & set(b_metrics))
-    diffs = [b_metrics[c]["sharpe"] - a_metrics[c]["sharpe"] for c in common]
+    diffs = [
+        b_metrics[c]["sharpe"] - a_metrics[c]["sharpe"] for c in common
+        if a_metrics[c].get("sharpe") is not None
+        and b_metrics[c].get("sharpe") is not None
+    ]
     if not diffs:
         return "<p>No common stocks — histogram omitted.</p>"
 
@@ -358,8 +392,19 @@ def render_ab_report(ab_result: ABResult, output_dir: str | Path) -> Path:
     out_path = output_dir / f"{ab_result.run_date}.html"
 
     banner = _metadata_banner(ab_result)
-    table = compute_diff_table(ab_result.arm_a, ab_result.arm_b)
-    table_html = _diff_table_html(table, ab_result.arm_a.name, ab_result.arm_b.name)
+    # P2-14: 每个共有 holding-day N 一张 diff 表(旧版只取第一个 N 且无标注)
+    ns = shared_holding_days(ab_result.arm_a, ab_result.arm_b) or [None]
+    table_parts = []
+    common_count = 0
+    for n in ns:
+        tbl = compute_diff_table(ab_result.arm_a, ab_result.arm_b, N=n)
+        common_count = max(common_count, tbl["common_stocks_count"])
+        label = f"N={n}" if n is not None else "默认 N"
+        table_parts.append(
+            f"<h3>持有期 {label}</h3>"
+            + _diff_table_html(tbl, ab_result.arm_a.name, ab_result.arm_b.name)
+        )
+    table_html = "".join(table_parts)
     scatter = _sharpe_scatter(ab_result.arm_a, ab_result.arm_b)
     histogram = _diff_histogram(ab_result.arm_a, ab_result.arm_b)
     cards = _per_stock_cards(ab_result.arm_a, ab_result.arm_b)
@@ -376,7 +421,7 @@ def render_ab_report(ab_result: ABResult, output_dir: str | Path) -> Path:
   </style>
 </head><body>
   {banner}
-  <h2>Aggregate (over {table['common_stocks_count']} common stocks)</h2>
+  <h2>Aggregate (over {common_count} common stocks)</h2>
   {table_html}
   <h2>Sharpe scatter</h2>
   <div class='chart-wrap'>{scatter}</div>

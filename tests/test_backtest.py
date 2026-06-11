@@ -45,8 +45,10 @@ def test_hit_rate_breakout_high_5d(weights):
     df = _make_history_with_planted_breakouts()
     stats = compute_hit_rates(df, weights, forward_days=[5, 10, 20])
 
-    assert "breakout_new_high" in stats
-    s = stats["breakout_new_high"]
+    # P2-11: 桶 key 含方向后缀 —— 双向复用同一 signal_type 的信号
+    # (macd_cross_* 等)不再多空混桶
+    assert "breakout_new_high[+]" in stats
+    s = stats["breakout_new_high[+]"]
     assert s["count"] == 1
     expected_5d = (110 * 1.01 ** 5 / 110 - 1) * 100
     assert s["forward_5"]["mean_return_pct"] == pytest.approx(expected_5d, rel=1e-3)

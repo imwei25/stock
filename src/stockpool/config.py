@@ -160,6 +160,13 @@ class BacktestConfig(BaseModel):
     risk_free_rate: float = 0.02
     costs: BacktestCostConfig = Field(default_factory=BacktestCostConfig)
     engine: Literal["single", "multi_lot"] = "multi_lot"
+    # multi_lot 开仓节奏(P2-13):
+    #   edge      — 仅在信号边沿(neutral→buy)开仓(默认)。ml_factor 的
+    #               分位 verdict 在 buy 区间内每天都输出 buy,every_bar 会
+    #               每根 bar 加仓 0.1 直到现金耗尽 —— 隐式金字塔加仓,
+    #               摩擦成本远高于直觉。
+    #   every_bar — legacy 行为,每个 buy bar 都开新 lot。
+    entry_mode: Literal["edge", "every_bar"] = "edge"
     sizing: SizingConfig = Field(default_factory=SizingConfig)
     # Deprecated alias for sizing.fixed.size. None = use sizing.
     # If set alongside a non-default sizing block, raises ValueError.

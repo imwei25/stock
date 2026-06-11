@@ -194,6 +194,21 @@ def run_ab(
 
     plan = _decide_pool_sharing(arm_cfgs) if share_pool else _no_share_plan()
 
+    # P3-18: --refresh 时先统一拉一次数据,两 arm 都用 refresh=False 读同一
+    # 份缓存 —— 否则两 arm 各自拉取,数据切片可能不一致(盘中 bar 防护已
+    # 消掉最大头,这里保证严格同源)。
+    if refresh:
+        from stockpool.fetcher import fetch_daily
+        for s in stocks:
+            try:
+                fetch_daily(
+                    s.code, base_cfg.data.history_days, base_cfg.data.cache_dir,
+                    force_refresh=True, source=base_cfg.data.source,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning("AB pre-fetch failed for %s: %s", s.code, e)
+        refresh = False
+
     shared_universe = None
     if plan["load_universe"]:
         try:
