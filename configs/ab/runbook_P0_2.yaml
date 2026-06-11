@@ -1,0 +1,58 @@
+base_config: ../../config.yaml
+arms:
+  lasso_ic_baseline:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors:
+          - momentum_20
+          - macd_hist
+          - rsi_centered_14
+          - ma_distance_20
+          - vol_ratio_5
+          - boll_position_20
+          - ma_slope_20_5
+          - kdj_j
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: pool
+        share_pool_fit: true
+        embargo_days: 0          # 关键:还原 PR-A 之前的旧行为
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+    backtest:
+      equity_curve_holding_days: [10]
+  lgb_lgb_default:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors:
+          - momentum_20
+          - macd_hist
+          - rsi_centered_14
+          - ma_distance_20
+          - vol_ratio_5
+          - boll_position_20
+          - ma_slope_20_5
+          - kdj_j
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: pool
+        share_pool_fit: true
+        # embargo_days 默认 None(auto = horizon)
+        selector:
+          type: lightgbm
+        weighter:
+          type: lightgbm
+    backtest:
+      equity_curve_holding_days: [10]

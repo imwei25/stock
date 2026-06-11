@@ -4,7 +4,7 @@
 # current production-default preprocess (winsorize + zscore + market_cap_neutralize).
 #   arm base:  orthogonalize OFF
 #   arm ortho: + symmetric_orthogonalize ON
-base_config: config.yaml
+base_config: ../../config.yaml
 arms:
   base:
     strategy:

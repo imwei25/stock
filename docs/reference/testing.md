@@ -1,6 +1,6 @@
 # 测试参考
 
-615 个测试,`python -m pytest tests/ -q` 一次跑完。
+~857 个测试,`python -m pytest tests/ -q` 一次跑完(约 3 分钟)。
 
 **写测试时**:用合成 OHLCV、`monkeypatch` 掉 AKShare 和 `_today`(`test_cli_backtest.py` 是参考)。**新增按域覆盖文件时,在本表加一行。**
 
@@ -8,6 +8,25 @@
 
 | 文件 | 覆盖 |
 |---|---|
+| `test_consistency_contract.py` | **predict/backtest 一致性契约**(composite+ml)+ 端到端黄金值锚点(精确 equity/metrics) |
+| `test_fetcher_adjust.py` | hfq 复权(段内锚定/接缝校验/盘中 bar/marker 迁移) |
+| `test_volume_unit.py` / `test_mootdx_pagination.py` | volume 手→股统一;800 根分页 |
+| `test_baostock_backend.py` | 线程锁、tradestatus 停牌行、增量空结果 |
+| `test_fundamentals_fix.py` | PE/PB/ROA 字段修复、TTM、PIT 细节、覆盖率补拉、--refresh-fundamentals |
+| `test_listing_pit.py` | stock_basics PIT 名单、ST 保留/标记、ST ±5% mask |
+| `test_trade_calendar.py` | 交易日历、NO_PROXY 环境变量 |
+| `test_label_basis.py` | open-to-open 标签数学、mask 进出场 bar、embargo +1 |
+| `test_weighters_daily_ic.py` | 逐日截面 IC、IR 时间分块、行序不变性 |
+| `test_factors_analysis_alignment.py` | analyze 口径对齐、end-date 截断、Newey-West |
+| `test_preprocess_interlock.py` | broadcast×zscore 互锁、覆盖率总闸、build_strategy 回退 |
+| `test_predict_impute.py` | fill_missing fit 均值、mcap 缺失 NaN、Lasso y 标准化 |
+| `test_factor_panel_sig_completeness.py` | sig 含 first_date、aux mtime 失效 |
+| `test_limit_rejection.py` | 涨跌停拒单(单仓/多 lot)、infer_limit_pct |
+| `test_portfolio_engine_realism.py` | 差量调仓、turnover、退市核销、无 opens_next 窥视、min_commission |
+| `test_entry_mode_edge.py` | edge 开仓、sizer 历史切片 |
+| `test_config_guards.py` | verdicts/scoring/indicators 校验、extra=forbid |
+| `test_scoring_with_stock.py` | 组合 scoring 逐股 with_stock 绑定 |
+| `test_mcap_pit_shares.py` | mcap PIT 股本 + 快照回退 |
 | `test_backtesting_framework.py` | 引擎契约、T+1、成本、扫 N、Strategy ABC |
 | `test_multi_lot_engine.py` | 多仓位 lot 独立计时、现金约束、reset hook;`lot_sizer` 注入 + `Trade.lot_size` 透传 + skip-fallback |
 | `test_timer_reset.py` | strong_buy 刷新计时;reset 与 exit 同时为真时 reset 胜出 |

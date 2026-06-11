@@ -204,9 +204,13 @@ recommend_pool:
 | `akshare` | 东财 HTTP 爬虫;字段易变 | 想用东财行业板块时 |
 
 **价格统一后复权 (hfq)**:三个源的除权除息跳空都已消除(mootdx 用同源 xdxr 事件复权);
-盘中 15:05 前拉到的当日半根 K 线不会写入缓存;增量更新自带接缝校验,数据异常自动全量重拉。
-**切换 source(或复权口径升级)自动 force_refresh**(`data/.data_source` 标记比对,避免混源/混口径污染)。
+盘中 15:05 前拉到的当日半根 K 线不会写入缓存;增量更新自带接缝校验,数据异常自动全量重拉;
+volume 统一为"股"。**切换 source(或缓存口径升级)自动 force_refresh**(`data/.data_source` 标记比对)。
 行业板块在 mootdx/baostock 下统一走 mootdx 的通达信行业指数(88xxxx)。
+
+**回测执行真实性(2026-06)**:一字涨停拒买/跌停拒卖、multi_lot 默认仅信号边沿开仓
+(`backtest.entry_mode: edge`)、组合差量调仓 + 换手率指标、退市持仓自动核销;
+训练标签为 open-to-open(与 T+1 开盘成交对齐)。日报与回测的一致性有契约测试保障。
 
 ```yaml
 data:

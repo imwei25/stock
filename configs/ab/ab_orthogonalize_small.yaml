@@ -5,7 +5,7 @@
 # stocks_filter keeps the backtest set small (3 stocks) for speed.
 #   arm base:  current production-default preprocess, orthogonalize OFF
 #   arm ortho: same + symmetric_orthogonalize ON
-base_config: config.yaml
+base_config: ../../config.yaml
 stocks_filter:
   - "605589"
   - "603986"

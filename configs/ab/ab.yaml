@@ -2,8 +2,7 @@
 # 两边都用同一套 selector/weighter (lasso + ic),只换因子列表,隔离变量。
 # training_universe=pool 让 16 只 cfg.stocks 自训自测,跑得快。
 
-base_config: config.yaml
-
+base_config: ../../config.yaml
 arms:
   baseline_8factors:
     strategy:

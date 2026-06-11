@@ -1,4 +1,4 @@
-base_config: config.yaml
+base_config: ../../config.yaml
 arms:
   baseline:
     strategy:

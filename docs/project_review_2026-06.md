@@ -6,6 +6,20 @@
 
 ---
 
+## 修复状态(2026-06-12)
+
+> **阶段一~四全部完成**(P0×6、P1×10、P2×30、P3 绝大部分),测试 857 全绿。
+> 提交序列:`ccef8b4`(hfq/盘中bar/接缝)→ `fix(core)` 两批(volume/分页/基本面/
+> baostock/标签 o2o/IC 统一/metrics)→ `feat(data)`(PIT listing/ST)→
+> `fix(ml)`(analyze 对齐/互锁/覆盖率闸)→ `feat(engine)`(涨跌停拒单)→
+> `feat(portfolio)`(差量调仓/turnover/退市估值)→ `feat(engine/ab)`(edge/
+> 逐N报表/hit-rate)→ `fix(config)`(防呆/缓存键)→ `fix(report/signals)`
+> (契约测试/黄金值/周线 repaint)→ `chore(d5/d6)`(粘性/卫生/lockfile)。
+> 数据已按新口径全量重建(hfq+v2,4597/4598);selection.json 重选
+> (窗口 ≤2024-05-20,无 in-sample 偏差);A/B 全量重跑进行中,结果将更新
+> `docs/ab_validation_results.md`。未做项:仅「长期优化方向」与个别 P3
+> 文案级(P3-19 注记、[TIME] print 双轨保留)。
+
 ## 执行摘要
 
 **框架工程质量明显高于个人项目平均水平**:Strategy 抽象干净、T+1 open-fill 语义在三个引擎间一致、walk-forward embargo 数学正确、mask 只作用标签层、缓存签名体系完整、WQ101 公式翻译忠实(抽查 26 条仅约定级差异)、A/B 驱动默认值的方法论姿态正确、677 个测试覆盖面广。**"难做对的部分"基本做对了。**

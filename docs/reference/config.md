@@ -2,6 +2,17 @@
 
 > 所有字段由 `config.py:AppConfig` 校验。**新增/改字段必须同步更新 `config.py` 和本文件。**
 
+## 2026-06 审查修复新增/变更字段速览
+
+- **全树 `extra="forbid"`**:yaml 写错键名(如 `scorings:`)直接报错,不再静默走默认值。
+- `verdicts` 强制 `strong_sell < sell < 0 < buy < strong_buy`;`scoring` 强制 `daily_weight + weekly_weight ≈ 1`;`indicators` 强制 `ma_periods ⊇ {5,20,60}`、`rsi_periods ∋ 6`、`volume_ratio_window == 5`(detect_signals 的硬依赖,缺了信号会无声消失)。
+- `backtest.entry_mode`:`edge`(默认,仅信号边沿开仓)| `every_bar`(legacy,连续 buy 每根 bar 加仓)。
+- `strategy.ml_factor.label_basis`:`open`(默认,open[t+1+h]/open[t+1]−1,与 T+1 执行对齐)| `close`(legacy)。
+- `strategy.ml_factor.factors_file` 相对**配置文件目录**解析(原相对 CWD);其内容变化会反映进 `content_hash`(resolved 配置哈希)。
+- `strategy.ml_factor.mask.limit_up_threshold_st`(默认 0.048):主板 ST ±5% 涨跌停 mask 阈值,板块判定优先。
+- `portfolio_backtest.portfolio.min_commission`(默认 0):每笔订单最低费用(元),配真实 `initial_cash` 时设 5;`delist_after_bars`(默认 60):持仓连续无报价 N bar 后按最后有效价核销。
+- CLI 新 flag:`run/backtest/portfolio-backtest --refresh-fundamentals`(真正接线);`factors analyze --end-date YYYY-MM-DD`(selection 窗口前移,P0-6)。
+
 ## 顶层结构
 
 - `stocks` — 股票池,每条含 `code` / `name` / `sector`(sector 可填行业中文名或 6 位 TDX 88xxxx 代码)

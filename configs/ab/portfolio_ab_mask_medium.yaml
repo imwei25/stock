@@ -9,7 +9,6 @@
 # 跑法:python -m stockpool portfolio-ab --config portfolio_ab_mask_medium.yaml
 
 base_config: portfolio_ab_mask_medium_base.yaml
-
 arms:
   baseline:
     strategy:

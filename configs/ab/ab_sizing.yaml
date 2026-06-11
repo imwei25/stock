@@ -9,8 +9,7 @@
 # Note: vol-target's main payoff is DD reduction, NOT Sharpe lift.
 # Sharpe persisting (±0.05) + DD shrinking ≥ 20% counts as success.
 
-base_config: config.yaml
-
+base_config: ../../config.yaml
 arms:
   fixed_baseline:
     strategy:

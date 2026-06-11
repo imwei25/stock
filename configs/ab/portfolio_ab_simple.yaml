@@ -3,7 +3,6 @@
 # Use: python -m stockpool portfolio-ab --config portfolio_ab_simple.yaml
 
 base_config: portfolio_ab_simple_base.yaml
-
 arms:
   topk_3:
     strategy:

@@ -5,7 +5,7 @@
 # Both run training_universe=all (~4357 stocks) so the cross-section is wide
 # enough for stable neutralization (Phase 1.5 lesson). mcap from baostock
 # profit.totalShare × close (data/fundamentals_profit.parquet).
-base_config: config.yaml
+base_config: ../../config.yaml
 arms:
   industry:
     strategy:
