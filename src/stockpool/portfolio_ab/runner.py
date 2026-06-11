@@ -136,11 +136,17 @@ def run_single_arm(
             shared_cache=shared_cache,
         )
 
-        # Per-arm score panel cache — keyed by the *arm's* content_hash so
-        # the two arms can't accidentally share / clobber each other.
+        # Per-arm score panel cache — keyed by the *arm's* content_hash +
+        # 数据 last_date(同 cmd_portfolio_backtest,防数据更新后命中旧 panel
+        # 致组合尾段静默停止调仓)。
         score_dir = Path(effective_cfg.portfolio_backtest.score_cache_dir)
         score_dir.mkdir(parents=True, exist_ok=True)
-        score_path = score_dir / f"{effective_cfg.content_hash}.parquet"
+        _last_dates = [
+            pd.to_datetime(df["date"]).max()
+            for df in portfolio_pool_data.values() if len(df)
+        ]
+        _last_iso = max(_last_dates).date().isoformat() if _last_dates else "nodata"
+        score_path = score_dir / f"{effective_cfg.content_hash}_{_last_iso}.parquet"
         if score_path.exists() and not refresh_scores:
             log.info("[%s] cache hit: %s", arm_name, score_path)
             score_panel = pd.read_parquet(score_path)

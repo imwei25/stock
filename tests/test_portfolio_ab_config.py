@@ -26,6 +26,11 @@ def _base_cfg():
 def _write_ab(tmp_path: Path, arms: dict) -> Path:
     base_path = tmp_path / "base.yaml"
     base_path.write_bytes((PROJECT_ROOT / "config.yaml").read_bytes())
+    # factors_file 相对配置目录解析(P1-9)→ selection.json 一并复制
+    sel_src = PROJECT_ROOT / "reports" / "selection.json"
+    if sel_src.exists():
+        (tmp_path / "reports").mkdir(exist_ok=True)
+        (tmp_path / "reports" / "selection.json").write_bytes(sel_src.read_bytes())
     ab_path = tmp_path / "ab.yaml"
     ab_path.write_text(
         yaml.safe_dump({"base_config": "base.yaml", "arms": arms}),

@@ -487,12 +487,17 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
         shared_cache=shared_cache,
     )
 
-    # Score-panel cache: keyed by cfg.content_hash. Spec §6.5 accepts the
-    # known suboptimality that changing top_k also invalidates (no partial
-    # hash) — first version trades cache hit rate for simplicity.
+    # Score-panel cache: keyed by cfg.content_hash + 数据 last_date(P2-4 续:
+    # 旧键只有 content_hash,数据更新后命中旧 panel,新增日期 predict_scores
+    # 返回空 → 组合尾段静默停止调仓)。
     score_dir = Path(cfg.portfolio_backtest.score_cache_dir)
     score_dir.mkdir(parents=True, exist_ok=True)
-    score_path = score_dir / f"{cfg.content_hash}.parquet"
+    _last_dates = [
+        pd.to_datetime(df["date"]).max()
+        for df in portfolio_pool_data.values() if len(df)
+    ]
+    last_iso = max(_last_dates).date().isoformat() if _last_dates else "nodata"
+    score_path = score_dir / f"{cfg.content_hash}_{last_iso}.parquet"
     if score_path.exists() and not args.refresh_scores:
         log.info("Loading cached score panel: %s", score_path)
         score_panel = pd.read_parquet(score_path)

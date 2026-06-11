@@ -25,10 +25,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _write_base_config(tmp_path: Path) -> Path:
-    """Copy real config.yaml to tmp_path so tests don't tread on it."""
+    """Copy real config.yaml to tmp_path so tests don't tread on it.
+
+    factors_file 现在相对配置目录解析(P1-9),selection.json 一并复制
+    (旧实现相对 CWD,测试是"碰巧"借到仓库文件)。
+    """
     base_src = PROJECT_ROOT / "config.yaml"
     base_dst = tmp_path / "config.yaml"
     base_dst.write_bytes(base_src.read_bytes())
+    sel_src = PROJECT_ROOT / "reports" / "selection.json"
+    if sel_src.exists():
+        (tmp_path / "reports").mkdir(exist_ok=True)
+        (tmp_path / "reports" / "selection.json").write_bytes(sel_src.read_bytes())
     return base_dst
 
 
@@ -515,6 +523,11 @@ def _ab_setup(tmp_path, cache_dir):
     ]
     base_path = tmp_path / "config.yaml"
     base_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    # factors_file 相对配置目录解析(P1-9)→ selection.json 一并复制
+    sel_src = PROJECT_ROOT / "reports" / "selection.json"
+    if sel_src.exists():
+        (tmp_path / "reports").mkdir(exist_ok=True)
+        (tmp_path / "reports" / "selection.json").write_bytes(sel_src.read_bytes())
 
     ab_raw = {
         "base_config": "config.yaml",

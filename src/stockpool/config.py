@@ -29,6 +29,8 @@ class ContextConfig(BaseModel):
 
 
 class DataConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     history_days: int = Field(gt=0)
     cache_dir: str
     force_refresh: bool = False
@@ -38,23 +40,31 @@ class DataConfig(BaseModel):
 
 
 class MACDConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     fast: int
     slow: int
     signal: int
 
 
 class KDJConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     n: int
     m1: int
     m2: int
 
 
 class BOLLConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     n: int
     k: float
 
 
 class IndicatorsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     ma_periods: list[int]
     macd: MACDConfig
     kdj: KDJConfig
@@ -62,6 +72,30 @@ class IndicatorsConfig(BaseModel):
     boll: BOLLConfig
     volume_ratio_window: int
     breakout_window: int
+
+    @model_validator(mode="after")
+    def _check_signal_dependencies(self) -> "IndicatorsConfig":
+        """P1-8:detect_signals 硬依赖 ma5/ma20/ma60、rsi6、vol_ratio5 列。
+        旧行为是缺列静默回退默认值(信号无声消失);改为 fail loud。
+        允许在必需周期之外增加任意周期。"""
+        required_ma = {5, 20, 60}
+        if not required_ma.issubset(set(self.ma_periods)):
+            raise ValueError(
+                f"ma_periods 必须包含 {sorted(required_ma)}(detect_signals 的"
+                f"金叉/多头排列依赖 ma5/ma20/ma60),实际 {self.ma_periods}"
+            )
+        if 6 not in self.rsi_periods:
+            raise ValueError(
+                f"rsi_periods 必须包含 6(detect_signals 依赖 rsi6 列),"
+                f"实际 {self.rsi_periods}"
+            )
+        if self.volume_ratio_window != 5:
+            raise ValueError(
+                f"volume_ratio_window 当前必须为 5(detect_signals 依赖 "
+                f"vol_ratio5 列;该耦合待信号层参数化后放开),"
+                f"实际 {self.volume_ratio_window}"
+            )
+        return self
 
 
 class WeightsConfig(BaseModel):
@@ -85,21 +119,49 @@ class WeightsConfig(BaseModel):
 
 
 class ScoringConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     daily_weight: float
     weekly_weight: float
-    resonance_bonus: int
+    resonance_bonus: int = Field(ge=0)
     resonance_daily_threshold: int
     resonance_weekly_threshold: int
 
+    @model_validator(mode="after")
+    def _check_weights(self) -> "ScoringConfig":
+        if not (0 <= self.daily_weight <= 1 and 0 <= self.weekly_weight <= 1):
+            raise ValueError("daily_weight / weekly_weight 必须在 [0,1]")
+        if abs(self.daily_weight + self.weekly_weight - 1.0) > 0.01:
+            raise ValueError(
+                f"daily_weight + weekly_weight 应为 1(加权平均语义),"
+                f"实际 {self.daily_weight} + {self.weekly_weight}"
+            )
+        return self
+
 
 class VerdictsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     strong_buy: int
     buy: int
     sell: int
     strong_sell: int
 
+    @model_validator(mode="after")
+    def _check_ordering(self) -> "VerdictsConfig":
+        """P2-24:verdict_of 先查 strong_buy 再查 buy;阈值乱序(如
+        buy > strong_buy)会让 buy 区间被静默吞掉。"""
+        if not (self.strong_sell < self.sell < 0 < self.buy < self.strong_buy):
+            raise ValueError(
+                f"verdicts 阈值必须满足 strong_sell < sell < 0 < buy < strong_buy,"
+                f"实际 {self.strong_sell} < {self.sell} < 0 < {self.buy} < {self.strong_buy}"
+            )
+        return self
+
 
 class BacktestCostConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     commission_rate: float = 0.0003   # 双边佣金 0.03%
     stamp_duty_rate: float = 0.0005   # 卖出印花税 0.05%（2023 年后减半）
     slippage_rate: float = 0.0005     # 单边冲击成本估算 0.05%
@@ -155,6 +217,8 @@ class SizingConfig(BaseModel):
 
 
 class BacktestConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     forward_days: list[int]
     equity_curve_holding_days: list[int] = Field(default_factory=lambda: [5, 10, 20])
     risk_free_rate: float = 0.02
@@ -220,6 +284,8 @@ class BacktestConfig(BaseModel):
 
 
 class ReportConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     output_dir: str
     keep_history: bool
     klines_to_show: int
@@ -619,6 +685,7 @@ class PortfolioBacktestConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     """Root config. `content_hash` is set post-load, not in YAML."""
     stocks: list[Stock]
     data: DataConfig
@@ -642,9 +709,32 @@ def load_config(path: str | Path) -> AppConfig:
     """Load YAML config and validate against schema.
 
     Raises pydantic.ValidationError on missing fields or wrong types.
+
+    P1-9 缓存键语义:
+      * ``factors_file`` 相对**配置文件所在目录**解析(旧实现相对 CWD,
+        换目录运行 CLI 直接炸)。
+      * ``content_hash`` 对 **resolved 配置**(``model_dump()``)取哈希,
+        而非 yaml 原始字节 —— 改注释/空行不再无谓打爆全市场打分缓存;
+        而 ``factors_file`` 的内容(经 validator 内联进 ``factors``)变化
+        会真实反映进 hash,重选因子后周缓存/score panel 自动失效。
     """
-    raw_bytes = Path(path).read_bytes()
+    cfg_path = Path(path)
+    raw_bytes = cfg_path.read_bytes()
     parsed = yaml.safe_load(raw_bytes)
+
+    # factors_file 相对 config 目录解析
+    try:
+        ff = parsed.get("strategy", {}).get("ml_factor", {}).get("factors_file")
+        if ff and not Path(ff).is_absolute():
+            resolved = (cfg_path.parent / ff).resolve()
+            parsed["strategy"]["ml_factor"]["factors_file"] = str(resolved)
+    except AttributeError:
+        pass  # 非 dict 结构交给 pydantic 报错
+
     cfg = AppConfig.model_validate(parsed)
-    cfg.content_hash = hashlib.sha256(raw_bytes).hexdigest()[:8]
+    import json as _json
+    blob = _json.dumps(
+        cfg.model_dump(exclude={"content_hash"}), sort_keys=True, default=str,
+    ).encode("utf-8")
+    cfg.content_hash = hashlib.sha256(blob).hexdigest()[:8]
     return cfg
