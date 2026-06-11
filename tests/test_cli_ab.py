@@ -45,6 +45,11 @@ def _write_configs(tmp_path: Path, cache_dir: Path) -> tuple[Path, Path]:
     ]
     base_path = tmp_path / "config.yaml"
     base_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    # factors_file 相对配置目录解析(P1-9)→ selection.json 一并复制
+    sel_src = PROJECT_ROOT / "reports" / "selection.json"
+    if sel_src.exists():
+        (tmp_path / "reports").mkdir(exist_ok=True)
+        (tmp_path / "reports" / "selection.json").write_bytes(sel_src.read_bytes())
 
     ab_raw = {
         "base_config": "config.yaml",
