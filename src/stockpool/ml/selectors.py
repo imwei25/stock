@@ -123,19 +123,31 @@ class LassoSelector(FactorSelector):
         Xs = standardize_apply(Xn, x_mean, x_std)
         y_mean = float(yn.mean())
         y_centered = yn - y_mean
+        # P3-12: y 标准化到单位方差再解 Lasso。否则 alpha 是绝对量,与
+        # ρ_j·σ_y 同量级 —— 选中因子数随市场波动状态(σ_y)漂移:高波动期
+        # 全选、低波动期全杀。标准化后 alpha 作用在相关系数尺度上,跨期
+        # 语义稳定。选择(非零模式)是我们要的输出;coef_ 仍按原 y 尺度
+        # 回乘,便于诊断展示。
+        y_std = float(y_centered.std())
+        y_unit = y_centered / y_std if y_std > 1e-12 else y_centered
 
         w = _coordinate_descent_lasso(
-            Xs, y_centered, alpha=self.alpha,
+            Xs, y_unit, alpha=self.alpha,
             max_iter=self.max_iter, tol=self.tol,
         )
+        if y_std > 1e-12:
+            w = w * y_std  # 回到原 y 尺度,coef_ 语义不变
 
         self._x_mean = x_mean
         self._x_std = x_std
         self._y_mean = y_mean
         self._feature_names = names
         self.coef_ = pd.Series(w, index=names, name="lasso_coef")
+        # 选择阈值在"单位 y 方差"空间判定(与 alpha 同尺度),避免回乘
+        # y_std 后小 σ_y 时全部跌破绝对阈值。
+        w_unit = w / y_std if y_std > 1e-12 else w
         self.selected_ = [
-            n for n, c in zip(names, w) if abs(c) > self.coef_threshold
+            n for n, c in zip(names, w_unit) if abs(c) > self.coef_threshold
         ]
 
     def selected_factors(self) -> list[str]:

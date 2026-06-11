@@ -181,9 +181,12 @@ def test_limit_up_count_basic():
     factor = make_factor("limit_up_count_3")
     out = factor.compute(panel)["A"].tolist()
     assert np.isnan(out[0]) and np.isnan(out[1]) and np.isnan(out[2])
-    assert out[3] == pytest.approx(1.0)
-    assert out[4] == pytest.approx(2.0)
-    assert out[5] == pytest.approx(2.0)
+    # P3-8 后阈值与 panel 口径一致(主板 0.098,容忍 round-to-cent):
+    # +9.9% 现在也计为涨停 → is_limit = [_, 0, 1, 1, 1, 1]
+    # bar3: [0,1,1]=2; bar4: [1,1,1]=3; bar5: [1,1,1]=3
+    assert out[3] == pytest.approx(2.0)
+    assert out[4] == pytest.approx(3.0)
+    assert out[5] == pytest.approx(3.0)
 
 
 def test_limit_up_count_warmup_nan():

@@ -137,8 +137,10 @@ def market_cap_neutralize_panel(
     Returns:
         Same-shape DataFrame.
           * Cells where ``f`` is NaN stay NaN.
-          * Cells where ``f`` is valid but ``log_mcap`` is NaN keep the
-            **original** ``f`` (cannot residualise without size → pass through).
+          * Cells where ``f`` is valid but ``log_mcap`` is NaN become **NaN**
+            (P3-10)。旧行为保留原始 f,会让"残差"与"原始值"两种尺度混进
+            同一截面,rank/Lasso 对无 mcap 数据的股票产生结构性偏置;
+            NaN 由下游 impute(predict 填 fit 均值)统一处理更诚实。
           * Days with < 2 jointly-valid stocks, or a degenerate size cross-
             section (``var(m) ≈ 0``), fall back to a plain demean
             (``f - mean(f)``), i.e. slope ``b = 0``.
@@ -169,9 +171,8 @@ def market_cap_neutralize_panel(
 
     fitted = m.mul(b, axis=0).add(a, axis=0)  # a + b·m (NaN where m NaN)
     resid = df - fitted
-    # Where m is NaN (but f valid), fitted is NaN → resid NaN; restore raw f.
-    resid = resid.where(m.notna(), df)
-    return resid
+    # P3-10: m NaN 的格子输出 NaN(残差与原始值不能混在同一截面)。
+    return resid.where(m.notna())
 
 
 def symmetric_orthogonalize_panel(

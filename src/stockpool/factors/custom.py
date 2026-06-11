@@ -95,9 +95,14 @@ class LimitUpCountFactor(Factor):
     def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         close = panel["close"]
         ret = close.pct_change(fill_method=None)
-        # 主板涨停 10%, 留 0.1% tolerance 免 round-off
-        # ST/科创/北交已被 fetch-universe 过滤, 此处不区分
-        is_limit_up = (ret > 0.099).astype(float)
+        # P3-8: 按板块分阈值(复用 panel._limit_threshold)。创业板 300/301
+        # 是 ±20%,统一 0.099 会把普通大涨日误计为涨停。阈值略低于规则上限
+        # 以容忍 round-to-cent。
+        from stockpool.panel import _limit_threshold
+        thresholds = pd.Series(
+            {c: _limit_threshold(str(c)) for c in close.columns}
+        )
+        is_limit_up = ret.gt(thresholds, axis=1).astype(float)
         # bar 0's pct_change is NaN → astype(float) → 0.0; force to NaN
         # so rolling.sum with min_periods=n properly warmups
         is_limit_up.iloc[0] = np.nan

@@ -34,7 +34,8 @@ def test_ts_sum_with_nan_in_window():
     vals = [1.0, 2.0, np.nan, 4.0, 5.0]
     x = pd.DataFrame({"A": vals})
     out = ts_sum(x, 5)
-    assert out["A"].iloc[4] == pytest.approx(12.0)
+    # P3-5 重标定:mean(1,2,4,5) × 5 = 15(部分和按 d/count 放大,保持量纲)
+    assert out["A"].iloc[4] == pytest.approx(15.0)
 
 
 def test_ts_mean_too_few_valid_returns_nan():
@@ -78,9 +79,12 @@ def test_ts_product_full_valid_unchanged():
     assert out["A"].iloc[3] == pytest.approx(24.0)
 
 
-def test_ts_product_with_nan_skips():
+def test_ts_product_nan_window_is_nan():
     from stockpool.factors.ops import ts_product
     x = pd.DataFrame({"A": [1.0, 2.0, np.nan, 4.0]})
     out = ts_product(x, 4)
-    # min_periods=int(4*0.6)=2,3 个非 NaN,np.nanprod=8
-    assert out["A"].iloc[3] == pytest.approx(8.0)
+    # P3-5:product 要求满窗 —— 部分积无法线性重标定,缺值即 NaN
+    assert np.isnan(out["A"].iloc[3])
+
+    full = pd.DataFrame({"A": [1.0, 2.0, 3.0, 4.0]})
+    assert ts_product(full, 4)["A"].iloc[3] == pytest.approx(24.0)

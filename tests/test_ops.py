@@ -45,10 +45,10 @@ def test_ts_sum_and_mean():
     assert s["a"].iloc[2] == 6.0  # 1+2+3
     m = ops.ts_mean(x, 3)
     assert m["a"].iloc[2] == 2.0
-    # min_periods relaxed to 60% of window; partial sums are valid from row 0
-    # (min_periods(3)=1, so 1 obs suffices)
-    assert s["a"].iloc[0] == pytest.approx(1.0)
-    assert s["a"].iloc[1] == pytest.approx(3.0)
+    # P3-5: 部分窗口按 d/count 重标定(= mean × d),保持与满窗同量纲,
+    # 否则历史短的列在截面 rank 里被结构性压低
+    assert s["a"].iloc[0] == pytest.approx(1.0 * 3)      # mean(1)×3
+    assert s["a"].iloc[1] == pytest.approx(1.5 * 3)      # mean(1,2)×3
 
 
 def test_ts_min_max_argmax_argmin():
@@ -131,11 +131,19 @@ def test_indneutralize_demeans_within_group():
     assert out["c"].iloc[0] == 0.0
 
 
-def test_indneutralize_empty_map_falls_back_to_solo_groups():
+def test_indneutralize_unmapped_codes_become_nan():
+    """P3-7:无行业映射的 code 输出 NaN(旧实现独立成组 → 恒 0,
+    以"完美中性"的假值参与后续 rank,静默且危险)。"""
     x = pd.DataFrame({"a": [1.0], "b": [2.0]})
-    # 空 map → 每个 code 单独成组 → 自减自身 = 0
     out = ops.indneutralize(x, {})
-    assert (out == 0.0).all().all()
+    assert out.isna().all().all()
+
+    # 部分映射:有映射的正常 demean,无映射的 NaN
+    x2 = pd.DataFrame({"a": [1.0], "b": [3.0], "c": [9.0]})
+    out2 = ops.indneutralize(x2, {"a": "g1", "b": "g1"})
+    assert out2["a"].iloc[0] == -1.0
+    assert out2["b"].iloc[0] == 1.0
+    assert pd.isna(out2["c"].iloc[0])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

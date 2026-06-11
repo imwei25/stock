@@ -577,7 +577,7 @@ class MLFactorStrategy(Strategy):
         # there is nothing to predict from.
         if not bool(xi_row.notna().any(axis=1).iloc[0]):
             return {"signal": "neutral", "score": float("nan")}
-        xi_row = xi_row.fillna(0.0)
+        xi_row = pipeline.fill_missing(xi_row)  # P3-9: 填 fit-time 均值而非 0
         pred = float(pipeline.predict(xi_row).iloc[0])
         signal = _classify_by_quantile(pred, quantiles)
         triggers = _ml_factor_triggers(pipeline, xi_row, top_n=8)
@@ -649,7 +649,7 @@ class MLFactorStrategy(Strategy):
                 xi_row = X_full.iloc[[i]]
                 # Partial NaN tolerance — see predict_latest for rationale.
                 if bool(xi_row.notna().any(axis=1).iloc[0]):
-                    xi_row = xi_row.fillna(0.0)
+                    xi_row = pipeline.fill_missing(xi_row)  # P3-9
                     pred = float(pipeline.predict(xi_row).iloc[0])
                     score_value = pred
                     signal = _classify_by_quantile(pred, quantiles)

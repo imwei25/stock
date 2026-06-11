@@ -12,12 +12,15 @@ producing a flat backtest.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import pandas as pd
 
 from stockpool.ml.selectors import FactorSelector, LassoSelector
 from stockpool.ml.weighters import EqualWeighter, FactorWeighter, ICWeighter
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -55,6 +58,11 @@ class TwoStepPipeline:
             # weighter still does the heavy lifting.
             selected = list(X.columns)
             fallback = True
+            log.warning(
+                "TwoStepPipeline: selector 一个因子都没选中,回退全部 %d 个"
+                "因子等权进 weighter(行为突变,检查 alpha/数据质量)",
+                len(selected),
+            )
 
         X_sub = X[selected]
         self.weighter.fit(X_sub, y)
@@ -70,6 +78,24 @@ class TwoStepPipeline:
             weights=self.weighter.weights(),
         )
         return self.fit_info_
+
+    def fill_missing(self, X: pd.DataFrame) -> pd.DataFrame:
+        """P3-9:用 fit 时各因子的均值填 NaN,而不是 0。
+
+        weighter 的 standardiser 存了 fit-time μ;以 μ 填充,标准化后恰为
+        0(真正的中性值)。``fillna(0)`` 只在 cs_zscore 预处理开启(μ≈0)
+        时近似中性 —— 关掉 zscore 后 WQ rank 类因子 μ≈0.5,缺一个因子
+        等于注入恒定方向偏置。weighter 没有 μ(如 LightGBM)时回退 0。
+        """
+        means = getattr(self.weighter, "_x_mean", None)
+        names = getattr(self.weighter, "_feature_names", None)
+        out = X.copy()
+        if means is not None and names is not None and len(names) == len(means):
+            mu = pd.Series(means, index=names)
+            common = [c for c in out.columns if c in mu.index]
+            if common:
+                out[common] = out[common].fillna(mu[common])
+        return out.fillna(0.0)
 
     def predict(self, X: pd.DataFrame) -> pd.Series:
         if self.fit_info_ is None:

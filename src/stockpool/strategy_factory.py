@@ -373,6 +373,29 @@ def _fundamentals_latest_mtime(cache_dir: str | Path | None) -> str | None:
     return datetime.datetime.fromtimestamp(latest).isoformat()
 
 
+def _aux_snapshots(cache_dir: str | Path | None) -> dict:
+    """P2-15:factor panel 依赖但 sig 不追踪的旁路数据快照(ISO mtime)。
+
+    - fundamentals_*.parquet(基本面因子的输入)
+    - stock_industry_map.parquet(industry_neutral / industry_relative 因子)
+    - mcap_shares.parquet(market_cap_neutralize 的静态股本回退)
+    任一刷新都意味着缓存的因子值过期。文件缺失记 None(None→有值 也算变化)。
+    """
+    out = {"fundamentals": _fundamentals_latest_mtime(cache_dir)}
+    if cache_dir is None:
+        out.update({"industry_map": None, "mcap_shares": None})
+        return out
+    import datetime
+    for key, fname in (("industry_map", "stock_industry_map.parquet"),
+                       ("mcap_shares", "mcap_shares.parquet")):
+        f = Path(cache_dir) / fname
+        out[key] = (
+            datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat()
+            if f.exists() else None
+        )
+    return out
+
+
 def _factor_panel_sig(
     factor_names: list[str],
     pool_data: Mapping[str, pd.DataFrame],
@@ -395,16 +418,25 @@ def _factor_panel_sig(
 
     codes = sorted(pool_data.keys())
     last_date = pd.Timestamp.min
+    first_date = pd.Timestamp.max
     for df in pool_data.values():
         if len(df) > 0:
-            d = pd.to_datetime(df["date"]).max()
+            dates = pd.to_datetime(df["date"])
+            d = dates.max()
             if d > last_date:
                 last_date = d
+            f = dates.min()
+            if f < first_date:
+                first_date = f
     last_iso = "" if last_date is pd.Timestamp.min else last_date.date().isoformat()
+    first_iso = "" if first_date is pd.Timestamp.max else first_date.date().isoformat()
     blob_dict: dict = {
         "factors": sorted(factor_names),
         "codes": codes,
         "last_date": last_iso,
+        # P2-15: history 起点入 key —— history_days 改长/改短而 last_date
+        # 不变时,250 日窗因子的 warmup 段值不同,旧 panel 不能复用。
+        "first_date": first_iso,
     }
     if preprocess_cfg is not None and not _is_all_off(preprocess_cfg):
         blob_dict["preprocess"] = preprocess_cfg.model_dump()
@@ -452,17 +484,23 @@ def load_or_build_factor_panel(
                 # cached factor values are stale → force a rebuild.
                 # A None→non-None transition (fundamentals appeared since
                 # build) also counts as stale.
-                cached_fund_date = meta.get("fundamentals_snapshot_date")
-                current_fund_date = _fundamentals_latest_mtime(cache_dir)
-                stale = False
-                if current_fund_date is not None:
-                    if cached_fund_date is None or current_fund_date > cached_fund_date:
-                        stale = True
+                # P2-15: 旁路数据(基本面/行业映射/股本快照)刷新都使缓存
+                # 过期。老 manifest 只有 fundamentals_snapshot_date,缺
+                # aux_snapshots 视为过期重建一次。
+                cached_aux = meta.get("aux_snapshots")
+                current_aux = _aux_snapshots(cache_dir)
+                stale = cached_aux is None
+                stale_key = "manifest 缺 aux_snapshots(旧格式)"
+                if not stale:
+                    for key, cur in current_aux.items():
+                        old = cached_aux.get(key)
+                        if cur is not None and (old is None or cur > old):
+                            stale = True
+                            stale_key = f"{key} (cached={old}, current={cur})"
+                            break
                 if stale:
                     log.info(
-                        "Factor panel cache stale: fundamentals refreshed since build "
-                        "(cached=%s, current=%s); rebuilding",
-                        cached_fund_date, current_fund_date,
+                        "Factor panel cache stale: %s; rebuilding", stale_key,
                     )
                     # fall through to rebuild
                 else:
@@ -492,6 +530,7 @@ def load_or_build_factor_panel(
             "last_date": last_iso,
             "built_at": pd.Timestamp.now("UTC").isoformat(),
             "fundamentals_snapshot_date": _fundamentals_latest_mtime(cache_dir),
+            "aux_snapshots": _aux_snapshots(cache_dir),
         }
         manifest_path.write_text(
             json.dumps(manifest_dict, indent=2),

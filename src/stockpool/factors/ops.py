@@ -39,7 +39,11 @@ def _min_periods(d: int) -> int:
 
 
 def ts_sum(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=_min_periods(d)).sum()
+    """滚动求和。P3-5:部分窗口(有效值 < d)按 ``d / count`` 重标定 ——
+    否则历史短/停牌多的股票部分和系统性偏小,进 ``rank()`` 后截面秩被
+    结构性压低(alpha_019/039/052 的 ts_sum(ret, 250) 受害最深)。
+    mean × d 数学上等价于"重标定后的 sum"。"""
+    return x.rolling(d, min_periods=_min_periods(d)).mean() * d
 
 
 def ts_mean(x: pd.DataFrame, d: int) -> pd.DataFrame:
@@ -59,7 +63,12 @@ def ts_std(x: pd.DataFrame, d: int) -> pd.DataFrame:
 
 
 def ts_argmax(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    """过去 d 期内最大值出现的位置(0=今天,d-1=最远)。"""
+    """过去 d 期内最大值出现的位置(0=今天,d-1=最远)。
+
+    ⚠ 方向约定与主流公开复现(yli188 等,返回"窗口内位置",越大越近)
+    **相反**(P3-6)。原文 "which day ts_max occurred on" 本就含糊;本项目
+    的 IC 加权会自动纠符号,对 ML 路径无实际影响,但与文献对比 alpha_001/
+    057/060/096/098/100 的 IC 时符号会反,比较时注意。"""
     def _arg(s: pd.Series) -> float:
         a = s.values
         if np.isnan(a).any():
@@ -90,8 +99,10 @@ def ts_rank(x: pd.DataFrame, d: int) -> pd.DataFrame:
 
 
 def ts_product(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=_min_periods(d)).apply(
-        lambda s: float(np.nanprod(s)) if np.isfinite(np.nanprod(s)) else np.nan,
+    """滚动连乘。P3-5:要求满窗(min_periods=d)—— nanprod 把 NaN 当 1,
+    部分窗口的"部分积"无法像 sum 那样线性重标定,缺值直接 NaN 更诚实。"""
+    return x.rolling(d, min_periods=d).apply(
+        lambda s: np.nan if np.isnan(s).any() else float(np.prod(s)),
         raw=True,
     )
 
@@ -161,24 +172,30 @@ def cs_demean(x: pd.DataFrame) -> pd.DataFrame:
 def indneutralize(
     x: pd.DataFrame,
     group: Mapping[str, str] | pd.Series,
-) -> pd.DataFrame:
+) -> pd.DataFrame:  # noqa: D401
     """按行业分组,在每天的横截面内 demean。
 
     Args:
         x: T × N 因子值宽表。
-        group: ``code -> sector_name`` 映射(dict 或 Series)。未出现的 code 视为
-               独立组(自身减自身 = 0)。
+        group: ``code -> sector_name`` 映射(dict 或 Series)。**未出现的
+               code 输出 NaN**(P3-7)——旧实现给独立组,x − 自身均值恰好
+               = 0,以"完美中性"的假值参与后续 rank,静默且危险;与
+               ``custom.py`` 的同情形置 NaN 语义统一。
 
     NaN 安全:组内不参与计算。
     """
     g = pd.Series(group) if not isinstance(group, pd.Series) else group
-    # 对齐到 x.columns;缺失的 code 给唯一占位组名
-    sectors = [g.get(c, f"__solo__{c}") for c in x.columns]
+    mapped = [c in g.index for c in x.columns] if isinstance(group, pd.Series) \
+        else [c in group for c in x.columns]
+    sectors = [g.get(c, "__unmapped__") for c in x.columns]
     sec_series = pd.Series(sectors, index=x.columns, name="sector")
     # group-mean: 对每行,按列分组求均值,再 broadcast 回去
-    # 写法:把 x 转置 -> groupby(sec_series) -> mean -> 再 transpose
     means = x.T.groupby(sec_series).transform("mean").T
-    return x - means
+    out = x - means
+    unmapped_cols = [c for c, ok in zip(x.columns, mapped) if not ok]
+    if unmapped_cols:
+        out[unmapped_cols] = float("nan")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────

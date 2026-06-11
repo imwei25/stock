@@ -338,17 +338,17 @@ def test_mcap_neutralize_factor_nan_stays_nan():
     assert out.iloc[0, :3].isna().all()
 
 
-def test_mcap_neutralize_missing_size_passes_through():
-    """A stock with NaN log_mcap keeps its raw factor value (no residual)."""
+def test_mcap_neutralize_missing_size_becomes_nan():
+    """P3-10:无 size 数据的股票输出 NaN(旧行为保留原始值,会让残差与
+    原始值两种尺度混进同一截面,rank/Lasso 对其产生结构性偏置)。"""
     from stockpool.ml.preprocess import market_cap_neutralize_panel
     df = _make_panel(n_days=2, n_stocks=20, seed=35)
     log_mcap = _make_panel(n_days=2, n_stocks=20, seed=36).abs() + 2.0
     log_mcap.iloc[:, 5] = np.nan  # one stock has no size data
     out = market_cap_neutralize_panel(df, log_mcap)
-    # That column unchanged (size unavailable → pass through raw factor).
-    pd.testing.assert_series_equal(
-        out.iloc[:, 5], df.iloc[:, 5], check_names=False,
-    )
+    assert out.iloc[:, 5].isna().all()
+    # 其余股票正常残差化
+    assert out.iloc[:, 0].notna().all()
 
 
 def test_mcap_neutralize_degenerate_size_falls_back_to_demean():
