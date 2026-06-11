@@ -1,11 +1,57 @@
-# A/B 验证结果(2026-05-24)
+# A/B 验证结果
 
-> ⚠️ **数据基线变更 (2026-06-11)**:以下全部结论产出于**复权修复之前**——当时
+## 2026-06-12 重跑(新口径,数据修复后)
+
+> 口径:hfq 复权 + volume 股 + open-to-open 标签 + selection 窗口前移
+> (≤2024-05-20 选因子,评估期不重叠)+ 涨跌停拒单 + edge 开仓 + 差量调仓 +
+> NW 修正 ic_ir + Trade.ret 含双边成本。16 只 cfg.stocks,N=10,与旧表同
+> verdict 标准(✅ Δsharpe ≥ +0.2 且 ≥10/16 胜 | ⚠️ ±0.1 内 | ❌ ≤ −0.2 或 ≤6/16 胜)。
+> 明细 JSON:`reports/ab_rerun_results.json`;每组 HTML:`reports/ab_rerun/<组名>/`。
+
+| 对照 | A | B | Δsharpe | B wins | Δreturn | Δmax_dd | Verdict(旧 → 新) |
+|------|---|---|---------|--------|---------|---------|--------|
+| P2-1 | embargo=0 | embargo=auto | −0.038 | 5/16 | −0.5% | +0.5% | ⚠️ 无害 → **⚠️ 无害**(保留 auto,保守防泄漏) |
+| P0-1 | composite | lgb+lgb | −0.018 | 8/16 | +3.4% | **+12.5%** ❌ | ⚠️ → **⚠️ tied,LGB 回撤显著更差** |
+| P0-2 | lasso+ic | lgb+lgb | **−0.238** | 6/16 | −12.1% | −9.1% ✓ | ❌ → **❌ 复现:LGB 全家桶倒退** |
+| P1-1 | lasso+ic | lgb+ic | −0.013 | 7/16 | −1.1% | +0.1% | ⚠️ → **⚠️ tied(LGB selector 无增量)** |
+| P1-2 | lgb+ic | lgb+lgb | **−0.180** | 4/16 | −11.9% | −8.2% ✓ | ⚠️/❌ → **❌ LGB weighter 倒退** |
+| P3-1 | per_stock | pooled | **+0.205** | 13/16 | +14.1% | −0.2% ✓ | ✅ → **✅ 复现:pooled 真收益** |
+| P3-2 | training=pool | training=all | **−0.167** | 3/16 | −11.4% | +3.3% | ❌ → **❌ 复现:16 票应用池下全市场训练倒退** |
+| P4-1 | preprocess off | on | — | — | — | — | 🚫 跑不通(见下注);默认值维持「winsorize+zscore+mcap 开」(由 P4-2/3 健康数字与历史结论支撑) |
+| P4-2/3 | industry 中性化 | market_cap 中性化 | +0.055 | 9/16 | +3.1% | −2.2% ✓ | ✅(mcap 优) → **⚠️/✅ 方向复现:mcap 中性化更优,默认保持** |
+| P4-4 | 正交化 off | on | −0.116 | 3/16 | −3.3% | +2.9% | NEUTRAL/off → **❌ 默认关维持** |
+| sizing | fixed | vol_target | −0.040 | 5/16 | **−17.4%** | −2.1% ✓ | (新增)**⚠️ sharpe 接近但收益大减** — vol_target 以降波动为目的,回撤略优;若以绝对收益优先可考虑切回 fixed,建议保持现默认并观察 |
+| 组合 A/B | simple / mask_medium | — | — | — | — | — | 两组管线跑通(报告:`reports/ab_rerun/portfolio_ab_*.html`),新口径下含 turnover 指标 |
+
+**核心结论(新口径下全部方向性复现)**:
+1. **pooled 训练是唯一稳定的真收益**(P3-1,两个口径下都 ✅)——当前默认正确。
+2. **LGB selector/weighter 回退到 Lasso/IC 的决策再次确认**(P0-2/P1-2 ❌)。
+3. **embargo=auto、market_cap_neutralize 开、正交化关**:默认值全部维持。
+4. **training_universe=all 在 16 票应用池下仍倒退**(P3-2)——它的价值前提
+   (cross-sec 因子需要宽截面)与小应用池的评估方式存在错配,候选解释:
+   全市场训练的分位阈值对 16 票截面不适配;留待组合级(top-K 全市场选股)
+   场景再评估,那才是它的主战场。
+5. **绝对数字首次可采信**:数据层(复权/单位/盘中 bar)与方法论(标签/选因子
+   窗口/执行约束)的已知偏差均已消除;本表数字可作为后续优化的基线。
+
+**P4-1 跑不通的诊断(2026-06-12)**:baseline(preprocess 全关)arm 的**原始
+因子面板**在新 20 因子集 × 全市场 hfq 数据上含 inf/NaN(若干 WQ alpha 的
+除法/相关 op 在极端原始值上溢出)→ Lasso 一个不选 → 等权回退后预测仍 NaN →
+分位阈值 NaN → 全 neutral 零交易;with_preprocess arm 同样全零,原因待单独
+复查(面板未跨 arm 共享,sharing 有 preprocess 屏障)。待办:
+① weighter/standardiser 对非有限值做防御(inf→NaN→impute);
+② raw 路径补 winsorize 之外的 inf 清洗;③ 修复后单独重跑 P4-1。
+该组的结论不影响默认值(预处理开着才是生产路径)。
+
+---
+
+# A/B 验证结果(2026-05-24,历史存档)
+
+> ⚠️ **数据基线警示 (2026-06-11)**:以下全部结论产出于**复权修复之前**——当时
 > mootdx 缓存是不复权价,除权除息跳空污染训练标签与回测 PnL(见
 > `docs/project_review_2026-06.md` P0-1/2/3,已修复:全链路 hfq + 盘中 bar 防护)。
 > 两 arm 共担同一份失真数据,**相对比较(verdict 方向)仍有参考价值,绝对数字
-> (sharpe/return/drawdown)不可采信**。重建全市场缓存(`fetch-universe`)后需
-> 按 runbook 重跑本表并标记 before/after。
+> (sharpe/return/drawdown)不可采信**。新口径重跑结果见本文件顶部。
 
 > 7 个对照按 `docs/ab_validation_runbook.md` 跑出。共同条件: equity_curve_holding_days=[10], history_days=500,16 只 cfg.stocks(P3-2 因时间约束 + share_pool 实现 bug 缩减到 3 只)。
 > Verdict 标准(对应 runbook §1):✅ B 改善 sharpe ≥ +0.2 且 ≥10/16 胜 | ⚠️ Δsharpe 在 ±0.1 / 7-9 胜 | ❌ Δsharpe ≤ -0.2 或 ≤6/16 胜 | 🚫 跑不通

@@ -1,4 +1,4 @@
-# Base for portfolio_ab_mask.yaml — ml_factor + training_universe=all,
+﻿# Base for portfolio_ab_mask.yaml — ml_factor + training_universe=all,
 # portfolio top-K 等权,两 arm 区别仅 strategy.ml_factor.mask.enabled。
 # 使用 universe.parquet (4358 票) 作为可选股池,top-K 从这里选 20 票等权。
 
@@ -97,7 +97,7 @@ recommend_pool:
 strategy:
   name: ml_factor
   ml_factor:
-    factors_file: reports/selection.json
+    factors_file: ../../reports/selection.json
     horizon: 3
     train_window: 250
     min_train_samples: 60

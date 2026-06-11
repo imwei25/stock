@@ -1,4 +1,4 @@
-# Base for portfolio_ab_mask_medium.yaml — uses data_small (~46 stocks) so
+﻿# Base for portfolio_ab_mask_medium.yaml — uses data_small (~46 stocks) so
 # the test fits in memory & finishes in <5 min per arm (full 4358 segfaults
 # during precompute_scores_from_legacy).
 
@@ -96,7 +96,7 @@ recommend_pool:
 strategy:
   name: ml_factor
   ml_factor:
-    factors_file: reports/selection.json
+    factors_file: ../../reports/selection.json
     horizon: 3
     train_window: 120
     min_train_samples: 30

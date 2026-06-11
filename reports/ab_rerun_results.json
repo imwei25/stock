@@ -1,0 +1,662 @@
+{
+  "P2-1_embargo": {
+    "arm_a": "no_embargo",
+    "arm_b": "with_embargo",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.25622947670679963,
+            "b_mean": 0.25138982229937584,
+            "diff_mean": -0.004839654407423788,
+            "a_wins": 9,
+            "b_wins": 7
+          },
+          "annualized_return": {
+            "a_mean": 0.06889312103755893,
+            "b_mean": 0.06578442048656208,
+            "diff_mean": -0.0031087005509968513,
+            "a_wins": 9,
+            "b_wins": 7
+          },
+          "sharpe": {
+            "a_mean": 0.3407271918233916,
+            "b_mean": 0.30311284775604147,
+            "diff_mean": -0.03761434406735015,
+            "a_wins": 11,
+            "b_wins": 5
+          },
+          "max_drawdown": {
+            "a_mean": 0.26238057747749005,
+            "b_mean": 0.2673421749469756,
+            "diff_mean": 0.004961597469485546,
+            "a_wins": 8,
+            "b_wins": 8
+          },
+          "win_rate": {
+            "a_mean": 0.5453488335456282,
+            "b_mean": 0.5402870518523717,
+            "diff_mean": -0.005061781693256551,
+            "a_wins": 8,
+            "b_wins": 8
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 2.2879889778047855,
+            "b_mean": 2.2124762432920395,
+            "diff_mean": -0.07551273451274598,
+            "a_wins": 9,
+            "b_wins": 7
+          },
+          "trade_count": {
+            "a_mean": 184.875,
+            "b_mean": 185.25,
+            "diff_mean": 0.375,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "P0-1_composite_vs_lgblgb": {
+    "arm_a": "composite_verdict",
+    "arm_b": "ml_factor_lgb_lgb",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.10119501754812431,
+            "b_mean": 0.13507764775219938,
+            "diff_mean": 0.03388263020407507,
+            "a_wins": 8,
+            "b_wins": 8
+          },
+          "annualized_return": {
+            "a_mean": 0.030873220491194585,
+            "b_mean": 0.03634626941100267,
+            "diff_mean": 0.005473048919808085,
+            "a_wins": 8,
+            "b_wins": 8
+          },
+          "sharpe": {
+            "a_mean": 0.1209964630491056,
+            "b_mean": 0.10310427732473289,
+            "diff_mean": -0.017892185724372706,
+            "a_wins": 8,
+            "b_wins": 8
+          },
+          "max_drawdown": {
+            "a_mean": 0.04599581300082597,
+            "b_mean": 0.17111378152330786,
+            "diff_mean": 0.1251179685224819,
+            "a_wins": 15,
+            "b_wins": 1
+          },
+          "win_rate": {
+            "a_mean": 0.5554092807373687,
+            "b_mean": 0.4698109653705241,
+            "diff_mean": -0.08559831536684465,
+            "a_wins": 13,
+            "b_wins": 3
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 4.334958439316703,
+            "b_mean": 1.1949993860177868,
+            "diff_mean": -3.1399590532989166,
+            "a_wins": 11,
+            "b_wins": 5
+          },
+          "trade_count": {
+            "a_mean": 36.8125,
+            "b_mean": 220.0,
+            "diff_mean": 183.1875,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "P0-2_lassoic_vs_lgblgb": {
+    "arm_a": "lasso_ic_baseline",
+    "arm_b": "lgb_lgb_default",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.25622947670679963,
+            "b_mean": 0.13507764775219938,
+            "diff_mean": -0.12115182895460025,
+            "a_wins": 10,
+            "b_wins": 6
+          },
+          "annualized_return": {
+            "a_mean": 0.06889312103755893,
+            "b_mean": 0.03634626941100267,
+            "diff_mean": -0.03254685162655626,
+            "a_wins": 10,
+            "b_wins": 6
+          },
+          "sharpe": {
+            "a_mean": 0.3407271918233916,
+            "b_mean": 0.10310427732473289,
+            "diff_mean": -0.23762291449865874,
+            "a_wins": 10,
+            "b_wins": 6
+          },
+          "max_drawdown": {
+            "a_mean": 0.26238057747749005,
+            "b_mean": 0.17111378152330786,
+            "diff_mean": -0.09126679595418219,
+            "a_wins": 2,
+            "b_wins": 14
+          },
+          "win_rate": {
+            "a_mean": 0.5453488335456282,
+            "b_mean": 0.4698109653705241,
+            "diff_mean": -0.07553786817510416,
+            "a_wins": 11,
+            "b_wins": 5
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 2.2879889778047855,
+            "b_mean": 1.1949993860177868,
+            "diff_mean": -1.0929895917869987,
+            "a_wins": 11,
+            "b_wins": 5
+          },
+          "trade_count": {
+            "a_mean": 184.875,
+            "b_mean": 220.0,
+            "diff_mean": 35.125,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "P1-1_lassoic_vs_lgbic": {
+    "arm_a": "lasso_ic",
+    "arm_b": "lgb_ic",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.25622947670679963,
+            "b_mean": 0.24490399135493132,
+            "diff_mean": -0.011325485351868309,
+            "a_wins": 9,
+            "b_wins": 7
+          },
+          "annualized_return": {
+            "a_mean": 0.06889312103755893,
+            "b_mean": 0.06591723066419511,
+            "diff_mean": -0.002975890373363821,
+            "a_wins": 9,
+            "b_wins": 7
+          },
+          "sharpe": {
+            "a_mean": 0.3407271918233916,
+            "b_mean": 0.3276140987561332,
+            "diff_mean": -0.013113093067258441,
+            "a_wins": 9,
+            "b_wins": 7
+          },
+          "max_drawdown": {
+            "a_mean": 0.26238057747749005,
+            "b_mean": 0.2629574636361643,
+            "diff_mean": 0.0005768861586742391,
+            "a_wins": 7,
+            "b_wins": 6
+          },
+          "win_rate": {
+            "a_mean": 0.5453488335456282,
+            "b_mean": 0.5434679935180333,
+            "diff_mean": -0.001880840027594921,
+            "a_wins": 9,
+            "b_wins": 4
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 2.2879889778047855,
+            "b_mean": 2.2291686041045153,
+            "diff_mean": -0.05882037370027016,
+            "a_wins": 10,
+            "b_wins": 6
+          },
+          "trade_count": {
+            "a_mean": 184.875,
+            "b_mean": 183.875,
+            "diff_mean": -1.0,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "P1-2_lgbic_vs_lgblgb": {
+    "arm_a": "lgb_ic",
+    "arm_b": "lgb_lgb",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.24490399135493132,
+            "b_mean": 0.12607208460461872,
+            "diff_mean": -0.1188319067503126,
+            "a_wins": 12,
+            "b_wins": 4
+          },
+          "annualized_return": {
+            "a_mean": 0.06591723066419511,
+            "b_mean": 0.03536081792018852,
+            "diff_mean": -0.03055641274400659,
+            "a_wins": 12,
+            "b_wins": 4
+          },
+          "sharpe": {
+            "a_mean": 0.3276140987561332,
+            "b_mean": 0.14771097181062712,
+            "diff_mean": -0.17990312694550606,
+            "a_wins": 12,
+            "b_wins": 4
+          },
+          "max_drawdown": {
+            "a_mean": 0.2629574636361643,
+            "b_mean": 0.1811651043355102,
+            "diff_mean": -0.0817923593006541,
+            "a_wins": 2,
+            "b_wins": 14
+          },
+          "win_rate": {
+            "a_mean": 0.5434679935180333,
+            "b_mean": 0.4768222858744394,
+            "diff_mean": -0.0666457076435939,
+            "a_wins": 12,
+            "b_wins": 4
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 2.2291686041045153,
+            "b_mean": 1.1495172541428744,
+            "diff_mean": -1.079651349961641,
+            "a_wins": 11,
+            "b_wins": 5
+          },
+          "trade_count": {
+            "a_mean": 183.875,
+            "b_mean": 222.625,
+            "diff_mean": 38.75,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "P3-1_perstock_vs_pooled": {
+    "arm_a": "per_stock",
+    "arm_b": "pooled",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.11542736330134049,
+            "b_mean": 0.25622947670679963,
+            "diff_mean": 0.14080211340545915,
+            "a_wins": 3,
+            "b_wins": 13
+          },
+          "annualized_return": {
+            "a_mean": 0.03127290230070308,
+            "b_mean": 0.06889312103755893,
+            "diff_mean": 0.03762021873685585,
+            "a_wins": 3,
+            "b_wins": 13
+          },
+          "sharpe": {
+            "a_mean": 0.13531439607318538,
+            "b_mean": 0.3407271918233916,
+            "diff_mean": 0.20541279575020624,
+            "a_wins": 3,
+            "b_wins": 13
+          },
+          "max_drawdown": {
+            "a_mean": 0.2644838214161199,
+            "b_mean": 0.26238057747749005,
+            "diff_mean": -0.002103243938629873,
+            "a_wins": 8,
+            "b_wins": 8
+          },
+          "win_rate": {
+            "a_mean": 0.5132924060980953,
+            "b_mean": 0.5453488335456282,
+            "diff_mean": 0.0320564274475329,
+            "a_wins": 7,
+            "b_wins": 9
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 0.9125174977449987,
+            "b_mean": 2.2879889778047855,
+            "diff_mean": 1.3754714800597867,
+            "a_wins": 3,
+            "b_wins": 13
+          },
+          "trade_count": {
+            "a_mean": 173.5625,
+            "b_mean": 184.875,
+            "diff_mean": 11.3125,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "P3-2_pool_vs_all": {
+    "arm_a": "train_universe_pool",
+    "arm_b": "train_universe_all",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.25622947670679963,
+            "b_mean": 0.14188892528588637,
+            "diff_mean": -0.11434055142091326,
+            "a_wins": 13,
+            "b_wins": 3
+          },
+          "annualized_return": {
+            "a_mean": 0.06889312103755893,
+            "b_mean": 0.036864926976940035,
+            "diff_mean": -0.032028194060618895,
+            "a_wins": 13,
+            "b_wins": 3
+          },
+          "sharpe": {
+            "a_mean": 0.3407271918233916,
+            "b_mean": 0.17344650859991084,
+            "diff_mean": -0.16728068322348078,
+            "a_wins": 13,
+            "b_wins": 3
+          },
+          "max_drawdown": {
+            "a_mean": 0.26238057747749005,
+            "b_mean": 0.2956594981288536,
+            "diff_mean": 0.033278920651363564,
+            "a_wins": 13,
+            "b_wins": 3
+          },
+          "win_rate": {
+            "a_mean": 0.5453488335456282,
+            "b_mean": 0.5652363312067951,
+            "diff_mean": 0.01988749766116682,
+            "a_wins": 7,
+            "b_wins": 9
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 2.2879889778047855,
+            "b_mean": 1.6019460238468874,
+            "diff_mean": -0.686042953957898,
+            "a_wins": 12,
+            "b_wins": 4
+          },
+          "trade_count": {
+            "a_mean": 184.875,
+            "b_mean": 170.0,
+            "diff_mean": -14.875,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "P4-1_preprocess": {
+    "arm_a": "baseline",
+    "arm_b": "with_preprocess",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.0,
+            "b_mean": 0.0,
+            "diff_mean": 0.0,
+            "a_wins": 0,
+            "b_wins": 0
+          },
+          "annualized_return": {
+            "a_mean": 0.0,
+            "b_mean": 0.0,
+            "diff_mean": 0.0,
+            "a_wins": 0,
+            "b_wins": 0
+          },
+          "sharpe": {
+            "a_mean": 0.0,
+            "b_mean": 0.0,
+            "diff_mean": 0.0,
+            "a_wins": 0,
+            "b_wins": 0
+          },
+          "max_drawdown": {
+            "a_mean": 0.0,
+            "b_mean": 0.0,
+            "diff_mean": 0.0,
+            "a_wins": 0,
+            "b_wins": 0
+          },
+          "win_rate": {
+            "a_mean": null,
+            "b_mean": null,
+            "diff_mean": null,
+            "a_wins": 0,
+            "b_wins": 0
+          },
+          "avg_trade_ret_%": {
+            "a_mean": null,
+            "b_mean": null,
+            "diff_mean": null,
+            "a_wins": 0,
+            "b_wins": 0
+          },
+          "trade_count": {
+            "a_mean": 0.0,
+            "b_mean": 0.0,
+            "diff_mean": 0.0,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "P4-23_neutralize": {
+    "arm_a": "industry",
+    "arm_b": "market_cap",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.16839069146388866,
+            "b_mean": 0.19895198064393793,
+            "diff_mean": 0.030561289180049273,
+            "a_wins": 8,
+            "b_wins": 8
+          },
+          "annualized_return": {
+            "a_mean": 0.0480530965413214,
+            "b_mean": 0.05654117289069797,
+            "diff_mean": 0.008488076349376567,
+            "a_wins": 8,
+            "b_wins": 8
+          },
+          "sharpe": {
+            "a_mean": 0.3161151965345673,
+            "b_mean": 0.3709627889357407,
+            "diff_mean": 0.05484759240117337,
+            "a_wins": 7,
+            "b_wins": 9
+          },
+          "max_drawdown": {
+            "a_mean": 0.144817182577488,
+            "b_mean": 0.12300137388510986,
+            "diff_mean": -0.021815808692378133,
+            "a_wins": 5,
+            "b_wins": 11
+          },
+          "win_rate": {
+            "a_mean": 0.6403485557250191,
+            "b_mean": 0.6642497960741851,
+            "diff_mean": 0.023901240349165964,
+            "a_wins": 3,
+            "b_wins": 11
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 1.988622799810795,
+            "b_mean": 3.340738344771342,
+            "diff_mean": 1.352115544960547,
+            "a_wins": 2,
+            "b_wins": 12
+          },
+          "trade_count": {
+            "a_mean": 118.3125,
+            "b_mean": 94.5,
+            "diff_mean": -23.8125,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "P4-4_orthogonalize": {
+    "arm_a": "base",
+    "arm_b": "ortho",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.19895198064393793,
+            "b_mean": 0.16627171677696512,
+            "diff_mean": -0.032680263866972814,
+            "a_wins": 7,
+            "b_wins": 7
+          },
+          "annualized_return": {
+            "a_mean": 0.05654117289069797,
+            "b_mean": 0.04578903579445989,
+            "diff_mean": -0.010752137096238075,
+            "a_wins": 7,
+            "b_wins": 7
+          },
+          "sharpe": {
+            "a_mean": 0.3709627889357407,
+            "b_mean": 0.2552882213600978,
+            "diff_mean": -0.11567456757564287,
+            "a_wins": 11,
+            "b_wins": 3
+          },
+          "max_drawdown": {
+            "a_mean": 0.12300137388510986,
+            "b_mean": 0.1521893289719172,
+            "diff_mean": 0.02918795508680734,
+            "a_wins": 13,
+            "b_wins": 1
+          },
+          "win_rate": {
+            "a_mean": 0.6642497960741851,
+            "b_mean": 0.6460557342159025,
+            "diff_mean": -0.01819406185828265,
+            "a_wins": 9,
+            "b_wins": 5
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 3.340738344771342,
+            "b_mean": 2.5494785302237557,
+            "diff_mean": -0.7912598145475864,
+            "a_wins": 11,
+            "b_wins": 3
+          },
+          "trade_count": {
+            "a_mean": 94.5,
+            "b_mean": 101.1875,
+            "diff_mean": 6.6875,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  },
+  "sizing_fixed_vs_voltarget": {
+    "arm_a": "fixed_baseline",
+    "arm_b": "vol_target",
+    "per_n": {
+      "10": {
+        "common_stocks": 16,
+        "rows": {
+          "total_return": {
+            "a_mean": 0.6422300689557824,
+            "b_mean": 0.46783793899848264,
+            "diff_mean": -0.17439212995729975,
+            "a_wins": 13,
+            "b_wins": 3
+          },
+          "annualized_return": {
+            "a_mean": 0.1542492460289973,
+            "b_mean": 0.12054089058422876,
+            "diff_mean": -0.03370835544476855,
+            "a_wins": 13,
+            "b_wins": 3
+          },
+          "sharpe": {
+            "a_mean": 0.6004611360576465,
+            "b_mean": 0.5602809993102815,
+            "diff_mean": -0.04018013674736498,
+            "a_wins": 11,
+            "b_wins": 5
+          },
+          "max_drawdown": {
+            "a_mean": 0.2803580648237433,
+            "b_mean": 0.2596623940214864,
+            "diff_mean": -0.020695670802256927,
+            "a_wins": 5,
+            "b_wins": 11
+          },
+          "win_rate": {
+            "a_mean": 0.5320036759997787,
+            "b_mean": 0.5474426879324208,
+            "diff_mean": 0.015439011932642077,
+            "a_wins": 6,
+            "b_wins": 10
+          },
+          "avg_trade_ret_%": {
+            "a_mean": 3.5497587156624695,
+            "b_mean": 4.183136087113597,
+            "diff_mean": 0.6333773714511279,
+            "a_wins": 5,
+            "b_wins": 11
+          },
+          "trade_count": {
+            "a_mean": 164.6875,
+            "b_mean": 194.5,
+            "diff_mean": 29.8125,
+            "a_wins": 0,
+            "b_wins": 0
+          }
+        }
+      }
+    }
+  }
+}
