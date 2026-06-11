@@ -831,6 +831,26 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
 
     panel = build_panel_from_cache(codes, cfg.data.history_days, cache_dir)
 
+    # P2-4 口径对齐:与生产训练同一套 mask + 预处理 + 标签基准。
+    ml_cfg = cfg.strategy.ml_factor
+    mask = None
+    if ml_cfg.mask.enabled:
+        from stockpool.ipo_dates import load_or_build_ipo_dates, load_st_codes
+        from stockpool.panel import compute_tradability_mask
+        mask = compute_tradability_mask(
+            panel, ml_cfg.mask,
+            ipo_dates=load_or_build_ipo_dates(cache_dir) or None,
+            st_codes=load_st_codes(cache_dir) or None,
+        )
+    if ml_cfg.preprocess.market_cap_neutralize:
+        from stockpool.factors.context import set_mcap_panel
+        from stockpool.strategy_factory import build_log_mcap_panel_from_close
+        mcap = build_log_mcap_panel_from_close(panel["close"], cache_dir)
+        if mcap is not None:
+            set_mcap_panel(mcap)
+
+    end_date = pd.Timestamp(args.end_date) if getattr(args, "end_date", None) else None
+
     regime_close = None
     if not args.no_regime:
         idx_code = cfg.context.indices[0].code if cfg.context.indices else None
@@ -851,6 +871,10 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
         horizon=args.horizon,
         ic_window=args.ic_window,
         regime_index_close=regime_close,
+        end_date=end_date,
+        label_basis=ml_cfg.label_basis,
+        mask=mask,
+        preprocess_cfg=ml_cfg.preprocess,
     )
 
     out_dir = Path(args.output)
@@ -1177,6 +1201,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_analyze.add_argument(
         "--no-regime", action="store_true",
         help="Skip the bull/bear/sideways regime split",
+    )
+    p_analyze.add_argument(
+        "--end-date", type=str, default=None,
+        help="分析窗口截止日 (YYYY-MM-DD)。selection 必须截止在回测起点之前"
+             "(P0-6),否则因子清单带 in-sample 选择偏差",
     )
     p_analyze.add_argument(
         "--output", default="reports/factor_analysis",

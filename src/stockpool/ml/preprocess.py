@@ -335,11 +335,32 @@ def apply_preprocess_pipeline(
         work = df
         tags = factor_types.get(name, ()) if factor_types else ()
         is_fundamental = "fundamental" in tags
+        # P2-5: 全市场标量广播因子(breadth_*,每行常数)在 cs_zscore 下
+        # 整行 σ≈0 → 被置 0,因子恒为 0(用户以为在测市场宽度,实测空气)。
+        # broadcast 类因子跳过所有截面变换(它们本就没有截面信息,价值在
+        # 时序维)。
+        is_broadcast = "broadcast" in tags
+        if is_broadcast:
+            out[name] = work
+            continue
         if cfg.winsorize is not None:
             lo, hi = cfg.winsorize
             work = winsorize_panel(work, lo, hi)
         if cfg.zscore:
             work = cs_zscore_panel(work)
+            # 互锁告警:zscore 后退化行(被置 0)占比过高,通常意味着
+            # 该因子是未打 broadcast 标签的行常数因子。
+            valid = work.notna()
+            zero_share = float(
+                ((work == 0.0) & valid).sum().sum() / max(valid.sum().sum(), 1)
+            )
+            if zero_share > 0.5:
+                log.warning(
+                    "preprocess: factor %r 在 cs_zscore 后 %.0f%% 的格子为 0 "
+                    "(截面退化)。若它是全市场广播类因子,请给注册加 "
+                    "'broadcast' type 标签以跳过截面变换。",
+                    name, zero_share * 100,
+                )
         if do_neutralize and not is_fundamental:
             work = industry_neutralize_panel(work, sector_map)
         if do_mcap and not is_fundamental:

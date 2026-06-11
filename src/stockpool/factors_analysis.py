@@ -234,6 +234,27 @@ def _half_life_from_acf(series: pd.Series, max_half_life: float = 252.0) -> floa
     return min(hl, max_half_life)
 
 
+def _newey_west_std(series: pd.Series, lag: int) -> float:
+    """Newey-West 自相关稳健 σ(Bartlett 核):σ² = γ0 + 2·Σ w_l·γ_l。
+
+    重叠标签(horizon>1 的逐日 forward return)让日 IC 序列带机械正自相关,
+    朴素 std 低估波动 ~√h 倍 → ic_ir 虚高、min_ir 门槛失效(P2-2)。
+    lag 取 label_lag − 1(重叠窗口长度)。
+    """
+    s = series.dropna().to_numpy(dtype=float)
+    n = len(s)
+    if n < 3:
+        return float("nan")
+    x = s - s.mean()
+    gamma0 = float((x * x).mean())
+    var = gamma0
+    for l in range(1, min(lag, n - 1) + 1):
+        w = 1.0 - l / (lag + 1.0)
+        gamma_l = float((x[l:] * x[:-l]).mean())
+        var += 2.0 * w * gamma_l
+    return float(np.sqrt(max(var, 0.0)))
+
+
 def analyze_factors(
     panel: Mapping[str, pd.DataFrame],
     factor_names: Sequence[str],
@@ -241,6 +262,11 @@ def analyze_factors(
     ic_window: int = 252,
     regime_index_close: pd.Series | None = None,
     method: Literal["spearman", "pearson"] = "spearman",
+    *,
+    end_date: pd.Timestamp | None = None,
+    label_basis: Literal["open", "close"] = "open",
+    mask: pd.DataFrame | None = None,
+    preprocess_cfg=None,
 ) -> FactorAnalysisResult:
     """End-to-end factor analysis on a panel.
 
@@ -254,9 +280,20 @@ def analyze_factors(
         regime_index_close: optional pd.Series of an index close (e.g. sh000001)
                      to split daily IC into bull/bear/sideways regimes.
         method:      "spearman" (rank IC, default) or "pearson".
+        end_date:    截断分析窗口(含)。**selection 窗口前移(P0-6)的关键**:
+                     用于回测的因子清单必须在回测起点之前的数据上选出,否则
+                     是 in-sample 选择偏差。
+        label_basis: "open"(默认,open[t+1+h]/open[t+1]−1,与 T+1 执行和
+                     训练标签口径一致)或 "close"(legacy)。
+        mask:        可选 T×N 可交易性 mask,作用于标签(与训练一致,P2-4;
+                     不 mask 会偏向选出"预测连板"的不可交易因子)。
+        preprocess_cfg: 可选 PreprocessConfig。与生产同一条流水线
+                     (``strategy_factory.apply_production_preprocess``)——
+                     mcap 中性化非秩不变,选因子必须在预处理后的因子上算 IC。
 
     Returns:
         ``FactorAnalysisResult`` with per-factor metrics and pairwise IC correlation.
+        ``ic_ir`` 的分母为 lag=(label_lag−1) 的 Newey-West σ(P2-2)。
     """
     if horizon <= 0:
         raise ValueError(f"horizon must be > 0, got {horizon}")
@@ -264,13 +301,28 @@ def analyze_factors(
     if not factor_names:
         raise ValueError("factor_names must be non-empty")
 
+    if end_date is not None:
+        end_ts = pd.Timestamp(end_date)
+        panel = {k: v.loc[v.index <= end_ts] for k, v in panel.items()}
+        if mask is not None:
+            mask = mask.loc[mask.index <= end_ts]
+
     # Resolve base names (e.g. "momentum", "boll_position") to canonical names
     # ("momentum_20", "boll_position_20") so downstream lookups against the
     # compute_factor_panel output align. Pre-resolved names round-trip unchanged.
     factor_names = [make_factor(n).name for n in factor_names]
 
     fp = compute_factor_panel(panel, factor_names)
-    fwd = forward_return_panel(panel["close"], horizon)
+    if preprocess_cfg is not None:
+        from stockpool.strategy_factory import apply_production_preprocess
+        fp = apply_production_preprocess(
+            fp, factor_names, preprocess_cfg,
+            n_codes=panel["close"].shape[1],
+        )
+    fwd = forward_return_panel(
+        panel["close"], horizon, mask=mask,
+        open_=panel["open"] if label_basis == "open" else None,
+    )
 
     daily_ic: dict[str, pd.Series] = {}
     for name in factor_names:
@@ -282,9 +334,14 @@ def analyze_factors(
     std_ic = pd.Series(
         {n: daily_ic[n].std(skipna=True, ddof=0) for n in factor_names}, name="std_ic",
     )
+    # P2-2: 重叠标签的日 IC 序列带机械正自相关 → 分母用 NW σ。
+    label_lag = horizon + (1 if label_basis == "open" else 0)
+    nw_std = {n: _newey_west_std(daily_ic[n], lag=max(1, label_lag - 1))
+              for n in factor_names}
     ic_ir = pd.Series(
         {
-            n: (mean_ic[n] / std_ic[n]) if std_ic[n] > 1e-12 else float("nan")
+            n: (mean_ic[n] / nw_std[n])
+            if np.isfinite(nw_std[n]) and nw_std[n] > 1e-12 else float("nan")
             for n in factor_names
         },
         name="ic_ir",

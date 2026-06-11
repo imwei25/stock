@@ -72,7 +72,16 @@ def build_strategy(
             and cfg.strategy.ml_factor.panel_mode == "pooled"
             and pool_data
         ):
-            factor_panel = build_factor_panel(cfg.strategy.ml_factor.factors, pool_data)
+            # P2-6: 内部回退路径必须与 CLI 预建路径同口径 —— 带上 preprocess
+            # 流水线与 mcap 注入,否则同一份 config 两条路径产出不同模型,
+            # 且模型缓存 sig 含 preprocess 字段还会跨路径串用。
+            maybe_inject_mcap_panel(
+                cfg.strategy.ml_factor.preprocess, pool_data, cfg.data.cache_dir,
+            )
+            factor_panel = build_factor_panel(
+                cfg.strategy.ml_factor.factors, pool_data,
+                preprocess_cfg=cfg.strategy.ml_factor.preprocess,
+            )
         if (
             close_panel is None
             and cfg.strategy.ml_factor.panel_mode == "pooled"
@@ -158,19 +167,44 @@ def build_factor_panel(
         )
 
     raw = compute_factor_panel(panel, factor_names)
+    return apply_production_preprocess(
+        raw, factor_names, preprocess_cfg, n_codes=len(pool_data),
+    )
+
+
+def apply_production_preprocess(
+    raw: dict[str, pd.DataFrame],
+    factor_names: list[str],
+    preprocess_cfg: "PreprocessConfig | None",
+    n_codes: int,
+) -> dict[str, pd.DataFrame]:
+    """生产预处理流水线的唯一入口(build_factor_panel 与 factors analyze 共用,
+    保证选因子与训练用的是同一个因子对象,P2-4)。
+
+    sector_map / mcap panel 从 ``factors.context`` 读取(caller 责任注入)。
+    """
+    from stockpool.ml import preprocess as preproc_mod
+
     if preprocess_cfg is None or preproc_mod._is_all_off(preprocess_cfg):
         return raw
 
     from stockpool.factors.context import get_sector_map, get_mcap_panel
-    from stockpool.factors.registry import list_specs
+    from stockpool.factors.registry import make_factor
     sector_map = get_sector_map() or None
     log_mcap = get_mcap_panel() if preprocess_cfg.market_cap_neutralize else None
-    types_map = {
-        s.base_name: s.types for s in list_specs() if s.base_name in factor_names
-    }
+    # 注意 factor_names 是参数化全名(momentum_20),types 要经 make_factor
+    # 解析到 spec 再取;旧实现按 base_name 直接 in 匹配,参数化名永远
+    # 匹配不上 → types_map 恒空,按类型跳过预处理的逻辑全部失效。
+    types_map: dict[str, tuple[str, ...]] = {}
+    for name in factor_names:
+        try:
+            f = make_factor(name)
+            types_map[f.name] = tuple(getattr(f, "types", ()) or ())
+        except Exception:  # noqa: BLE001 — 未注册名不阻塞预处理
+            continue
     return preproc_mod.apply_preprocess_pipeline(
         raw, preprocess_cfg, sector_map=sector_map, factor_types=types_map,
-        n_codes=len(pool_data), log_mcap_panel=log_mcap,
+        n_codes=n_codes, log_mcap_panel=log_mcap,
     )
 
 
@@ -223,10 +257,21 @@ def build_log_mcap_panel(
     """
     if not pool_data or cache_dir is None:
         return None
+    close_panel = build_close_panel(pool_data)
+    return build_log_mcap_panel_from_close(close_panel, cache_dir)
+
+
+def build_log_mcap_panel_from_close(
+    close_panel: pd.DataFrame,
+    cache_dir: str | Path | None,
+) -> pd.DataFrame | None:
+    """同 ``build_log_mcap_panel``,但直接收已构建的 close 宽表
+    (factors analyze 等已有 panel 的调用方使用,避免重复构建)。"""
+    if cache_dir is None:
+        return None
 
     import numpy as np
 
-    close_panel = build_close_panel(pool_data)
     if close_panel.empty:
         return None
 

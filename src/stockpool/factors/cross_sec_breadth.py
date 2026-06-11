@@ -1,4 +1,4 @@
-"""截面市场宽度族 (论文 B cs_rank_* 6 个的精神复现).
+﻿"""截面市场宽度族 (论文 B cs_rank_* 6 个的精神复现).
 
 全市场标量(T×1)广播到 T×N。涨停股 / 停牌股 **不过滤**,
 与 mask config 无关(spec §6.1.2)。
@@ -27,7 +27,7 @@ def _broadcast(scalar: pd.Series, like: pd.DataFrame) -> pd.DataFrame:
 @register(
     "breadth_above_ma",
     sources=("builtin",),
-    types=("cross_sectional", "time_series"),
+    types=("cross_sectional", "time_series", "broadcast"),
     description="全市场有多少比例股票当日收盘高于自己的 N 日均线。读数 > 0.5 多数股偏强;< 0.3 大盘普遍弱势。",
 )
 class BreadthAboveMAFactor(Factor):
@@ -50,7 +50,7 @@ class BreadthAboveMAFactor(Factor):
 @register(
     "breadth_advance",
     sources=("builtin",),
-    types=("cross_sectional", "time_series"),
+    types=("cross_sectional", "time_series", "broadcast"),
     description="当天全市场涨股占比。> 0.6 全面普涨,< 0.4 普跌,中间值意味着分化。",
 )
 class BreadthAdvanceFactor(Factor):
@@ -70,7 +70,7 @@ class BreadthAdvanceFactor(Factor):
 @register(
     "breadth_limit_up",
     sources=("builtin",),
-    types=("cross_sectional", "time_series"),
+    types=("cross_sectional", "time_series", "broadcast"),
     description="当天触涨停股票占比。同步突高 = 题材热点炒作进入高峰,可作为情绪温度计。",
 )
 class BreadthLimitUpFactor(Factor):
@@ -91,7 +91,7 @@ class BreadthLimitUpFactor(Factor):
 @register(
     "breadth_dispersion",
     sources=("builtin",),
-    types=("cross_sectional", "volatility", "time_series"),
+    types=("cross_sectional", "volatility", "time_series", "broadcast"),
     description="当日个股收益率的横截面 std。大 = 个股分化严重(题材轮动);小 = 齐涨齐跌(系统性行情)。",
 )
 class BreadthDispersionFactor(Factor):
@@ -111,7 +111,7 @@ class BreadthDispersionFactor(Factor):
 @register(
     "breadth_pos_skew",
     sources=("builtin",),
-    types=("cross_sectional", "time_series"),
+    types=("cross_sectional", "time_series", "broadcast"),
     description="当日横截面收益率的偏度。正偏 = 少数股大涨拉高指数(头部领涨);负偏 = 少数股大跌拖累指数。",
 )
 class BreadthPosSkewFactor(Factor):

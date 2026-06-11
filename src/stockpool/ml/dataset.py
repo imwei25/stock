@@ -51,8 +51,37 @@ def compute_factor_panel(
     out: dict[str, pd.DataFrame] = {}
     for name in factor_names:
         f = make_factor(name)
-        out[f.name] = f.compute(panel)
+        wide = f.compute(panel)
+        _check_factor_coverage(f.name, wide)
+        out[f.name] = wide
     return out
+
+
+# 覆盖率总闸(P1-1 类事故防线):字段名错配/数据缺失导致的"静默全 NaN 因子"
+# 曾潜伏数月(4/7 基本面因子全 NaN 没有任何告警)。
+_COVERAGE_DEAD_THRESHOLD = 0.02   # 有效值占比低于 2% → fail loud
+_COVERAGE_WARN_THRESHOLD = 0.25   # 低于 25% → warning(长 warmup 因子属正常)
+
+
+def _check_factor_coverage(name: str, wide: pd.DataFrame) -> None:
+    # 小面板(单测夹具 / 小股池)上 rank/corr 类因子退化为 NaN 是数学必然,
+    # 不是数据事故;总闸只在有统计意义的面板规模上执法。
+    if wide.size == 0 or wide.shape[1] < 10 or wide.shape[0] < 40:
+        return
+    coverage = float(wide.notna().sum().sum()) / float(wide.size)
+    if coverage < _COVERAGE_DEAD_THRESHOLD:
+        raise ValueError(
+            f"factor {name!r} 有效值覆盖率仅 {coverage:.1%} —— 几乎全 NaN。"
+            f"通常是字段名错配 / 上游数据缺失 / 依赖的 context(sector/mcap)"
+            f"未注入。拒绝静默产出死因子。"
+        )
+    if coverage < _COVERAGE_WARN_THRESHOLD:
+        import logging
+        logging.getLogger(__name__).warning(
+            "factor %r 覆盖率 %.1f%%(<%.0f%%)。长 warmup 因子(如 200 日 "
+            "rolling)在短窗口上属正常;否则请检查数据源。",
+            name, coverage * 100, _COVERAGE_WARN_THRESHOLD * 100,
+        )
 
 
 def forward_return_panel(
