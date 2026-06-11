@@ -61,7 +61,10 @@ def add_rsi(df: pd.DataFrame, periods: list[int]) -> pd.DataFrame:
         avg_loss = loss.ewm(alpha=1 / p, adjust=False).mean()
         rs = avg_gain / avg_loss.replace(0, np.nan)
         rsi = 100 - 100 / (1 + rs)
-        rsi = rsi.fillna(50)
+        # P3-14: avg_loss==0(窗口内纯涨)语义上 RSI=100,不是中性 50;
+        # avg_gain 也为 0(完全无变动)才填 50。
+        pure_gain = (avg_loss == 0) & (avg_gain > 0)
+        rsi = rsi.where(~pure_gain, 100.0).fillna(50)
         rsi.iloc[:p] = np.nan
         out[f"rsi{p}"] = rsi
     return out

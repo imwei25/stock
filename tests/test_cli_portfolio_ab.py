@@ -45,6 +45,11 @@ def ab_setup(tmp_path, monkeypatch):
     )
 
     raw = yaml.safe_load((PROJECT_ROOT / "config.yaml").read_text(encoding="utf-8"))
+    # factors_file 相对配置目录解析(P1-9)→ selection.json 一并复制
+    _sel = PROJECT_ROOT / "reports" / "selection.json"
+    if _sel.exists():
+        (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "reports" / "selection.json").write_bytes(_sel.read_bytes())
     raw["data"]["cache_dir"] = str(cache_dir)
     raw["data"]["history_days"] = 200
     raw["report"]["output_dir"] = str(tmp_path / "reports")

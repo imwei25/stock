@@ -415,6 +415,10 @@ def test_run_ab_does_not_inject_universe_into_pool_arm(
     ]
     base_path = tmp_path / "config.yaml"
     base_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    _sel = PROJECT_ROOT / "reports" / "selection.json"
+    if _sel.exists():
+        (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "reports" / "selection.json").write_bytes(_sel.read_bytes())
 
     # Need universe.parquet so load_universe_cache doesn't crash.
     import pandas as pd

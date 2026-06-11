@@ -68,7 +68,8 @@ def compute_or_load_pool_b(
                     cache_path)
         return []
 
-    entries = _compute_pool_b(cfg, pool_data, factor_panel, close_panel)
+    entries = _compute_pool_b(cfg, pool_data, factor_panel, close_panel,
+                              run_date=run_date)
     _write_cache(cache_path, entries)
     log.info("Pool B written: %s (%d entries)", cache_path, len(entries))
     return entries
@@ -80,11 +81,26 @@ def _cache_path_for(cfg: AppConfig, run_date: date) -> Path:
     return Path(cfg.recommend_pool.cache_dir) / fname
 
 
+def _prev_pool_codes(cfg: AppConfig, run_date: date | None) -> set[str]:
+    """上一 ISO 周的池内代码(P2-28 粘性用)。缓存缺失/读失败返回空集。"""
+    if run_date is None:
+        return set()
+    try:
+        prev = _cache_path_for(cfg, run_date - pd.Timedelta(days=7).to_pytimedelta())
+        if prev.exists():
+            return {str(r.code).zfill(6)
+                    for r in pd.read_parquet(prev).itertuples(index=False)}
+    except Exception as e:  # noqa: BLE001
+        log.debug("Pool B: prev-week cache unreadable (%s)", e)
+    return set()
+
+
 def _compute_pool_b(
     cfg: AppConfig,
     pool_data: Mapping[str, pd.DataFrame] | None,
     factor_panel: Mapping[str, pd.DataFrame] | None,
     close_panel: pd.DataFrame | None = None,
+    run_date: date | None = None,
 ) -> list[PoolBEntry]:
     cfg_pool = cfg.recommend_pool
 
@@ -135,6 +151,7 @@ def _compute_pool_b(
         scored,
         top_n=cfg_pool.top_n,
         max_per_industry=cfg_pool.max_per_industry,
+        sticky_codes=_prev_pool_codes(cfg, run_date),
     )
     return [
         PoolBEntry(
@@ -244,12 +261,22 @@ def _score_universe(
             if score_f != score_f:  # NaN
                 fail_count += 1
                 continue
+            # P2-28 tiebreak:composite 的 final_score 是粗粒度离散值,
+            # 大量并列时旧排序由 glob 文件序决定(top-N 边界实质随机);
+            # 用 20 日动量做次级排序。
+            try:
+                closes = daily["close"].astype(float)
+                mom20 = float(closes.iloc[-1] / closes.iloc[-21] - 1) \
+                    if len(closes) >= 21 else 0.0
+            except Exception:  # noqa: BLE001
+                mom20 = 0.0
             rows.append({
                 "code": code,
                 "name": name_map.get(code, code),
                 "industry": industry_of(code, industry_map),
                 "final_score": score_f,
                 "verdict": str(verdict),
+                "mom20": mom20,
             })
         except Exception as e:  # noqa: BLE001
             fail_count += 1
@@ -268,7 +295,7 @@ def _score_universe(
           f"predict_total={t_predict:.1f}s "
           f"ok={len(rows)} fail={fail_count})", flush=True)
     log.info("Pool B scoring done: ok=%d fail=%d", len(rows), fail_count)
-    rows.sort(key=lambda r: r["final_score"], reverse=True)
+    rows.sort(key=lambda r: (r["final_score"], r.get("mom20", 0.0)), reverse=True)
     return rows
 
 
@@ -276,10 +303,15 @@ def _industry_cap_top_n(
     scored: list[dict],
     top_n: int,
     max_per_industry: int,
+    sticky_codes: "set[str] | None" = None,
 ) -> list[dict]:
     """Greedy: walk score-desc list, skip any code whose industry bucket is
     already full, stop once we have ``top_n``. ``"未知"`` counts as a normal
     bucket (so a flood of unmapped stocks can't drown out the top-N).
+
+    P2-28 粘性(hysteresis):``sticky_codes``(上周池内的票)只要本周排名
+    仍在 **top 1.5N** 内就优先保留 —— 边界票不再每周进进出出,按池操作的
+    换手大幅下降。实现:两遍贪心,先收"粘性且排名 ≤1.5N"的,再按排名补足。
 
     Degrade gracefully when the industry map is empty (e.g. akshare network
     failure): every stock ends up in the "未知" bucket and the cap would
@@ -294,17 +326,38 @@ def _industry_cap_top_n(
         )
         return scored[:top_n]
 
+    sticky_codes = sticky_codes or set()
+    sticky_window = int(top_n * 1.5)
     bucket: dict[str, int] = {}
     out: list[dict] = []
-    for row in scored:
+    taken: set[str] = set()
+
+    def _try_take(row) -> bool:
         ind = row["industry"]
         if bucket.get(ind, 0) >= max_per_industry:
-            continue
+            return False
         out.append(row)
+        taken.add(row["code"])
         bucket[ind] = bucket.get(ind, 0) + 1
+        return True
+
+    # 第一遍:粘性票(上周在池 + 本周排名 ≤ 1.5N)
+    if sticky_codes:
+        for rank, row in enumerate(scored[:sticky_window]):
+            if len(out) >= top_n:
+                break
+            if row["code"] in sticky_codes:
+                _try_take(row)
+    # 第二遍:按排名补足
+    for row in scored:
         if len(out) >= top_n:
             break
-    return out
+        if row["code"] in taken:
+            continue
+        _try_take(row)
+    # 输出按分数序展示
+    out.sort(key=lambda r: -r["final_score"])
+    return out[:top_n]
 
 
 def _read_cache(path: Path) -> list[PoolBEntry]:

@@ -128,7 +128,7 @@ def test_breakout_markers(synthetic_daily):
 def test_add_all_runs_everything(synthetic_daily):
     from stockpool.config import IndicatorsConfig, MACDConfig, KDJConfig, BOLLConfig
     cfg = IndicatorsConfig(
-        ma_periods=[5, 10, 20],
+        ma_periods=[5, 10, 20, 60],  # P1-8 校验要求含 5/20/60
         macd=MACDConfig(fast=12, slow=26, signal=9),
         kdj=KDJConfig(n=9, m1=3, m2=3),
         rsi_periods=[6, 12],

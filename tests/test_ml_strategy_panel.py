@@ -117,8 +117,9 @@ def test_build_strategy_injects_panel_in_pooled_mode():
         stocks=[Stock(code="A", name="a"), Stock(code="B", name="b")],
         data=DataConfig(history_days=80, cache_dir="data"),
         indicators=IndicatorsConfig(
-            ma_periods=[5, 10], macd=MACDConfig(fast=12, slow=26, signal=9),
-            kdj=KDJConfig(n=9, m1=3, m2=3), rsi_periods=[14],
+            # P1-8 校验:必须含 ma 5/20/60 与 rsi 6
+            ma_periods=[5, 10, 20, 60], macd=MACDConfig(fast=12, slow=26, signal=9),
+            kdj=KDJConfig(n=9, m1=3, m2=3), rsi_periods=[6, 14],
             boll=BOLLConfig(n=20, k=2.0),
             volume_ratio_window=5, breakout_window=20,
         ),
