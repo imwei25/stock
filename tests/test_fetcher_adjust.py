@@ -401,10 +401,12 @@ def test_seam_match_appends_without_full_refresh(tmp_path):
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", side_effect=fake_hist), \
          patch("stockpool.fetcher._today", return_value=stale_today), \
          patch("stockpool.fetcher._now", return_value=stale_today + pd.Timedelta(hours=18)):
-        df = fetch_daily("605589", history_days=100, cache_dir=tmp_path, source="akshare")
+        # history_days 不得超过缓存长度,否则按设计触发全量回填而非增量
+        df = fetch_daily("605589", history_days=60, cache_dir=tmp_path, source="akshare")
 
     assert len(calls) == 1, "接缝一致时不应触发全量重拉"
-    assert len(df) == 62  # 60 + 2 个新交易日
+    assert len(df) == 60
+    assert pd.Timestamp(df["date"].max()) == new_days[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +432,8 @@ def test_mootdx_incremental_anchors_to_cached_scale(tmp_path):
          patch("stockpool.fetcher._today", return_value=next_day.normalize()), \
          patch("stockpool.fetcher._now",
                return_value=next_day.normalize() + pd.Timedelta(hours=18)):
-        df = fetch_daily("000001", history_days=20, cache_dir=tmp_path, source="mootdx")
+        # history_days ≤ 缓存长度(10)才走增量锚定路径
+        df = fetch_daily("000001", history_days=10, cache_dir=tmp_path, source="mootdx")
 
     assert mocked.call_args.kwargs.get("start") == last.strftime("%Y%m%d")
     assert df["close"].iloc[-1] == pytest.approx(42.0), (

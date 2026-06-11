@@ -288,7 +288,13 @@ def fetch_daily(
     )
 
     if need_fetch:
-        incremental = cached is not None and not force_refresh and len(cached) > 0
+        # 增量只能向前追加;缓存比 history_days 短(如用户调大了窗口)时
+        # 必须全量重拉才能向后回填历史(mootdx 分页 min_bars 凑够)。
+        incremental = (
+            cached is not None
+            and not force_refresh
+            and len(cached) >= history_days
+        )
         if incremental:
             # 增量从缓存最后一天(含)开始重叠拉取:重叠 bar 用来
             # ① 校验接缝(复权基准漂移 / 缓存里的半根盘中 bar);

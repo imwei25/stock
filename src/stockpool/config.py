@@ -361,6 +361,9 @@ class MaskConfig(BaseModel):
     limit_up_threshold_main: float = Field(default=0.098, gt=0, lt=1)
     limit_up_threshold_chinext: float = Field(default=0.198, gt=0, lt=1)
     limit_up_threshold_bse: float = Field(default=0.298, gt=0, lt=1)
+    # 主板 ST ±5%(P2-23);创业板/科创板 ST 仍 20%,板块判定优先。
+    # ST 集合来自当前名称快照(stock_basics),回溯历史为近似。
+    limit_up_threshold_st: float = Field(default=0.048, gt=0, lt=1)
     min_listing_days: int = Field(default=252, ge=0)
 
 

@@ -1,4 +1,4 @@
-stocks:
+﻿stocks:
   - {code: "605589", name: "圣泉集团",  sector: "化工"}
   - {code: "603986", name: "兆易创新",  sector: "半导体"}
   - {code: "000528", name: "柳工",      sector: "工程机械"}
@@ -17,7 +17,7 @@ stocks:
   - {code: "300475", name: "香农芯创",  sector: "半导体"}
 
 data:
-  history_days: 500
+  history_days: 800   # 800 = 评估 500 + 因子选择前置窗口 ~300 (P0-6 selection 前移)
   cache_dir: "data"
   force_refresh: false
   # 数据源: mootdx(默认, 通达信 TCP, 含当日盘中) | baostock(无 token, 收盘后更新)

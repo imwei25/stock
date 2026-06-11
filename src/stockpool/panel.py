@@ -163,12 +163,22 @@ def _listing_mask(
     return mask
 
 
-def _limit_threshold_for_config(code: str, config: "MaskConfig") -> float:
-    """Like ``_limit_threshold`` but reads thresholds from a ``MaskConfig``."""
+def _limit_threshold_for_config(
+    code: str,
+    config: "MaskConfig",
+    st_codes: "set[str] | frozenset[str] | None" = None,
+) -> float:
+    """Like ``_limit_threshold`` but reads thresholds from a ``MaskConfig``.
+
+    板块判定优先于 ST:创业板/科创板的 ST 票涨跌幅仍是 20%(注册制规则),
+    ±5% 只适用主板 ST(P2-23)。``st_codes`` 来自当前名称快照,回溯历史为近似。
+    """
     if code.startswith(("300", "301", "688")):
         return config.limit_up_threshold_chinext
     if code.startswith(("82", "83", "87", "43")):
         return config.limit_up_threshold_bse
+    if st_codes is not None and code in st_codes:
+        return config.limit_up_threshold_st
     return config.limit_up_threshold_main
 
 
@@ -177,6 +187,7 @@ def compute_tradability_mask(
     config: "MaskConfig",
     *,
     ipo_dates: Mapping[str, pd.Timestamp] | None = None,
+    st_codes: "set[str] | frozenset[str] | None" = None,
 ) -> pd.DataFrame:
     """从 OHLCV panel 计算可交易性 mask(close-side, paper B mask-first)。
 
@@ -196,7 +207,8 @@ def compute_tradability_mask(
     volume = panel["volume"]
 
     thresholds = pd.Series(
-        {code: _limit_threshold_for_config(code, config) for code in close.columns}
+        {code: _limit_threshold_for_config(code, config, st_codes)
+         for code in close.columns}
     )
 
     ret = close / close.shift(1) - 1

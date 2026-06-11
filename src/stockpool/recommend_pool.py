@@ -108,9 +108,16 @@ def _compute_pool_b(
     from stockpool.factors.context import set_sector_map
     set_sector_map(industry_map)
 
+    try:
+        from stockpool.ipo_dates import load_st_codes
+        st_codes = load_st_codes(cfg.data.cache_dir)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Pool B: load_st_codes failed (%s); ST 过滤退化为名称匹配", e)
+        st_codes = set()
     survivors = _apply_funnel(
         universe_data, name_map,
         min_avg_amount_20d=cfg_pool.min_avg_amount_20d,
+        st_codes=st_codes,
     )
     log.info("Pool B funnel: %d → %d after liquidity + ST filter",
              len(universe_data), len(survivors))
@@ -140,7 +147,15 @@ def _compute_pool_b(
 
 
 def _build_name_map(cache_dir: str | Path) -> dict[str, str]:
-    """Read universe.parquet (built by ``fetch-universe``) → ``{code: name}``."""
+    """``{code: 干净中文名}``,优先 stock_basics(baostock),回退 mootdx 乱码名。"""
+    try:
+        from stockpool.ipo_dates import load_stock_basics_cached_only
+        basics = load_stock_basics_cached_only(cache_dir)
+        if not basics.empty:
+            return {str(r.code).zfill(6): str(r.name)
+                    for r in basics.itertuples(index=False)}
+    except Exception as e:  # noqa: BLE001
+        log.warning("Pool B: stock_basics unavailable (%s), falling back to mootdx", e)
     try:
         df = list_universe()
         return {str(r.code).zfill(6): str(r.name)
@@ -155,19 +170,20 @@ def _apply_funnel(
     universe_data: Mapping[str, pd.DataFrame],
     name_map: Mapping[str, str],
     min_avg_amount_20d: float,
+    st_codes: "set[str] | None" = None,
 ) -> dict[str, pd.DataFrame]:
-    """Liquidity gate + secondary ST defence.
+    """Liquidity gate + ST 剔除(当下决策,无前视问题)。
 
-    ``list_universe`` already drops ST; we re-check here because
-    ``load_universe_cache`` walks the parquet dir which may contain stale
-    files from before a ticker was renamed to ST.
+    训练池现在**保留** ST(P0-4 ②);推荐池是"今天买什么"的当下决策,
+    在这里按干净名单(stock_basics)剔除当前 ST,名称匹配只作兜底。
     """
+    st_codes = st_codes or set()
     out: dict[str, pd.DataFrame] = {}
     for code, daily in universe_data.items():
         if len(daily) < 20:
             continue
         name = name_map.get(code, "")
-        if "ST" in name.upper():
+        if code in st_codes or "ST" in name.upper():
             continue
         tail = daily.tail(20)
         # volume 单位已在数据层统一为"股"(P1-6, 全部数据源一致);amount 单位为元

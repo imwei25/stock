@@ -454,6 +454,9 @@ class MLFactorStrategy(Strategy):
             return None
         if self._shared_cache is not None and "__ipo_dates__" in self._shared_cache:
             return self._shared_cache["__ipo_dates__"]
+        return self._load_ipo_dates_uncached()
+
+    def _load_ipo_dates_uncached(self) -> dict | None:
         try:
             from stockpool.ipo_dates import load_or_build_ipo_dates
             dates = load_or_build_ipo_dates(self._cache_dir)
@@ -467,6 +470,29 @@ class MLFactorStrategy(Strategy):
         if self._shared_cache is not None:
             self._shared_cache["__ipo_dates__"] = dates
         return dates
+
+    def _get_st_codes(self) -> set | None:
+        """当前 ST 代码集合(干净名单),供涨跌停 mask 用 ±5% 阈值(P2-23)。
+
+        与 ``_get_ipo_dates`` 同样的加载/缓存策略;不可用时返回 None
+        (mask 退化为按板块阈值,不致命)。
+        """
+        if not self.cfg.mask.enabled or self._cache_dir is None:
+            return None
+        if self._shared_cache is not None and "__st_codes__" in self._shared_cache:
+            return self._shared_cache["__st_codes__"]
+        try:
+            from stockpool.ipo_dates import load_st_codes
+            st = load_st_codes(self._cache_dir)
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to load ST codes (%s); limit mask uses board thresholds only", e,
+            )
+            st = None
+        if self._shared_cache is not None:
+            self._shared_cache["__st_codes__"] = st
+        return st
 
     def _cache_path(self) -> Path | None:
         if self._cache_dir is None:
@@ -722,6 +748,7 @@ class MLFactorStrategy(Strategy):
                 mask_config=cfg.mask,
                 ipo_dates=self._get_ipo_dates(),
                 label_basis=cfg.label_basis,
+                st_codes=self._get_st_codes(),
             )
             if len(X_pool) > 0 and cfg.train_window > 0:
                 X_pool = X_pool.groupby(
@@ -787,6 +814,7 @@ class MLFactorStrategy(Strategy):
                 from stockpool.panel import compute_tradability_mask
                 mask = compute_tradability_mask(
                     ohlcv, self.cfg.mask, ipo_dates=self._get_ipo_dates(),
+                    st_codes=self._get_st_codes(),
                 )
         fwd = forward_return_panel(
             self._close_panel, self.cfg.horizon, mask=mask,

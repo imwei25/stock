@@ -727,7 +727,25 @@ def cmd_fetch_universe(args: argparse.Namespace) -> int:
     # pull should follow cfg.data.source unless the user overrode it on CLI.
     log.info("Listing A-share universe via mootdx ...")
     listing = list_universe(source="mootdx")
-    log.info("Universe size: %d stocks", len(listing))
+    log.info("Universe size: %d stocks (含 ST,训练池不按当前名称剔除)", len(listing))
+
+    # P0-4 轻量 / P3-4: 合入 baostock 干净名单 —— 干净中文名、is_st、
+    # out_date/status。mootdx 名是乱码,且 ST/退市状态只有 baostock 可靠。
+    try:
+        from stockpool.ipo_dates import load_or_build_stock_basics
+        basics = load_or_build_stock_basics(cfg.data.cache_dir)
+        if not basics.empty:
+            merged = listing.merge(
+                basics[["code", "name", "ipo_date", "out_date", "status", "is_st"]],
+                on="code", how="left", suffixes=("_tdx", ""),
+            )
+            merged["name"] = merged["name"].fillna(merged["name_tdx"])
+            listing = merged.drop(columns=["name_tdx"])
+            log.info("Merged stock_basics: %d ST flagged, %d missing in baostock",
+                     int(listing["is_st"].fillna(False).sum()),
+                     int(listing["name"].isna().sum()))
+    except Exception as e:  # noqa: BLE001
+        log.warning("stock_basics merge failed (%s); universe keeps mootdx names", e)
 
     if args.limit > 0:
         listing = listing.head(args.limit)

@@ -323,12 +323,15 @@ def _is_a_share(code: str, market: int) -> bool:
 
 
 def list_a_shares() -> pd.DataFrame:
-    """List all A-share stocks (excluding ST, 科创板 688*, 北交所 8*/4*).
+    """List all A-share stocks (excluding 科创板 688*, 北交所 8*/4*).
 
     Returns DataFrame with columns: code, name, market ('SH'/'SZ').
 
-    Note: mootdx 返回的 name 字段是双重编码乱码,无法可靠按中文过滤(如"退"字)。
-    本函数仅按 ASCII 子串过滤 ST/\\*ST(覆盖大部分风险警示股),其余依赖代码前缀。
+    Note(P0-4 ②):**不再按名称剔除 ST**。按"当前是否 ST"整段剔除历史样本
+    是用未来信息筛历史(2023 年健康、2026 年戴帽的票,其 2023 年截面也被剔),
+    且 mootdx 的 name 是双重编码乱码,ASCII "ST" 匹配本就不可靠(P3-4)。
+    ST 状态由 ``stockpool.ipo_dates.load_or_build_stock_basics`` 的干净
+    baostock 名单标记,应用层(Pool B/推荐池)在**当下决策时**自行剔除。
     """
     parts: list[pd.DataFrame] = []
     for market, label in [(_MARKET_SZ, "SZ"), (_MARKET_SH, "SH")]:
@@ -336,9 +339,6 @@ def list_a_shares() -> pd.DataFrame:
         df = raw.copy()
         df["market"] = label
         df = df[df["code"].apply(lambda c: _is_a_share(c, market))]
-        # Filter ST/*ST via ASCII substring (name encoding is mangled but ASCII survives)
-        name_upper = df["name"].astype(str).str.upper()
-        df = df[~name_upper.str.contains("ST", na=False)]
         parts.append(df[["code", "name", "market"]])
     out = pd.concat(parts, ignore_index=True)
     out = out.drop_duplicates("code").reset_index(drop=True)

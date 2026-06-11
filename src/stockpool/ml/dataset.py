@@ -298,6 +298,7 @@ def build_panel(
     mask_config: "MaskConfig | None" = None,
     ipo_dates: Mapping[str, pd.Timestamp] | None = None,
     label_basis: str = "close",
+    st_codes: "set[str] | None" = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Pool multi-stock data into a single (X, y) panel.
 
@@ -343,7 +344,9 @@ def build_panel(
     mask: pd.DataFrame | None = None
     if mask_config is not None and mask_config.enabled:
         from stockpool.panel import compute_tradability_mask
-        mask = compute_tradability_mask(panel, mask_config, ipo_dates=ipo_dates)
+        mask = compute_tradability_mask(
+            panel, mask_config, ipo_dates=ipo_dates, st_codes=st_codes,
+        )
 
     fwd = forward_return_panel(
         panel["close"], horizon, mask=mask,
