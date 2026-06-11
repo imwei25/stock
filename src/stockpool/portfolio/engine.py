@@ -29,6 +29,9 @@ import numpy as np
 import pandas as pd
 
 from stockpool.backtesting.framework import Trade, TradeCosts
+from stockpool.backtesting.limits import (
+    infer_limit_pct, open_hits_limit_down, open_hits_limit_up,
+)
 from stockpool.backtesting.metrics import compute_metrics
 from stockpool.config import PortfolioRunConfig
 from stockpool.portfolio.eligibility import EligibilityFilter
@@ -76,6 +79,8 @@ class PortfolioEngine:
         self.risk_free_rate = risk_free_rate
         self.eligibility = eligibility
         self.sector_map = dict(sector_map or {})
+        # P1-3: 涨跌停拒单的 ST 集合(±5% 阈值);None = 仅按代码前缀推断。
+        self.st_codes: set | None = None
 
     # ---- public ----
 
@@ -100,35 +105,72 @@ class PortfolioEngine:
         cash_ratio = np.zeros(n_bars)
         rebalance_records: list[dict] = []
         pending_target: set[str] | None = None
+        # P1-5: 逐 code 最后有效 close(估值/核销基准)与连续无报价计数。
+        last_close: dict[str, float] = {}
+        stale_bars: dict[str, int] = {}
+        limit_pcts = {
+            c: infer_limit_pct(str(c), self.st_codes) for c in closes.columns
+        }
 
         for t in range(n_bars):
             date_t = dates[t]
             opens_t = opens.iloc[t]
             closes_t = closes.iloc[t]
+            prev_closes_t = closes.iloc[t - 1] if t > 0 else closes.iloc[0]
 
             # 1. Execute pending trade decided on bar t-1.
             if pending_target is not None:
-                cash, closed_now = _rebalance_to_target(
+                cash, closed_now, turnover_val = _rebalance_to_target(
                     positions=positions, cash=cash,
                     target=pending_target,
-                    opens_t=opens_t, t=t, date_t=date_t,
+                    opens_t=opens_t, prev_closes_t=prev_closes_t,
+                    t=t, date_t=date_t,
                     costs=self.costs,
+                    limit_pcts=limit_pcts,
+                    min_commission=getattr(self.cfg, "min_commission", 0.0),
+                    last_close=last_close,
                 )
                 closed.extend(closed_now)
+                if rebalance_records:
+                    base_eq = equity[t - 1] if t > 0 else float(self.cfg.initial_cash)
+                    rebalance_records[-1]["turnover"] = turnover_val
+                    rebalance_records[-1]["turnover_ratio"] = (
+                        turnover_val / base_eq if base_eq > 0 else 0.0
+                    )
                 pending_target = None
 
-            # 2. Mark-to-market at close[t]. Positions lacking close[t] keep
-            #    their previous mark (defensive: shouldn't normally happen
-            #    inside the date range).
+            # 2. Mark-to-market at close[t]。无报价持仓按最后有效 close 计值
+            #    (P1-5:旧实现回落 entry_price,停牌一天市值被打回入场价,
+            #    制造虚假波动);连续 delist_after_bars 根无报价 → 强制核销。
             held_value = 0.0
-            for pos in positions.values():
-                close_t = closes_t.get(pos.code)
+            delist_after = getattr(self.cfg, "delist_after_bars", 60)
+            for code, pos in list(positions.items()):
+                close_t = closes_t.get(code)
                 if pd.notna(close_t):
+                    last_close[code] = float(close_t)
+                    stale_bars[code] = 0
                     held_value += pos.shares * float(close_t)
                 else:
-                    # Fall back to entry-price valuation if today's close is
-                    # missing (rare; defensive only).
-                    held_value += pos.shares * pos.entry_price
+                    stale_bars[code] = stale_bars.get(code, 0) + 1
+                    mark = last_close.get(code, pos.entry_price)
+                    if stale_bars[code] >= delist_after:
+                        # 退市/无限期停牌:按最后有效价核销(现实退市整理期
+                        # 往往更惨,这里偏乐观,见 config 注释)。
+                        proceeds = pos.shares * mark * (1 - self.costs.sell_cost)
+                        cash += proceeds
+                        denom = pos.shares * pos.entry_price
+                        closed.append(PortfolioTrade(
+                            code=code, entry_date=pos.entry_date,
+                            exit_date=date_t, entry_price=pos.entry_price,
+                            exit_price=mark,
+                            weight_at_entry=pos.weight_at_entry,
+                            ret=float(proceeds / denom - 1) if denom > 0 else 0.0,
+                            days_held=t - pos.entry_idx,
+                            exit_reason="delisted",
+                        ))
+                        del positions[code]
+                        continue
+                    held_value += pos.shares * mark
             total_equity = cash + held_value
             equity[t] = total_equity
             num_pos[t] = len(positions)
@@ -145,7 +187,7 @@ class PortfolioEngine:
                     pending_target = _select_top_k(
                         scores=scores,
                         k=self.cfg.top_k,
-                        opens_next=opens.iloc[t + 1],
+                        closes_t=closes_t,
                         sector_map=self.sector_map,
                         max_per_industry=self.cfg.max_per_industry,
                     )
@@ -153,6 +195,7 @@ class PortfolioEngine:
                         "date": date_t,
                         "target_codes": sorted(pending_target),
                         "num_target": len(pending_target),
+                        "turnover": 0.0,  # 执行 bar 回填
                     })
 
         # End-of-backtest close-out: realize remaining positions so trade-level
@@ -167,7 +210,7 @@ class PortfolioEngine:
             for code, pos in list(positions.items()):
                 price = closes_last.get(code)
                 if pd.isna(price):
-                    price = pos.entry_price
+                    price = last_close.get(code, pos.entry_price)  # P1-5
                 proceeds = pos.shares * float(price) * (1 - self.costs.sell_cost)
                 notional = pos.shares * pos.entry_price
                 ret = (proceeds / notional) - 1 if notional > 0 else 0.0
@@ -192,7 +235,7 @@ class PortfolioEngine:
         rebalance_log = (
             pd.DataFrame(rebalance_records)
             if rebalance_records
-            else pd.DataFrame(columns=["date", "target_codes", "num_target"])
+            else pd.DataFrame(columns=["date", "target_codes", "num_target", "turnover"])
         )
         # Adapt PortfolioTrade → Trade for compute_metrics.
         adapter_trades = [
@@ -208,6 +251,18 @@ class PortfolioEngine:
         ]
         metrics = compute_metrics(
             pd.Series(equity), adapter_trades, risk_free_rate=self.risk_free_rate,
+        )
+        # P1-4: 换手率指标(此前根本没有统计,虚构换手的量级无从察觉)。
+        ratios = [
+            r.get("turnover_ratio", 0.0) for r in rebalance_records
+            if r.get("turnover_ratio") is not None
+        ]
+        years = n_bars / 252.0 if n_bars > 0 else 0.0
+        metrics["avg_turnover_per_rebalance"] = (
+            float(np.mean(ratios)) if ratios else None
+        )
+        metrics["annualized_turnover"] = (
+            float(np.sum(ratios) / years) if ratios and years > 0 else None
         )
         return PortfolioBacktestResult(
             curve=curve,
@@ -263,18 +318,21 @@ def _build_wide_pivots(
 def _select_top_k(
     scores: dict[str, float],
     k: int,
-    opens_next: pd.Series,
+    closes_t: pd.Series,
     sector_map: Mapping[str, str] | None = None,
     max_per_industry: int | None = None,
 ) -> set[str]:
-    """Take top-K by score, skipping codes without executable open[t+1].
+    """Take top-K by score using **information available at bar t** (P2-9).
+
+    旧实现用 ``opens.iloc[t+1]`` 过滤候选 —— 决策时刻(t 收盘后)窥视了
+    "明日是否停牌",且买不进时自动顺位补下一名(免费预知 + 乐观执行)。
+    现在只按 ``close[t]`` 是否有报价过滤(今天在交易);t+1 真停牌的腿在
+    执行层现金闲置,下次 rebalance 再补 —— 与真实下单一致。
 
     If ``max_per_industry`` and ``sector_map`` are both provided, applies a
     greedy per-industry cap during the top-K walk. ``"Unknown"`` semantics
     (matching Pool B): if *every* candidate has no sector mapping, the cap
-    is skipped (everyone would be in the same bucket otherwise); else
-    unmapped codes go into a single ``"Unknown"`` bucket that counts
-    normally against the cap.
+    is skipped; else unmapped codes go into a single ``"Unknown"`` bucket.
     """
     ranked = sorted(scores.items(), key=lambda kv: -kv[1])
     apply_cap = (
@@ -287,7 +345,7 @@ def _select_top_k(
     for code, _ in ranked:
         if len(out) >= k:
             break
-        px = opens_next.get(code)
+        px = closes_t.get(code)
         if pd.isna(px):
             continue
         if apply_cap:
@@ -299,36 +357,63 @@ def _select_top_k(
     return out
 
 
+def _order_cost(notional: float, rate: float, min_commission: float) -> float:
+    """单笔订单费用:比例费率,带可选地板(P2-3 最低佣金近似)。"""
+    return max(notional * rate, min_commission) if notional > 0 else 0.0
+
+
 def _rebalance_to_target(
     positions: dict[str, _Position],
     cash: float,
     target: set[str],
     opens_t: pd.Series,
+    prev_closes_t: pd.Series,
     t: int,
     date_t: pd.Timestamp,
     costs: TradeCosts,
-) -> tuple[float, list[PortfolioTrade]]:
-    """Full equal-weight rebalance: liquidate, redistribute.
+    limit_pcts: Mapping[str, float] | None = None,
+    min_commission: float = 0.0,
+    last_close: Mapping[str, float] | None = None,
+) -> tuple[float, list[PortfolioTrade], float]:
+    """**差量调仓**(P1-4):只卖出局者、只买新进者,存活仓不动。
 
-    PR-1 simplification per spec — clean semantics, no turnover_cap. Sells
-    everything (or holds if next-bar open is NaN), pools cash, then buys
-    target codes equal-weight with whatever cash remains.
+    旧实现"全清仓再买回":存活持仓每轮 rebalance 被虚构双边换手,默认
+    成本下 ~0.21%/轮 × 年 ~50 轮 ≈ 10%/年的虚构拖累,且 PortfolioTrade
+    全是 5 天碎片(days_held/胜率失真)。差量调仓后存活仓权重自然漂移
+    (不再强制等权),与"买入后持有到被换出"的真实操作一致。
 
-    Survivors in (current ∩ target) are sold and re-bought (T+1 fictitious
-    churn) so the math stays uniform; PR-2/3 can add a "hold survivors"
-    optimization. The cost is real (extra round-trip fees) but small at
-    typical buy/sell ratios (~0.1%).
+    执行约束(P1-3):卖出腿开盘一字跌停 → 卖不出,保留持仓下轮再试;
+    买入腿开盘一字涨停 → 买不进,该腿现金闲置(不顺位替补)。
+
+    Returns:
+        (cash, closed_trades, turnover_value) — turnover_value =
+        (卖出额 + 买入额) / 2,调用方据此算换手率。
     """
     closed: list[PortfolioTrade] = []
-    # 1. Liquidate every position with a valid open price today.
+    sells_value = 0.0
+    buys_value = 0.0
+    limit_pcts = limit_pcts or {}
+    last_close = last_close or {}
+
+    # 1. 卖出:持仓中不在 target 的(出局者)。
     for code in list(positions.keys()):
+        if code in target:
+            continue  # 存活仓不动(差量语义)
         pos = positions[code]
         px = opens_t.get(code)
         if pd.isna(px):
-            # No quote today — keep the position; metric impact is small.
+            # 无报价(停牌)— 保留持仓,下轮再试。
             continue
-        proceeds = pos.shares * float(px) * (1 - costs.sell_cost)
+        px = float(px)
+        prev_c = prev_closes_t.get(code)
+        lp = limit_pcts.get(code, 0.10)
+        if pd.notna(prev_c) and open_hits_limit_down(px, float(prev_c), lp):
+            continue  # 跌停卖不出(P1-3)
+        gross = pos.shares * px
+        fee = _order_cost(gross, costs.sell_cost, min_commission)
+        proceeds = gross - fee
         cash += proceeds
+        sells_value += gross
         notional = pos.shares * pos.entry_price
         ret = (proceeds / notional) - 1 if notional > 0 else 0.0
         closed.append(PortfolioTrade(
@@ -336,7 +421,7 @@ def _rebalance_to_target(
             entry_date=pos.entry_date,
             exit_date=date_t,
             entry_price=pos.entry_price,
-            exit_price=float(px),
+            exit_price=px,
             weight_at_entry=pos.weight_at_entry,
             ret=float(ret),
             days_held=t - pos.entry_idx,
@@ -344,24 +429,46 @@ def _rebalance_to_target(
         ))
         del positions[code]
 
-    # 2. Of the target, keep only codes with a valid open price.
-    buyable = [c for c in target if pd.notna(opens_t.get(c))]
-    if not buyable:
-        return cash, closed
-    per_lot = cash / len(buyable)
-    for code in buyable:
-        px = float(opens_t.get(code))
-        committed = per_lot * (1 - costs.buy_cost)
+    # 2. 买入:target 中尚未持有的(新进者)。等分当前现金;买不进的腿
+    #    (无报价/涨停)现金闲置 —— 分母用"计划买入腿数",不向可买腿
+    #    再集中(那等价于顺位替补)。
+    new_codes = [c for c in target if c not in positions]
+    if not new_codes:
+        return cash, closed, (sells_value + buys_value) / 2.0
+
+    # P2-10: weight_at_entry 分母 = 执行时点组合总值(现金 + 存活仓按
+    # 开盘价/最后有效价 mark),循环外固定 —— 旧实现用递减中的 cash,
+    # 最后一只恒记 ~100%。
+    survivors_value = 0.0
+    for code, pos in positions.items():
+        px = opens_t.get(code)
+        mark = float(px) if pd.notna(px) else last_close.get(code, pos.entry_price)
+        survivors_value += pos.shares * mark
+    total_equity_exec = max(cash + survivors_value, 1e-12)
+
+    per_lot = cash / len(new_codes)
+    for code in new_codes:
+        px = opens_t.get(code)
+        if pd.isna(px):
+            continue  # t+1 停牌,现金闲置
+        px = float(px)
+        prev_c = prev_closes_t.get(code)
+        lp = limit_pcts.get(code, 0.10)
+        if pd.notna(prev_c) and open_hits_limit_up(px, float(prev_c), lp):
+            continue  # 涨停买不进(P1-3),现金闲置
+        fee = _order_cost(per_lot, costs.buy_cost, min_commission)
+        committed = per_lot - fee
         shares = committed / px if px > 0 else 0.0
         if shares <= 0:
             continue
         positions[code] = _Position(
             code=code, entry_idx=t, entry_date=date_t,
             entry_price=px, shares=shares,
-            weight_at_entry=per_lot / max(cash, 1e-12),
+            weight_at_entry=per_lot / total_equity_exec,
         )
         cash -= per_lot
-    return cash, closed
+        buys_value += committed
+    return cash, closed, (sells_value + buys_value) / 2.0
 
 
 def _empty_result(name: str, risk_free_rate: float) -> PortfolioBacktestResult:

@@ -524,7 +524,7 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
         # Fresh engine instance each call so staggered runs don't share
         # internal state. PrecomputedScoreStrategy is stateless and safely
         # reused.
-        return PortfolioEngine(
+        eng = PortfolioEngine(
             strategy=portfolio_strat,
             portfolio_cfg=cfg.portfolio_backtest.portfolio,
             costs=costs,
@@ -532,6 +532,13 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
             eligibility=eligibility,
             sector_map=sector_map,
         )
+        # P1-3: ST ±5% 涨跌停阈值(缓存缺失则空集,按代码前缀兜底)
+        try:
+            from stockpool.ipo_dates import load_st_codes
+            eng.st_codes = load_st_codes(cfg.data.cache_dir)
+        except Exception:  # noqa: BLE001
+            eng.st_codes = None
+        return eng
 
     n_offsets = cfg.portfolio_backtest.staggered_starts
     if n_offsets > 1:

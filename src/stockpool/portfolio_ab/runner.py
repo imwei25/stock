@@ -164,7 +164,7 @@ def run_single_arm(
         )
 
         def _factory() -> PortfolioEngine:
-            return PortfolioEngine(
+            eng = PortfolioEngine(
                 strategy=portfolio_strat,
                 portfolio_cfg=effective_cfg.portfolio_backtest.portfolio,
                 costs=costs,
@@ -172,6 +172,12 @@ def run_single_arm(
                 eligibility=eligibility,
                 sector_map=sector_map,
             )
+            try:
+                from stockpool.ipo_dates import load_st_codes
+                eng.st_codes = load_st_codes(effective_cfg.data.cache_dir)
+            except Exception:  # noqa: BLE001
+                eng.st_codes = None
+            return eng
 
         n_offsets = effective_cfg.portfolio_backtest.staggered_starts
         if n_offsets > 1:

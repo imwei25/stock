@@ -128,14 +128,18 @@ def _holdings_chart(result: PortfolioBacktestResult) -> Line:
 
 def _metrics_table(result: PortfolioBacktestResult) -> str:
     m = result.metrics
+    ann_to = m.get("annualized_turnover")
     rows = [
         ("Strategy", result.strategy_name),
-        ("Total return", f"{m.get('total_return', 0.0):+.3f}"),
-        ("Annualized return", f"{m.get('annualized_return', 0.0):+.3f}"),
+        ("Total return", f"{m.get('total_return', 0.0) or 0.0:+.3f}"),
+        ("Annualized return", f"{m.get('annualized_return', 0.0) or 0.0:+.3f}"),
         ("Sharpe", f"{m.get('sharpe', 0.0) or 0.0:+.2f}"),
-        ("Max drawdown", f"{m.get('max_drawdown', 0.0):.3f}"),
+        ("Max drawdown", f"{m.get('max_drawdown', 0.0) or 0.0:.3f}"),
         ("# trades", str(m.get("trade_count", len(result.trades)))),
         ("# rebalances", str(len(result.rebalance_log))),
+        # P1-4: 换手率(差量调仓后才有意义;此前虚构换手无从察觉)
+        ("Annualized turnover",
+         f"{ann_to:.2f}×" if ann_to is not None else "—"),
     ]
     body = "\n".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows)
     return f"<table>{body}</table>"

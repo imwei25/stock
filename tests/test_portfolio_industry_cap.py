@@ -1,4 +1,4 @@
-"""Tests for industry cap in PortfolioEngine._select_top_k."""
+﻿"""Tests for industry cap in PortfolioEngine._select_top_k."""
 from __future__ import annotations
 
 import pandas as pd
@@ -16,7 +16,7 @@ def test_greedy_cap_correct():
     scores = {"a0": 1.0, "a1": 0.9, "a2": 0.8, "b0": 0.7, "b1": 0.6}
     sector_map = {"a0": "A", "a1": "A", "a2": "A", "b0": "B", "b1": "B"}
     out = _select_top_k(
-        scores, k=3, opens_next=_all_open(scores),
+        scores, k=3, closes_t=_all_open(scores),
         sector_map=sector_map, max_per_industry=2,
     )
     assert out == {"a0", "a1", "b0"}
@@ -26,7 +26,7 @@ def test_no_cap_when_max_none():
     scores = {"a0": 1.0, "a1": 0.9, "a2": 0.8}
     sector_map = {"a0": "A", "a1": "A", "a2": "A"}
     out = _select_top_k(
-        scores, k=3, opens_next=_all_open(scores),
+        scores, k=3, closes_t=_all_open(scores),
         sector_map=sector_map, max_per_industry=None,
     )
     assert out == {"a0", "a1", "a2"}
@@ -35,11 +35,11 @@ def test_no_cap_when_max_none():
 def test_no_cap_when_sector_map_empty_or_none():
     scores = {"a0": 1.0, "a1": 0.9, "a2": 0.8}
     out_none = _select_top_k(
-        scores, k=3, opens_next=_all_open(scores),
+        scores, k=3, closes_t=_all_open(scores),
         sector_map=None, max_per_industry=2,
     )
     out_empty = _select_top_k(
-        scores, k=3, opens_next=_all_open(scores),
+        scores, k=3, closes_t=_all_open(scores),
         sector_map={}, max_per_industry=2,
     )
     assert out_none == {"a0", "a1", "a2"}
@@ -51,7 +51,7 @@ def test_all_unknown_skips_cap():
     scores = {"a0": 1.0, "a1": 0.9, "a2": 0.8, "a3": 0.7}
     sector_map = {}   # no codes mapped
     out = _select_top_k(
-        scores, k=3, opens_next=_all_open(scores),
+        scores, k=3, closes_t=_all_open(scores),
         sector_map=sector_map, max_per_industry=2,
     )
     assert out == {"a0", "a1", "a2"}
@@ -64,7 +64,7 @@ def test_partial_unknown_counts_in_unknown_bucket():
     # a0 has sector A; u0/u1/u2 are unmapped; b0 has sector B.
     sector_map = {"a0": "A", "b0": "B"}
     out = _select_top_k(
-        scores, k=5, opens_next=_all_open(scores),
+        scores, k=5, closes_t=_all_open(scores),
         sector_map=sector_map, max_per_industry=2,
     )
     # Walk: a0 (A=1) take; u0 (Unknown=1) take; u1 (Unknown=2) take;
@@ -78,7 +78,7 @@ def test_cap_with_missing_open_price_skipped():
     sector_map = {"a0": "A", "a1": "A", "a2": "A", "b0": "B"}
     opens = pd.Series({"a0": 10.0, "a1": float("nan"), "a2": 10.0, "b0": 10.0})
     out = _select_top_k(
-        scores, k=3, opens_next=opens,
+        scores, k=3, closes_t=opens,
         sector_map=sector_map, max_per_industry=2,
     )
     # a0 take (A=1), a1 skip (no open), a2 take (A=2), b0 take (B=1).

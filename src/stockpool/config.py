@@ -565,6 +565,13 @@ class PortfolioRunConfig(BaseModel):
     rebalance_n_days: int = Field(default=5, ge=1)
     max_per_industry: int | None = Field(default=5, ge=1)
     initial_cash: float = Field(default=1.0, gt=0.0)
+    # 每笔订单最低费用(元)。默认 0(关)——initial_cash 默认是归一化的 1.0,
+    # 元级地板费无意义;用真实资金量(如 initial_cash: 100000)时设 5.0,
+    # 小单的费率地板会显著抬高摩擦(P2-3 微观规则)。
+    min_commission: float = Field(default=0.0, ge=0.0)
+    # 持仓连续无报价(close NaN)这么多 bar 后按最后有效价强制核销
+    # (exit_reason="delisted",P1-5)。现实退市整理期更惨,此处偏乐观,文档已注明。
+    delist_after_bars: int = Field(default=60, ge=1)
 
 
 class PortfolioEligibilityConfig(BaseModel):

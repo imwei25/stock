@@ -105,7 +105,8 @@ def test_t_plus_one_fill_at_next_open():
     """Decision on bar t, fill at open[t+1]. Verified by tracking entry price."""
     dates = _bars(6)
     # A's open[t] differs from close[t] so we can verify which is used.
-    opens_a = np.array([10.0, 10.0, 10.0, 99.0, 10.0, 10.0])   # open jumps at idx 3
+    # 跳空幅度要在涨停阈值(±10%)以内,否则会被 P1-3 拒单 —— 这里 +5%。
+    opens_a = np.array([10.0, 10.0, 10.0, 10.5, 10.0, 10.0])   # open jumps at idx 3
     closes_a = np.array([10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
     panel = {
         "A": _stock(dates, opens_a, closes_a),
@@ -123,10 +124,10 @@ def test_t_plus_one_fill_at_next_open():
         costs=TradeCosts(0.0, 0.0),
     )
     res = eng.run(panel)
-    # First trade for A should have entry_price == 99 (open[3]), not close[2]/open[2].
+    # First trade for A should have entry_price == 10.5 (open[3]), not close[2]/open[2].
     a_trades = [t for t in res.trades if t.code == "A"]
     assert a_trades, "expected A to be bought after rebalance bar"
-    assert a_trades[0].entry_price == pytest.approx(99.0)
+    assert a_trades[0].entry_price == pytest.approx(10.5)
 
 
 def test_rebalance_bars_respect_offset():
@@ -198,10 +199,11 @@ def test_rebalance_diff_sells_dropped_buys_added():
     a_trades = [t for t in res.trades if t.code == "A"]
     assert len(a_trades) == 1
     assert a_trades[0].exit_reason == "rebalance_drop"
-    # B was churned (sold then re-bought at the same bar) → 2 entries total:
-    # 1 closed at the rebalance, 1 closed at end_of_backtest.
+    # P1-4 差量调仓:B 是存活仓(两次 target 都含 B)→ 不被翻炒,
+    # 只有 end_of_backtest 一笔。
     b_trades = [t for t in res.trades if t.code == "B"]
-    assert len(b_trades) == 2
+    assert len(b_trades) == 1
+    assert b_trades[0].exit_reason == "end_of_backtest"
     # C entered bar 4 (the rebalance exec) and closed at end_of_backtest.
     c_trades = [t for t in res.trades if t.code == "C"]
     assert len(c_trades) == 1
