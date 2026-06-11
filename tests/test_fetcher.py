@@ -213,14 +213,15 @@ def test_update_source_marker_writes_file(tmp_path):
     update_source_marker(tmp_path, "mootdx")
     marker = tmp_path / ".data_source"
     assert marker.exists()
-    # marker 同时编码数据源与复权模式(见 test_fetcher_adjust.py)
-    assert marker.read_text(encoding="utf-8").strip() == "mootdx:hfq"
+    # marker 编码 数据源 + 复权模式 + 缓存 schema 版本(v2 = volume 单位为股,
+    # 见 test_volume_unit.py / test_fetcher_adjust.py)
+    assert marker.read_text(encoding="utf-8").strip() == "mootdx:hfq:v2"
 
 
 def test_update_source_marker_overwrites(tmp_path):
     update_source_marker(tmp_path, "mootdx")
     update_source_marker(tmp_path, "baostock")
-    assert (tmp_path / ".data_source").read_text(encoding="utf-8").strip() == "baostock:hfq"
+    assert (tmp_path / ".data_source").read_text(encoding="utf-8").strip() == "baostock:hfq:v2"
 
 
 def test_fetch_daily_auto_refresh_on_source_change(tmp_path):

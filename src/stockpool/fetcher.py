@@ -50,6 +50,10 @@ def _no_proxy():
 
 _ADJUST_MODE = "hfq"  # 全链路统一后复权;改动此值会使全部价格缓存失效重拉
 
+# 缓存 schema 版本。v2 = 个股 volume 单位统一为"股"(此前 mootdx/akshare
+# 缓存的是"手")。升版使旧 marker 不匹配 → 全部价格缓存自动失效重拉。
+_CACHE_SCHEMA = "v2"
+
 # 收盘集合竞价 15:00 结束,留 5 分钟缓冲;在此之前拉到的当日 bar 视为
 # 未完成(成交量/价格仍在变化),不得写入缓存。
 _INTRADAY_CUTOFF = pd.Timedelta(hours=15, minutes=5)
@@ -108,8 +112,9 @@ def _source_marker_path(cache_dir: str | Path) -> Path:
 
 
 def _marker_value(source: Source) -> str:
-    """marker 同时编码数据源与复权模式;任一变化都意味着缓存价格口径变了。"""
-    return f"{source}:{_ADJUST_MODE}"
+    """marker 编码 数据源 + 复权模式 + 缓存 schema 版本;任一变化都意味着
+    缓存数据口径变了(价格复权基准或 volume 单位),必须全量重拉。"""
+    return f"{source}:{_ADJUST_MODE}:{_CACHE_SCHEMA}"
 
 
 def check_source_change(cache_dir: str | Path, source: Source) -> bool:
@@ -198,7 +203,11 @@ def _fetch_from_akshare(code: str, start: str | None = None) -> pd.DataFrame:
                     # 全历史平移,与增量缓存根本不兼容)。
                     adjust="hfq",
                 )
-            return _normalize(raw)
+            out = _normalize(raw)
+            # akshare stock_zh_a_hist 的"成交量"原始单位是"手"(1 手 = 100 股);
+            # ×100 统一为"股",与 baostock 口径一致(P1-6)。
+            out["volume"] = out["volume"] * 100.0
+            return out
         except Exception as e:
             last_err = e
             log.warning("AKShare attempt %d/%d for %s failed: %s",
@@ -209,12 +218,19 @@ def _fetch_from_akshare(code: str, start: str | None = None) -> pd.DataFrame:
     raise last_err
 
 
-def _dispatch_stock(source: Source, code: str, start: str | None) -> pd.DataFrame:
+def _dispatch_stock(
+    source: Source,
+    code: str,
+    start: str | None,
+    min_bars: int | None = None,
+) -> pd.DataFrame:
+    """按 source 分发个股拉取。``min_bars`` 仅 mootdx 用(单次 800 根上限,
+    需分页凑够根数);akshare/baostock 本就按日期窗口全量返回,忽略该参数。"""
     if source == "akshare":
         return _fetch_from_akshare(code, start=start)
     if source == "mootdx":
         from stockpool.data_sources import mootdx_backend
-        return mootdx_backend.fetch_stock(code, start=start)
+        return mootdx_backend.fetch_stock(code, start=start, min_bars=min_bars)
     if source == "baostock":
         from stockpool.data_sources import baostock_backend
         return baostock_backend.fetch_stock(code, start=start)
@@ -285,7 +301,12 @@ def fetch_daily(
             if not ok:
                 incremental = False  # 接缝校验失败 → 丢弃缓存,全量重拉
         if not incremental:
-            fresh = _drop_in_progress_bar(_dispatch_stock(source, code, start=None))
+            # 全量拉取:mootdx 单次只有 800 根,传 min_bars 让其分页凑够
+            # history_days + 60(指标 warmup 缓冲)根;其余源忽略该参数。
+            fresh = _drop_in_progress_bar(
+                _dispatch_stock(source, code, start=None,
+                                min_bars=history_days + 60)
+            )
 
         if incremental:
             combined = (
@@ -366,6 +387,8 @@ def _fetch_index_from_akshare(symbol: str) -> pd.DataFrame:
 
     stock_zh_index_daily already returns English column names:
     date, open, close, high, low, volume.
+
+    指数 volume 跨源单位不保证一致(下游只做量比等比值类用途),保持原样。
     """
     last_err: Exception | None = None
     for attempt, delay in enumerate(_RETRY_DELAYS, 1):
@@ -444,6 +467,8 @@ def _fetch_sector_from_akshare(sector_name: str, start: str | None = None) -> pd
 
     stock_board_industry_hist_em returns Chinese column names,
     so we reuse _normalize() for consistent output.
+
+    板块 volume 跨源单位不保证一致(只做比值类用途),保持原样,不做手→股放大。
     """
     last_err: Exception | None = None
     for attempt, delay in enumerate(_RETRY_DELAYS, 1):

@@ -23,7 +23,7 @@ from stockpool.config import load_config
 # === helpers ===
 
 def _daily(n: int = 60, close: float = 20.0, volume: float = 100_000.0) -> pd.DataFrame:
-    """Synthetic OHLCV. ``volume`` is in 手; amount = volume*close*100."""
+    """Synthetic OHLCV. ``volume`` 单位 = 股 (P1-6); amount = volume*close."""
     dates = pd.date_range("2026-01-02", periods=n, freq="B")
     c = np.full(n, close)
     return pd.DataFrame({
@@ -145,13 +145,13 @@ def test_recommend_pool_rejects_bad_refresh(tmp_path):
 # === funnel ===
 
 def test_funnel_liquidity_threshold(monkeypatch, tmp_path):
-    """Volume × close × 100 → amount in 元;below threshold is dropped."""
+    """Volume × close → amount in 元(volume 单位 = 股);below threshold is dropped."""
     cfg = load_config(_minimal_cfg_yaml(tmp_path, min_avg_amount_20d=2e7))
-    # A: amount = 100k * 10 * 100 = 100M 元 → keep
-    # B: amount = 1k * 10 * 100 = 1M 元 → drop
+    # A: amount = 10M 股 * 10 = 100M 元 → keep
+    # B: amount = 100k 股 * 10 = 1M 元 → drop
     universe = {
-        "000001": _daily(volume=100_000, close=10.0),
-        "000002": _daily(volume=1_000, close=10.0),
+        "000001": _daily(volume=10_000_000, close=10.0),
+        "000002": _daily(volume=100_000, close=10.0),
     }
     _patch_data(monkeypatch, universe,
                 names={"000001": "A", "000002": "B"},

@@ -224,8 +224,20 @@ def _analyze_one(
     )
 
 
+def _wire_refresh_fundamentals(args: argparse.Namespace) -> None:
+    """--refresh-fundamentals 透传:设置 fundamentals_loader 模块级 force flag。
+
+    设置后本进程内所有基本面表加载无视 30 天缓存直接重拉(P2-26)。
+    """
+    from stockpool import fundamentals_loader
+    fundamentals_loader.set_force_refresh(
+        bool(getattr(args, "refresh_fundamentals", False))
+    )
+
+
 def cmd_backtest(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
+    _wire_refresh_fundamentals(args)
 
     run_date = date.today().isoformat()
     backtest_root = Path(cfg.report.output_dir) / "backtest"
@@ -292,6 +304,11 @@ def _apply_stocks_filter(stocks, codes):
     return [s for s in stocks if s.code in keep]
 
 
+def _fmt_opt(v, spec: str) -> str:
+    """Format an optional metric; None (undefined, e.g. short window) → '—'."""
+    return "—" if v is None else format(v, spec)
+
+
 def _print_single_arm_stdout(arm_result) -> None:
     print(f"=== Arm: {arm_result.name} ===")
     print(f"Stocks succeeded: {len(arm_result.per_stock)}; "
@@ -300,7 +317,8 @@ def _print_single_arm_stdout(arm_result) -> None:
         N = next(iter(res.metrics))
         m = res.metrics[N]
         print(f"  {code} {name}: total_ret={m['total_return']:+.3f} "
-              f"ann={m['annualized_return']:+.3f} sharpe={m.get('sharpe'):+.2f} "
+              f"ann={_fmt_opt(m.get('annualized_return'), '+.3f')} "
+              f"sharpe={_fmt_opt(m.get('sharpe'), '+.2f')} "
               f"max_dd={m['max_drawdown']:.3f}")
 
 
@@ -358,6 +376,7 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     from stockpool.portfolio.strategy import PrecomputedScoreStrategy
 
     cfg = load_config(args.config)
+    _wire_refresh_fundamentals(args)
     if not cfg.portfolio_backtest.enabled:
         log.error(
             "portfolio_backtest.enabled=false in %s — set to true to opt in.",
@@ -686,10 +705,10 @@ def _print_portfolio_arm_stdout(arm_result) -> None:
         return
     m = arm_result.primary_metrics
     print(
-        f"  total_ret={m.get('total_return', 0.0):+.3f} "
-        f"ann={m.get('annualized_return', 0.0):+.3f} "
-        f"sharpe={m.get('sharpe') or 0.0:+.2f} "
-        f"max_dd={m.get('max_drawdown', 0.0):.3f} "
+        f"  total_ret={m.get('total_return') or 0.0:+.3f} "
+        f"ann={_fmt_opt(m.get('annualized_return'), '+.3f')} "
+        f"sharpe={_fmt_opt(m.get('sharpe'), '+.2f')} "
+        f"max_dd={m.get('max_drawdown') or 0.0:.3f} "
         f"trades={m.get('trade_count', 0)}"
     )
 
@@ -866,6 +885,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     _t_total = time.perf_counter()
     _t = time.perf_counter()
     cfg = load_config(args.config)
+    _wire_refresh_fundamentals(args)
 
     today = date.today()
     run_date = today.isoformat()

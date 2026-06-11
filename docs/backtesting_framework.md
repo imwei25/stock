@@ -41,10 +41,14 @@ single = BacktestEngine(
 )
 results = single.sweep_holding_days(daily_df, [5, 10, 20])
 
-# 多仓位:每次 buy 都开一个独立的 10% 小单,各自 N 天平仓
+# 多仓位:每次 buy 都开一个独立的 lot,各自 N 天平仓。
+# lot 大小由 LotSizer 决定 —— 项目 config 默认是 sizing.type=vol_target;
+# 不传 lot_sizer 时引擎退回 FixedLotSizer(0.1)。
+from stockpool.backtesting.sizing import FixedLotSizer, VolTargetLotSizer
+
 multi = MultiLotBacktestEngine(
     strategy,
-    position_size=0.1,
+    lot_sizer=FixedLotSizer(0.1),     # 或 VolTargetLotSizer(...);position_size= 已废弃
     costs=TradeCosts(buy_cost=0.0008, sell_cost=0.0013),
 )
 multi_results = multi.run(daily_df, max_holding_days=10)
@@ -106,22 +110,27 @@ BacktestEngine(strategy, costs=TradeCosts(), risk_free_rate=0.02)
 ```python
 MultiLotBacktestEngine(
     strategy,
-    position_size,                 # (0, 1] — fraction of starting capital per lot
+    lot_sizer=None,                # LotSizer 回调,决定每笔 buy 的 lot 大小
+                                   #   (FixedLotSizer(0.1) / VolTargetLotSizer(...));
+                                   #   项目 config 默认 sizing.type=vol_target
+    position_size=None,            # 已废弃 = lot_sizer=FixedLotSizer(position_size);
+                                   #   与 lot_sizer 互斥,两者都传 raise ValueError;
+                                   #   两者都不传 → FixedLotSizer(0.1)
     costs=TradeCosts(),
     risk_free_rate=0.02,
     max_concurrent_lots=None,      # None = uncapped (cash自然封顶)
 )
 ```
 
-每个 enter 信号开一个**独立的固定仓位 lot**;每个 lot 有自己的 `days_held`,各自计 N、
-各自记账。`BacktestResult.trades` 里每个已平仓的 lot 是一条记录。`curve["position"]`
-变成"当前开着的 lot 数量"。
+每个 enter 信号开一个**独立的 lot**(大小由 `LotSizer` 决定);每个 lot 有自己的
+`days_held`,各自计 N、各自记账。`BacktestResult.trades` 里每个已平仓的 lot 是一条
+记录。`curve["position"]` 变成"当前开着的 lot 数量"。
 
-**资金模型**:
+**资金模型**(`size` = sizer 对该笔 buy 返回的大小):
 
-- 总资本起始 1.0;每个 lot 占用 `position_size` 的起始资本(如 0.1 = 10%)。
-- 一笔 buy:`cash -= position_size`;新 lot 的有效投资金额 = `position_size * (1 - buy_cost)`。
-- 若 buy 时 `cash < position_size`,该信号被跳过(不做部分成交)。
+- 总资本起始 1.0;每个 lot 占用 `size` 的起始资本(如 0.1 = 10%)。
+- 一笔 buy:`cash -= size`;新 lot 的有效投资金额 = `size * (1 - buy_cost)`。
+- 若 sizer 返回 0(skip-fallback)或 buy 时 `cash < size`,该信号被跳过(不做部分成交)。
 - 一笔 sell 或 lot 自己的 N 到期 → 关掉这个 lot:`cash += lot.current_value * (1 - sell_cost)`。
 - 总净值 = `cash + Σ open_lots[i].current_value`。
 
@@ -133,7 +142,7 @@ MultiLotBacktestEngine(
 | 重复 buy 信号 | 持仓时忽略 | 每次开新 lot(只要现金够) |
 | 单笔 trade 收益 | 全仓收益 | 该 lot 独立收益 |
 | `curve["position"]` | 0 或 1 | 开着的 lot 数量 |
-| `Trade.ret` 分母 | 全仓 `entry_equity` | 该 lot 的 `committed_cash` |
+| `Trade.ret` 分母 | 买入前全仓权益 `equity[t-1]` | 该 lot 的下单金额 `size`(扣 buy_cost 前) |
 
 方法签名与 `BacktestEngine` 一致(`run` / `run_on_signals` / `sweep_holding_days`)。
 
@@ -144,9 +153,10 @@ MultiLotBacktestEngine(
 | `signals` | `DataFrame` | 策略产出的信号帧(保留全部额外列) |
 | `curve` | `DataFrame` | 列:`date`, `equity`, `position`(净值序列,从 1.0 起) |
 | `trades` | `list[Trade]` | 已平仓的交易 |
-| `metrics` | `dict` | 见 [`compute_metrics`](#compute_metrics) |
+| `metrics` | `dict` | **全程口径**(从第 0 根 bar 起),见 [`compute_metrics`](#compute_metrics) |
 | `max_holding_days` | `int` | 本次运行的 N |
 | `strategy_name` | `str` | 来自 `strategy.name` |
+| `metrics_active` | `dict \| None` | **活跃段口径**:净值曲线从第一笔 trade 的 `entry_idx` 起切片后重算的同一组指标。用于剔除 ml_factor 等策略的冷启动平头(训练样本不足时全程 neutral、equity 恒为 1),避免几何年化与夏普被前段稀释。无已平仓交易时为 `None`。`metrics` 语义不变,向后兼容 |
 
 ### `TradeCosts` / `Trade`
 
@@ -168,7 +178,14 @@ class Trade:
     exit_price: float     # = open[exit_idx]
     ret: float            # 净收益率(已扣除两端成本)
     days_held: int        # 持有 bar 数
+    lot_size: float       # 多 lot 引擎:该 lot 的下单金额;单仓引擎恒为默认 0.1
 ```
+
+**`ret` 口径**:分母是**买入前**投入的资金 —— 单仓引擎为买入前全仓权益
+`equity[t-1]`,多 lot 引擎为该 lot 的下单金额 `size`(扣 `buy_cost` 之前)。
+因此 `ret` 同时净掉 `buy_cost` 和 `sell_cost`:价格零波动的一次往返
+`ret ≈ -(buy_cost + sell_cost)`。(P2-8 修复前分母误用扣过 buy_cost 的
+entry_equity,导致每笔 ret 虚高约一个 buy_cost。)
 
 ### `BarContext` / `PositionContext`
 
@@ -205,27 +222,38 @@ buy_and_hold_baseline(daily_df, risk_free_rate=0.02, label="buy_and_hold")
 ```
 
 从第 0 根 bar 全仓持有到底,**不扣手续费**(基准默认不上摩擦,这样策略对比是
-保守的)。`metrics["trade_count"] = 1`,`win_rate` / `avg_trade_return_pct` 为 `None`。
+保守的)。`metrics["trade_count"] = 1`,`win_rate` / `avg_trade_return_pct` 为 `None`,
+`metrics_active` 为 `None`(B&H 没有冷启动段)。
+
+**口径(P3-16 统一)**:曲线与指标都锚定 `open[0]`(无 `open` 列时回退
+`close[0]`):`equity[t] = close[t] / open[0]`(故 `equity[0]` 含第 0 日日内收益,
+一般 ≠ 1.0);`total_return = close[-1] / open[0] - 1`,**包含** day-0 的
+open→close 一段(指标内部在曲线前补一个 1.0 锚点再算,夏普/回撤/年化同样
+看到 day-0 的波动)。
 
 ### `compute_metrics`
 
 ```python
-compute_metrics(equity_series, trades, risk_free_rate=0.02) -> dict
+compute_metrics(equity_series, trades, risk_free_rate=0.02,
+                active_from_idx=None) -> dict
 ```
 
-纯函数,不依赖策略或引擎状态。返回:
+纯函数,不依赖策略或引擎状态。`active_from_idx` 不为 None 时先对净值序列做
+`eq[active_from_idx:]` 切片再计算(活跃段口径,引擎用第一笔 trade 的
+`entry_idx` 填)。返回:
 
-| key | 含义 |
-|---|---|
-| `total_return` | `eq[-1] / eq[0] - 1` |
-| `annualized_return` | 几何年化(按 252 交易日) |
-| `max_drawdown` | 最大回撤(正值) |
-| `sharpe` | 日收益年化夏普,`risk_free_rate` 为年化无风险利率 |
-| `trade_count` | `len(trades)` |
-| `win_rate` | `ret > 0` 的交易占比 |
-| `avg_trade_return_pct` | 平均单笔净收益百分比 |
+| key | 含义 | 边界口径(P3-15) |
+|---|---|---|
+| `total_return` | `eq[-1] / eq[0] - 1` | 始终计算 |
+| `annualized_return` | 几何年化(按 252 交易日) | 有效天数 < 60 时为 `None`(短窗口年化爆炸,如 10 天 +5% → +242%) |
+| `max_drawdown` | 最大回撤(正值) | 始终计算 |
+| `sharpe` | 日收益年化夏普,`risk_free_rate` 为年化无风险利率 | 有效天数 < 20 时为 `None` |
+| `trade_count` | `len(trades)` | 始终计算 |
+| `win_rate` | `ret > 0` 的交易占比 | 无已平仓交易时为 `None`(而非 0.0) |
+| `avg_trade_return_pct` | 平均单笔净收益百分比 | 无已平仓交易时为 `None` |
 
 `trades` 接受任何带 `.ret` 属性的对象 **或** `{"ret": ...}` 形式的 dict。
+下游展示层(`backtest_report.py` / CLI stdout)对 `None` 显示 `—`。
 
 ---
 

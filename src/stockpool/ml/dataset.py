@@ -61,6 +61,7 @@ def forward_return_panel(
     label_type: str = "return",
     *,
     mask: pd.DataFrame | None = None,
+    open_: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """T×N forward-return panel with configurable label transform.
 
@@ -68,15 +69,33 @@ def forward_return_panel(
         close: T × N 收盘价宽表 (date index, code columns).
         horizon: 前瞻天数 h。
         label_type:
-            "return"          — close[t+h] / close[t] - 1 (legacy, default).
+            "return"          — 收益标签(基准见 open_ 参数)。
             "vol_adjusted"    — NotImplementedError (placeholder for future PR).
             "cross_sec_rank"  — NotImplementedError (placeholder for future PR).
-        mask: 可选 T × N bool。若提供做双向检查 — 要求 mask[t]=True ∧ mask[t+horizon]=True;
+        mask: 可选 T × N bool 可交易性。close 基准:要求 mask[t] ∧ mask[t+h];
+              open 基准:检查实际进出场 bar — mask[t+1] ∧ mask[t+1+h]。
               不满足的 t 位置 y 值变 NaN。
+        open_: 可选 T × N 开盘价宽表。提供时标签改为
+               **open[t+1+h] / open[t+1] − 1**(与 T+1 次日开盘成交的执行
+               口径对齐,不含决策 bar 拿不到的 close[t]→open[t+1] 隔夜段);
+               不提供时维持 legacy close[t+h]/close[t] − 1。
     """
     if horizon <= 0:
         raise ValueError(f"horizon must be > 0, got {horizon}")
     if label_type == "return":
+        if open_ is not None:
+            entry = open_.shift(-1)
+            exit_ = open_.shift(-(horizon + 1))
+            y = exit_ / entry - 1.0
+            if mask is not None:
+                m_entry = mask.shift(-1)
+                m_exit = mask.shift(-(horizon + 1))
+                label_valid = (
+                    m_entry.where(m_entry.notna(), False).astype(bool)
+                    & m_exit.where(m_exit.notna(), False).astype(bool)
+                )
+                y = y.where(label_valid)
+            return y
         y = close.shift(-horizon) / close - 1.0
         if mask is not None:
             shifted = mask.shift(-horizon)
@@ -226,17 +245,28 @@ def forward_return(
     df: pd.DataFrame,
     horizon: int,
     label_type: str = "return",
+    *,
+    basis: str = "close",
 ) -> pd.Series:
     """单股 forward return,带 label_type 接口(与 forward_return_panel 一致)。
 
+    basis="open" 时标签为 open[t+1+h]/open[t+1] − 1(与 T+1 开盘成交对齐);
+    默认 "close" 维持 legacy close[t+h]/close[t] − 1。
     Only ``label_type='return'`` is implemented in PR-A; other documented
     options raise NotImplementedError as interface placeholders.
     """
     if horizon <= 0:
         raise ValueError(f"horizon must be > 0, got {horizon}")
+    if basis not in ("close", "open"):
+        raise ValueError(f"unknown basis={basis!r}; expected 'close' or 'open'")
     if label_type == "return":
-        closes = df["close"].reset_index(drop=True)
-        y = closes.shift(-horizon) / closes - 1.0
+        if basis == "open":
+            opens = df["open"].reset_index(drop=True)
+            entry = opens.shift(-1)
+            y = opens.shift(-(horizon + 1)) / entry - 1.0
+        else:
+            closes = df["close"].reset_index(drop=True)
+            y = closes.shift(-horizon) / closes - 1.0
         y.index = pd.Index(df["date"].reset_index(drop=True), name="date")
         return y
     if label_type in ("vol_adjusted", "cross_sec_rank"):
@@ -267,6 +297,7 @@ def build_panel(
     *,
     mask_config: "MaskConfig | None" = None,
     ipo_dates: Mapping[str, pd.Timestamp] | None = None,
+    label_basis: str = "close",
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Pool multi-stock data into a single (X, y) panel.
 
@@ -314,7 +345,10 @@ def build_panel(
         from stockpool.panel import compute_tradability_mask
         mask = compute_tradability_mask(panel, mask_config, ipo_dates=ipo_dates)
 
-    fwd = forward_return_panel(panel["close"], horizon, mask=mask)
+    fwd = forward_return_panel(
+        panel["close"], horizon, mask=mask,
+        open_=panel["open"] if label_basis == "open" else None,
+    )
     X, y = stack_panel_to_xy(fp, fwd, dropna=True)
     return X, y
 

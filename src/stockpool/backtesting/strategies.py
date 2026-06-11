@@ -382,6 +382,33 @@ class MLFactorStrategy(Strategy):
             and bool(self.pool_data)
         )
 
+    @property
+    def _label_lag(self) -> int:
+        """标签向前看的 bar 数。close 基准 = horizon;open 基准的标签
+        open[t+1+h]/open[t+1] 多看 1 根 bar(进场移到 t+1),= horizon + 1。
+        embargo / 截断 / warmup 数学都必须用它而不是裸 horizon。"""
+        extra = 1 if getattr(self.cfg, "label_basis", "close") == "open" else 0
+        return self.cfg.horizon + extra
+
+    def _open_panel_for_labels(self) -> pd.DataFrame | None:
+        """label_basis=open 时给 fast path 提供与 close_panel 对齐的 open 宽表。
+
+        复用 ``_build_ohlcv_from_pool_data``(已带 shared_cache);pool_data
+        缺失时返回 None,调用方回退 close 基准并 warning 一次。"""
+        if getattr(self.cfg, "label_basis", "close") != "open":
+            return None
+        ohlcv = self._build_ohlcv_from_pool_data()
+        if ohlcv is None:
+            if not getattr(self, "_warned_open_fallback", False):
+                import logging
+                logging.getLogger(__name__).warning(
+                    "label_basis=open 但缺少 pool_data/close_panel,无法构造 "
+                    "open 面板;训练标签回退 close 基准。"
+                )
+                self._warned_open_fallback = True
+            return None
+        return ohlcv["open"]
+
     def _build_ohlcv_from_pool_data(self) -> dict | None:
         """Build a T×N OHLCV panel from ``self.pool_data`` for mask computation.
 
@@ -484,7 +511,7 @@ class MLFactorStrategy(Strategy):
         if len(daily_df) == 0:
             return {"signal": "neutral", "score": float("nan")}
         X_full = self._build_x_full(daily_df)
-        y_full = forward_return(daily_df, self.cfg.horizon)
+        y_full = forward_return(daily_df, self.cfg.horizon, basis=self.cfg.label_basis)
         current_bar = len(daily_df) - 1
         today = pd.to_datetime(daily_df["date"].iloc[-1])
 
@@ -561,7 +588,7 @@ class MLFactorStrategy(Strategy):
         # The walk-forward training slices use `.iloc` cuts that never look
         # past the current bar, so this is still look-ahead-safe.
         X_full = self._build_x_full(daily_df)
-        y_full = forward_return(daily_df, cfg.horizon)
+        y_full = forward_return(daily_df, cfg.horizon, basis=cfg.label_basis)
 
         pipeline: TwoStepPipeline | None = None
         quantiles: dict[str, float] | None = None
@@ -583,7 +610,7 @@ class MLFactorStrategy(Strategy):
             )
             if (
                 (pipeline is None or (i - last_fit_bar) >= cfg.refit_every or need_month_fit)
-                and i - cfg.horizon >= cfg.min_train_samples
+                and i - self._label_lag >= cfg.min_train_samples
             ):
                 fitted = self._try_fit(daily_df, X_full, y_full, i)
                 if fitted is not None:
@@ -620,10 +647,12 @@ class MLFactorStrategy(Strategy):
         """Return the bar index where training labels must stop, accounting for
         ``cfg.embargo_days``.
 
-        Without embargo, labels are valid up to ``current_bar - horizon``.
-        With embargo ``E``, push another ``E`` bars back so the most recent
-        training label's forward-return window ends at least ``E`` bars before
-        the test bar — eliminating overlap when E ≥ horizon.
+        Without embargo, labels are valid up to ``current_bar - label_lag``
+        (close 基准 lag=horizon;open 基准标签 open[t+1+h]/open[t+1] 多看
+        1 根 bar,lag=horizon+1)。With embargo ``E``, push another ``E`` bars
+        back so the most recent training label's forward-return window ends
+        at least ``E`` bars before the test bar — eliminating overlap when
+        E ≥ horizon.
 
         ``embargo_days = None`` means "auto = horizon" (the default).
         ``embargo_days = 0`` reproduces pre-PR-A behavior.
@@ -632,7 +661,7 @@ class MLFactorStrategy(Strategy):
         effective_embargo = (
             cfg.embargo_days if cfg.embargo_days is not None else cfg.horizon
         )
-        return current_bar - cfg.horizon - effective_embargo
+        return current_bar - self._label_lag - effective_embargo
 
     def _try_fit(
         self,
@@ -692,6 +721,7 @@ class MLFactorStrategy(Strategy):
                 pool, cfg.factors, cfg.horizon,
                 mask_config=cfg.mask,
                 ipo_dates=self._get_ipo_dates(),
+                label_basis=cfg.label_basis,
             )
             if len(X_pool) > 0 and cfg.train_window > 0:
                 X_pool = X_pool.groupby(
@@ -760,6 +790,7 @@ class MLFactorStrategy(Strategy):
                 )
         fwd = forward_return_panel(
             self._close_panel, self.cfg.horizon, mask=mask,
+            open_=self._open_panel_for_labels(),
         )
         X, y = stack_panel_to_xy(self._factor_panel, fwd, dropna=True)
         # Original layout is (stock, date); swap so date is outer + sort so
@@ -781,9 +812,10 @@ class MLFactorStrategy(Strategy):
         ``.loc[:cutoff_ts]`` + optional host-row filter + per-stock
         ``tail(train_window)``.
 
-        Non-sharing mode drops the host's rows so the host contributes only
-        via ``daily_df`` itself (today's open). For sharing mode the host
-        stays in the panel — matches ``_build_truncated_pool``.
+        Host handling (P3-11 统一): 非 sharing 模式下 host 的**截断历史**也
+        留在训练集 —— 与 ``_build_truncated_pool``(legacy 路径)一致;此前
+        fast path 把 host 整段剔除,同配置训练集会随缓存可用性而不同。
+        host 截断历史的标签都在 cutoff 之前,无泄漏。
 
         Falls back to per-call stacking when ``shared_cache`` is unavailable
         (e.g. unit tests that construct a strategy without a shared cache).
@@ -791,13 +823,11 @@ class MLFactorStrategy(Strategy):
         assert self._factor_panel is not None and self._close_panel is not None
         cfg = self.cfg
         label_end = self._embargoed_label_end(current_bar)
-        host_slice_end = max(0, label_end + cfg.horizon)
+        host_slice_end = max(0, label_end + self._label_lag)
         cutoff_ts = pd.Timestamp(
             daily_df["date"].iloc[host_slice_end - 1]
             if host_slice_end > 0 else daily_df["date"].iloc[0]
         )
-        sharing = self._is_sharing()
-        drop_host = (not sharing) and self._current_stock_code is not None
 
         pre = self._ensure_pooled_xy_long()
         if pre is not None:
@@ -811,11 +841,6 @@ class MLFactorStrategy(Strategy):
             X_long, y_long = pre
             X = X_long.loc[:label_cutoff_ts]
             y = y_long.loc[X.index]
-            if drop_host:
-                stock_level = X.index.get_level_values("stock")
-                mask = stock_level != self._current_stock_code
-                X = X[mask]
-                y = y[mask]
             if len(X) > 0 and cfg.train_window > 0:
                 X = X.groupby(
                     level="stock", group_keys=False, sort=False,
@@ -829,18 +854,19 @@ class MLFactorStrategy(Strategy):
             return X, y
 
         # Legacy fallback: per-call slice + stack (used when shared_cache
-        # isn't provided, e.g. some single-stock unit tests).
+        # isn't provided, e.g. some single-stock unit tests). Host 截断历史
+        # 同样保留(P3-11 统一,与 fast path / _build_truncated_pool 一致)。
         sliced_fp: dict[str, pd.DataFrame] = {}
         for name, wide in self._factor_panel.items():
-            sub = wide.loc[wide.index <= cutoff_ts]
-            if drop_host and self._current_stock_code in sub.columns:
-                sub = sub.drop(columns=[self._current_stock_code])
-            sliced_fp[name] = sub
+            sliced_fp[name] = wide.loc[wide.index <= cutoff_ts]
         close_sub = self._close_panel.loc[self._close_panel.index <= cutoff_ts]
-        if drop_host and self._current_stock_code in close_sub.columns:
-            close_sub = close_sub.drop(columns=[self._current_stock_code])
 
-        fwd = forward_return_panel(close_sub, cfg.horizon)
+        open_full = self._open_panel_for_labels()
+        open_sub = None
+        if open_full is not None:
+            open_sub = open_full.loc[open_full.index <= cutoff_ts]
+
+        fwd = forward_return_panel(close_sub, cfg.horizon, open_=open_sub)
         X, y = stack_panel_to_xy(sliced_fp, fwd, dropna=True)
         if len(X) > 0 and cfg.train_window > 0:
             X = X.groupby(
@@ -866,9 +892,10 @@ class MLFactorStrategy(Strategy):
         # label_end may be <= 0 if there isn't enough history; caller (_try_fit)
         # already guards by returning None in that case, but be defensive.
         # host_slice_end is where we cut the host's data: it must include
-        # `horizon` extra bars beyond label_end so the labels at bars
-        # [label_end - horizon, label_end) have observable forward returns.
-        host_slice_end = max(0, label_end + self.cfg.horizon)
+        # `label_lag` extra bars beyond label_end so the labels at bars
+        # [label_end - label_lag, label_end) have observable forward returns
+        # (close 基准 lag=horizon;open 基准 lag=horizon+1)。
+        host_slice_end = max(0, label_end + self._label_lag)
         cutoff_date = (
             daily_df["date"].iloc[host_slice_end - 1]
             if host_slice_end > 0 else

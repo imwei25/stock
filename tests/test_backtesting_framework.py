@@ -142,10 +142,15 @@ def test_engine_zero_costs_match_round_trip_price_ratio():
 
 def test_engine_costs_applied_arithmetically():
     """Hand-verified: buy_cost 0.001, sell_cost 0.002, price 100→130 over 3 hold bars.
+    pre_buy_eq = 1.0
     entry_eq = 1.0 * 0.999 = 0.999
     after_hold = 0.999 * 1.30 = 1.2987
     exit_eq = 1.2987 * 0.998 ≈ 1.295700
-    net_ret = exit_eq / entry_eq - 1 ≈ 0.2974
+    net_ret = exit_eq / pre_buy_eq - 1 ≈ 0.2957
+
+    Updated for P2-8: Trade.ret denominator is the PRE-buy equity, so the
+    return is net of buy_cost AND sell_cost. The old expectation divided by
+    the post-buy-cost entry_eq, which cancelled buy_cost out of the ratio.
     """
     sigs = _signals(["buy", "hold", "hold", "hold", "hold"], [100, 110, 120, 130, 125])
     engine = BacktestEngine(
@@ -153,10 +158,11 @@ def test_engine_costs_applied_arithmetically():
         costs=TradeCosts(buy_cost=0.001, sell_cost=0.002),
     )
     r = engine.run_on_signals(sigs, max_holding_days=3)
-    entry_eq = 1.0 * (1 - 0.001)
+    pre_buy_eq = 1.0
+    entry_eq = pre_buy_eq * (1 - 0.001)
     after = entry_eq * (130 / 100)
     exit_eq = after * (1 - 0.002)
-    expected = (exit_eq / entry_eq - 1) * 100
+    expected = (exit_eq / pre_buy_eq - 1) * 100
     assert r.metrics["avg_trade_return_pct"] == pytest.approx(expected, rel=1e-6)
 
 
@@ -250,7 +256,8 @@ def test_compute_metrics_accepts_dict_trades():
 def test_compute_metrics_empty_curve():
     m = compute_metrics(pd.Series([], dtype=float), [])
     assert m["total_return"] == 0.0
-    assert m["sharpe"] == 0.0
+    # P3-15: sharpe is undefined (None) for an empty/short curve, not 0.0.
+    assert m["sharpe"] is None
     assert m["trade_count"] == 0
 
 

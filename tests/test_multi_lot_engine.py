@@ -182,18 +182,21 @@ def test_equity_equals_cash_plus_marked_lots():
 # -------- exit cost applied per lot ----------
 
 def test_sell_cost_applied_per_lot():
-    """One lot, +30% gross, sell_cost 0.002 ⇒ net ret = 0.30*1 - 0.002*(1.30) ish.
-    Hand check:
-      committed = 0.1 * (1 - 0.001) = 0.0999
+    """One lot, +30% gross, both costs deducted from Trade.ret.
+    Hand check (P2-8 口径: denominator = pre-cost order size 0.1):
+      committed   = 0.1 * (1 - 0.001) = 0.0999
       final_value = 0.0999 * 1.30 * (1 - 0.002) = 0.1295701...
-      ret = final_value / 0.0999 - 1 = 0.2974...
+      ret = final_value / 0.1 - 1 = 0.2957...
+
+    Updated for P2-8: dividing by committed (post-buy-cost) cancelled
+    buy_cost out of the ratio; ret must be net of BOTH legs.
     """
     sigs = _signals(["buy"] + ["hold"] * 4, [100, 110, 120, 130, 130])
     r = _engine(position_size=0.1, buy_cost=0.001, sell_cost=0.002).run_on_signals(
         sigs, max_holding_days=3
     )
     assert r.metrics["trade_count"] == 1
-    expected_ret = (0.1 * (1 - 0.001) * 1.30 * (1 - 0.002)) / (0.1 * (1 - 0.001)) - 1
+    expected_ret = (0.1 * (1 - 0.001) * 1.30 * (1 - 0.002)) / 0.1 - 1
     assert r.trades[0].ret == pytest.approx(expected_ret, rel=1e-6)
 
 

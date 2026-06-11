@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 if TYPE_CHECKING:
     from stockpool.backtesting.sizing import LotSizer
 
+import numpy as np
 import pandas as pd
 
 from stockpool.backtesting.metrics import compute_metrics
@@ -37,7 +38,13 @@ class TradeCosts:
 
 @dataclass(frozen=True)
 class Trade:
-    """One closed long position."""
+    """One closed long position.
+
+    ``ret`` is net of BOTH buy_cost and sell_cost: the denominator is the
+    cash committed *before* the buy (single-position engine: the pre-buy
+    equity; multi-lot engine: the lot's order size before buy_cost), so a
+    zero-price-move round trip yields ``ret ≈ -(buy_cost + sell_cost)``.
+    """
     entry_idx: int
     exit_idx: int
     entry_price: float
@@ -143,13 +150,21 @@ class Strategy(ABC):
 
 @dataclass
 class BacktestResult:
-    """One run of the engine on a (strategy, history, max_holding_days) triple."""
+    """One run of the engine on a (strategy, history, max_holding_days) triple.
+
+    ``metrics`` covers the full curve (bar 0 onwards). ``metrics_active``
+    covers the *active span* only — the curve sliced from the first trade's
+    ``entry_idx`` — so strategies with a long cold-start flat head (e.g.
+    ml_factor emitting neutral until enough training samples) are comparable
+    with always-on strategies. ``None`` when no trade was closed.
+    """
     signals: pd.DataFrame
     curve: pd.DataFrame              # columns: date, equity, position
     trades: list[Trade]
     metrics: dict
     max_holding_days: int
     strategy_name: str
+    metrics_active: dict | None = None
 
 
 class BacktestEngine:
@@ -268,7 +283,7 @@ def _simulate(
 
     entry_idx: int | None = None
     entry_price: float | None = None
-    entry_equity: float | None = None
+    pre_buy_equity: float | None = None   # equity BEFORE buy_cost — Trade.ret denominator
     days_held = 0
 
     for t in range(1, n):
@@ -290,13 +305,14 @@ def _simulate(
                 entry_idx = t
                 entry_price = open_t
                 days_held = 0
-                entry_equity = equity[t - 1] * (1 - costs.buy_cost)
+                pre_buy_equity = equity[t - 1]
+                entry_equity = pre_buy_equity * (1 - costs.buy_cost)
                 equity[t] = entry_equity * (close_t / open_t)
             else:
                 equity[t] = equity[t - 1]
         else:
             held_now = days_held + 1
-            assert entry_idx is not None and entry_price is not None and entry_equity is not None
+            assert entry_idx is not None and entry_price is not None and pre_buy_equity is not None
             pctx = PositionContext(
                 bar_idx=t - 1, date=prev_date,
                 close=prev_close, signal=prev_signal,
@@ -322,12 +338,15 @@ def _simulate(
                     exit_idx=t,
                     entry_price=entry_price,
                     exit_price=open_t,
-                    ret=float(exit_equity / entry_equity - 1),
+                    # Denominator is the PRE-buy equity so ret is net of
+                    # buy_cost AND sell_cost (P2-8): using the post-buy-cost
+                    # entry_equity would cancel buy_cost out of the ratio.
+                    ret=float(exit_equity / pre_buy_equity - 1),
                     days_held=held_now,
                 ))
                 entry_idx = None
                 entry_price = None
-                entry_equity = None
+                pre_buy_equity = None
                 days_held = 0
             else:
                 position[t] = 1
@@ -347,6 +366,26 @@ def _simulate(
         metrics=metrics,
         max_holding_days=max_holding_days,
         strategy_name=strategy.name,
+        metrics_active=_active_metrics(curve["equity"], trades, risk_free_rate),
+    )
+
+
+def _active_metrics(
+    equity: pd.Series, trades: list[Trade], risk_free_rate: float,
+) -> dict | None:
+    """Active-span metrics: slice the curve from the first trade's entry bar.
+
+    Strategies with a long cold-start head (flat equity at 1.0 before the
+    first signal) dilute geometric annualisation and Sharpe; this re-anchors
+    both at the first entry. Returns None when no trade was closed.
+    """
+    if not trades:
+        return None
+    first_entry = min(t.entry_idx for t in trades)
+    return compute_metrics(
+        equity, trades,
+        risk_free_rate=risk_free_rate,
+        active_from_idx=first_entry,
     )
 
 
@@ -513,7 +552,11 @@ def _simulate_multi_lot(
                     exit_idx=t,
                     entry_price=lot.entry_price,
                     exit_price=open_t,
-                    ret=float(exit_value / lot.committed_cash - 1),
+                    # Denominator is the lot's PRE-cost order size (the cash
+                    # deducted at buy) so ret is net of buy_cost AND sell_cost
+                    # (P2-8); committed_cash already has buy_cost removed and
+                    # would cancel it out of the ratio.
+                    ret=float(exit_value / lot.lot_size - 1),
                     days_held=lot.days_held,
                     lot_size=lot.lot_size,
                 ))
@@ -566,6 +609,7 @@ def _simulate_multi_lot(
         metrics=metrics,
         max_holding_days=max_holding_days,
         strategy_name=strategy.name,
+        metrics_active=_active_metrics(curve["equity"], trades, risk_free_rate),
     )
 
 
@@ -579,10 +623,22 @@ def buy_and_hold_baseline(
     No costs, no entry/exit logic. The returned ``BacktestResult`` has the same
     shape as a strategy run so reports can iterate uniformly.
 
+    口径 (anchoring): both the curve AND the metrics anchor on ``open[0]``
+    (falling back to ``close[0]`` when the frame has no ``open`` column):
+
+      * curve: ``equity[t] = close[t] / open[0]`` — so ``equity[0]`` is the
+        day-0 intraday return, generally != 1.0.
+      * ``metrics["total_return"] = close[-1] / open[0] - 1`` — includes the
+        day-0 open→close leg. Internally the metrics are computed over the
+        curve with a synthetic ``1.0`` anchor prepended at the open, so
+        Sharpe / drawdown / annualisation also see the day-0 move.
+
     Notes:
       * ``metrics["trade_count"]`` is forced to ``1`` (single round-trip).
       * ``metrics["win_rate"]`` and ``avg_trade_return_pct`` are ``None`` —
         win/loss is undefined for a never-closed buy-and-hold position.
+      * ``metrics_active`` is ``None`` (no closed trades; the whole span is
+        active anyway).
     """
     if len(daily_df) == 0:
         empty_curve = pd.DataFrame({"date": [], "equity": [], "position": []})
@@ -606,7 +662,11 @@ def buy_and_hold_baseline(
         "equity": eq,
         "position": [1] * len(daily_df),
     })
-    metrics = compute_metrics(curve["equity"], trades=[], risk_free_rate=risk_free_rate)
+    # Metrics over the open[0]-anchored series: prepend the 1.0 anchor so
+    # total_return = close[-1]/open[0] - 1 (includes the day-0 intraday leg)
+    # instead of degrading to close[-1]/close[0] - 1.
+    anchored = np.concatenate([[1.0], np.asarray(eq, dtype=float)])
+    metrics = compute_metrics(anchored, trades=[], risk_free_rate=risk_free_rate)
     metrics["trade_count"] = 1
     metrics["win_rate"] = None
     metrics["avg_trade_return_pct"] = None

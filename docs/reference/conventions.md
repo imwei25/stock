@@ -7,10 +7,11 @@
 - `Strategy` ABC — 子类实现 `name` / `generate_signals` / `should_enter` / `should_exit`;可选 `should_reset_timer`、`predict_latest(daily_df) -> dict`(日报路径,返回末根 bar `{signal, final_score, ...}`)。`generate_signals` 输出至少含 `date / open / close / signal`(`open` 用于次日开盘成交;省略时引擎按 `close.shift(1)` 兜底)。**同时输出 `score` 和 `final_score`**(数值相同),便于 portfolio `precompute_scores_from_legacy` 对接。
 - `BacktestEngine` — 单仓位、long-only、T+1、单笔进出
 - `MultiLotBacktestEngine` — 每个 buy 开独立 lot(仓位由 `LotSizer` 决定),各自计 N、各自记账
-- `BacktestResult` — `signals` / `curve` / `trades` / `metrics` / `max_holding_days` / `strategy_name`
+- `BacktestResult` — `signals` / `curve` / `trades` / `metrics`(全程)/ `metrics_active`(活跃段:从第一笔 trade 的 `entry_idx` 起切片重算,剔除 ml_factor 冷启动平头;无交易时 `None`)/ `max_holding_days` / `strategy_name`
 - `TradeCosts(buy_cost, sell_cost)` — 比例(`0.001` = 0.1%)
-- `compute_metrics` 纯函数 — total/ann return、max DD、Sharpe、win rate、avg trade ret
-- `buy_and_hold_baseline` — 不扣手续费的全仓基准
+- `Trade.ret` — 分母为**买入前**资金(单仓:`equity[t-1]`;多 lot:下单金额 `size`),双边成本都净掉
+- `compute_metrics(eq, trades, rf, active_from_idx=None)` 纯函数 — total/ann return、max DD、Sharpe、win rate、avg trade ret;边界口径:有效天数 <60 → `annualized_return=None`,<20 → `sharpe=None`,无交易 → `win_rate`/`avg_trade_return_pct=None`(展示层显示 `—`)
+- `buy_and_hold_baseline` — 不扣手续费的全仓基准;曲线与 `total_return` 都锚 `open[0]`(含 day-0 日内收益)
 
 **内置策略**(`stockpool.backtesting.strategies`):`CompositeVerdictStrategy`(主策略,综合评级 + 日周共振)/ `MLFactorStrategy`(两步法,walk-forward 重训,支持 per_stock 和 pooled)/ `VerdictExecution` / `SMACrossStrategy`。
 

@@ -92,7 +92,8 @@ def test_fast_path_equivalent_to_legacy_build_panel():
     )
     current_date = host_daily["date"].iloc[current_bar]
     pool_trunc = strat_slow._build_truncated_pool(host_daily, current_date, current_bar)
-    X_slow, y_slow = build_panel(pool_trunc, factors, cfg.horizon)
+    X_slow, y_slow = build_panel(pool_trunc, factors, cfg.horizon,
+                                 label_basis=cfg.label_basis)
     if len(X_slow) > 0 and cfg.train_window > 0:
         X_slow = X_slow.groupby(level="stock", group_keys=False, sort=False).tail(cfg.train_window)
         y_slow = y_slow.loc[X_slow.index]

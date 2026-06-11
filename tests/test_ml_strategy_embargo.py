@@ -1,4 +1,4 @@
-"""Embargo behavior tests for MLFactorStrategy (F2 PR-A)."""
+﻿"""Embargo behavior tests for MLFactorStrategy (F2 PR-A)."""
 from __future__ import annotations
 
 import numpy as np
@@ -24,25 +24,25 @@ def _synthetic_daily(n_days: int = 300, seed: int = 0) -> pd.DataFrame:
 
 
 def test_embargoed_label_end_default_uses_horizon():
-    cfg = MLFactorConfig(horizon=3)
+    cfg = MLFactorConfig(label_basis="close", horizon=3)
     strat = MLFactorStrategy(cfg=cfg)
     assert strat._embargoed_label_end(100) == 94
 
 
 def test_embargoed_label_end_explicit_zero_matches_legacy():
-    cfg = MLFactorConfig(horizon=5, embargo_days=0)
+    cfg = MLFactorConfig(label_basis="close", horizon=5, embargo_days=0)
     strat = MLFactorStrategy(cfg=cfg)
     assert strat._embargoed_label_end(100) == 95
 
 
 def test_embargoed_label_end_explicit_positive_overrides_horizon():
-    cfg = MLFactorConfig(horizon=3, embargo_days=10)
+    cfg = MLFactorConfig(label_basis="close", horizon=3, embargo_days=10)
     strat = MLFactorStrategy(cfg=cfg)
     assert strat._embargoed_label_end(100) == 87
 
 
 def test_embargoed_label_end_can_go_negative_when_history_short():
-    cfg = MLFactorConfig(horizon=3, embargo_days=5)
+    cfg = MLFactorConfig(label_basis="close", horizon=3, embargo_days=5)
     strat = MLFactorStrategy(cfg=cfg)
     assert strat._embargoed_label_end(5) == 5 - 3 - 5
 
@@ -50,6 +50,7 @@ def test_embargoed_label_end_can_go_negative_when_history_short():
 def test_refit_with_default_embargo_returns_none_when_insufficient_history():
     """Short history + default embargo + 20-bar factor warmup → _refit refuses."""
     cfg = MLFactorConfig(
+        label_basis="close",  # 本文件验证 legacy close 基准的 embargo 数学;open 基准见 test_label_basis.py
         horizon=3, train_window=50, min_train_samples=20,
         refit_every=10, panel_mode="per_stock",
         selector=SelectorConfig(type="lasso"),
@@ -68,6 +69,7 @@ def test_refit_with_default_embargo_returns_none_when_insufficient_history():
 def test_refit_with_legacy_no_embargo_runs_to_completion():
     """Long history + embargo_days=0 → fit succeeds and returns quantiles."""
     cfg = MLFactorConfig(
+        label_basis="close",  # 本文件验证 legacy close 基准的 embargo 数学;open 基准见 test_label_basis.py
         horizon=3, train_window=120, min_train_samples=60,
         refit_every=20, panel_mode="per_stock",
         embargo_days=0,
@@ -89,6 +91,7 @@ def test_refit_with_legacy_no_embargo_runs_to_completion():
 def test_refit_with_default_embargo_long_history_also_runs_to_completion():
     """Sanity: with plenty of history, default auto-embargo still leaves enough samples."""
     cfg = MLFactorConfig(
+        label_basis="close",  # 本文件验证 legacy close 基准的 embargo 数学;open 基准见 test_label_basis.py
         horizon=3, train_window=120, min_train_samples=60,
         refit_every=20, panel_mode="per_stock",
         selector=SelectorConfig(type="lasso"),
@@ -108,10 +111,12 @@ def test_refit_with_default_embargo_long_history_also_runs_to_completion():
 
 def test_default_embargo_shifts_training_label_end_vs_legacy():
     cfg_default = MLFactorConfig(
+        label_basis="close",  # 本文件验证 legacy close 基准的 embargo 数学;open 基准见 test_label_basis.py
         horizon=3, train_window=200, min_train_samples=30,
         refit_every=20, panel_mode="per_stock",
     )
     cfg_legacy = MLFactorConfig(
+        label_basis="close",  # 本文件验证 legacy close 基准的 embargo 数学;open 基准见 test_label_basis.py
         horizon=3, train_window=200, min_train_samples=30,
         refit_every=20, panel_mode="per_stock",
         embargo_days=0,
@@ -132,10 +137,12 @@ def test_embargo_eliminates_label_leak_on_synthetic():
     be in the legacy training set.
     """
     cfg_legacy = MLFactorConfig(
+        label_basis="close",  # 本文件验证 legacy close 基准的 embargo 数学;open 基准见 test_label_basis.py
         horizon=3, train_window=100, min_train_samples=20,
         refit_every=20, panel_mode="per_stock", embargo_days=0,
     )
     cfg_embargo = MLFactorConfig(
+        label_basis="close",  # 本文件验证 legacy close 基准的 embargo 数学;open 基准见 test_label_basis.py
         horizon=3, train_window=100, min_train_samples=20,
         refit_every=20, panel_mode="per_stock",
     )

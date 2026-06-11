@@ -25,6 +25,22 @@ _TABLE_TO_BS_FN = {
     "dupont": "query_dupont_data",
 }
 
+# 缓存命中但请求 codes 缺失比例超过该阈值时,对缺失 codes 增量补拉(P2-16)
+_COVERAGE_BACKFILL_THRESHOLD = 0.30
+
+# 模块级 force-refresh flag,由 cli 的 --refresh-fundamentals 透传设置(P2-26)
+_FORCE_REFRESH = False
+
+
+def set_force_refresh(flag: bool) -> None:
+    """设置模块级强制重拉 flag(cli --refresh-fundamentals 透传入口)。
+
+    设为 True 后,本进程内所有 ``load_or_build_fundamentals`` 调用都无视
+    缓存新鲜度直接重拉,等价于每次调用都传 ``force_refresh=True``。
+    """
+    global _FORCE_REFRESH
+    _FORCE_REFRESH = bool(flag)
+
 
 def load_or_build_fundamentals(
     table: str,
@@ -52,6 +68,9 @@ def load_or_build_fundamentals(
             f"unknown table={table!r}; valid: {_VALID_TABLES}"
         )
 
+    # cli --refresh-fundamentals 透传的模块级 flag(P2-26)
+    force_refresh = force_refresh or _FORCE_REFRESH
+
     cache_path: Path | None = None
     if cache_dir is not None:
         cache_path = Path(cache_dir) / f"fundamentals_{table}.parquet"
@@ -60,9 +79,13 @@ def load_or_build_fundamentals(
             age = (time.time() - cache_path.stat().st_mtime) / 86400.0
             if age <= max_age_days:
                 try:
-                    return _read_cache(cache_path)
+                    cached = _read_cache(cache_path)
                 except Exception as e:
                     log.warning("fundamentals cache corrupt (%s), rebuilding", e)
+                else:
+                    return _ensure_codes_coverage(
+                        table, cached, codes, cache_path
+                    )
             else:
                 log.info("fundamentals(%s) cache stale (%.1f d > %d d)",
                          table, age, max_age_days)
@@ -96,6 +119,52 @@ def _read_cache(path: Path) -> pd.DataFrame:
     if not pd.api.types.is_datetime64_any_dtype(df["pubDate"]):
         df["pubDate"] = pd.to_datetime(df["pubDate"], errors="coerce")
     return df
+
+
+def _ensure_codes_coverage(
+    table: str,
+    cached: pd.DataFrame,
+    codes: list[str] | None,
+    cache_path: Path,
+) -> pd.DataFrame:
+    """缓存命中时校验请求 codes 的覆盖率;缺失超阈值则增量补拉(P2-16)。
+
+    - codes 为 None / 缓存为空 / 缺失比例 ≤ 30% → 直接返回缓存
+    - 缺失 > 30% → 只对缺失 codes 调 ``_fetch_table``,合并写回缓存
+    - 补拉失败 → log.error 并回退到现有缓存(不抛出)
+    """
+    if not codes or cached.empty or "code" not in cached.columns:
+        return cached
+
+    have = set(cached["code"].astype(str))
+    missing = [c for c in codes if str(c) not in have]
+    if not missing or len(missing) / len(codes) <= _COVERAGE_BACKFILL_THRESHOLD:
+        return cached
+
+    log.info(
+        "fundamentals(%s): cache missing %d/%d requested codes (>%d%%), "
+        "backfilling incrementally",
+        table, len(missing), len(codes),
+        int(_COVERAGE_BACKFILL_THRESHOLD * 100),
+    )
+    try:
+        extra = _fetch_table(table, missing)
+    except Exception as e:
+        log.error("fundamentals(%s) backfill failed: %s — using cache as-is",
+                  table, e)
+        return cached
+    if extra is None or extra.empty:
+        return cached
+
+    merged = pd.concat([cached, extra], ignore_index=True)
+    try:
+        merged.to_parquet(cache_path, index=False)
+        log.info("fundamentals(%s) cache updated with %d backfilled rows",
+                 table, len(extra))
+    except Exception as e:
+        log.warning("fundamentals(%s) cache write failed after backfill: %s",
+                    table, e)
+    return merged
 
 
 def _fetch_table(table: str, codes: list[str] | None) -> pd.DataFrame:

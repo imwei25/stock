@@ -59,6 +59,51 @@ def _pearson_corr(a: np.ndarray, b: np.ndarray) -> float:
     return float(((a - a.mean()) * (b - b.mean())).mean() / (sa * sb))
 
 
+# 单日截面至少要有这么多只股票,日 IC 才有统计意义;不足的日子跳过。
+_MIN_OBS_PER_DAY = 5
+
+
+def _date_level_values(index: pd.Index) -> np.ndarray | None:
+    """从训练样本 index 提取 date level;无法提取(per_stock 普通索引)返回 None。"""
+    if isinstance(index, pd.MultiIndex) and "date" in (index.names or []):
+        return index.get_level_values("date").to_numpy()
+    return None
+
+
+def _daily_ic_matrix(
+    Xs: np.ndarray,
+    y_np: np.ndarray,
+    dates: np.ndarray,
+    corr_fn,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """逐日截面 IC 矩阵 (D × F) 及对应日期数组 (D,)。
+
+    与选因子工具 (factors_analysis.compute_daily_ic) 同一统计量:每个交易日
+    在横截面上算一次 corr,再做时间维聚合 —— 而不是把 (stock,date) 长表
+    池化成一个相关系数(那会让时序变异与截面变异混杂、高离散度日主导)。
+    截面 < _MIN_OBS_PER_DAY 的日子跳过;没有任何有效日时返回 None,
+    调用方回退池化相关(per_stock 单股场景)。
+    """
+    order = np.argsort(dates, kind="stable")
+    dates_sorted = dates[order]
+    uniq, starts = np.unique(dates_sorted, return_index=True)
+    ends = np.append(starts[1:], len(dates_sorted))
+
+    day_ics: list[np.ndarray] = []
+    day_keys: list = []
+    F = Xs.shape[1]
+    for u, lo, hi in zip(uniq, starts, ends):
+        rows = order[lo:hi]
+        if len(rows) < _MIN_OBS_PER_DAY:
+            continue
+        yb = y_np[rows]
+        day_ics.append(np.array([corr_fn(Xs[rows, j], yb) for j in range(F)]))
+        day_keys.append(u)
+    if not day_ics:
+        return None
+    return np.vstack(day_ics), np.asarray(day_keys)
+
+
 class _StandardisingMixin:
     """Shared standardisation helpers — fit on training, replay on predict."""
 
@@ -161,7 +206,20 @@ class ICWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _Standardisi
 
         y_np = y.to_numpy(dtype=float)
         corr_fn = _spearman_corr if self.use_rank else _pearson_corr
-        ic_values = np.array([corr_fn(Xs[:, j], y_np) for j in range(Xs.shape[1])])
+        # P2-1: pooled (stock,date) 训练集 → 逐日截面 IC 的时间均值,与
+        # factors_analysis 的选因子统计量一致;无 date level(per_stock
+        # 单股)→ 池化时序相关(单股本就没有截面)。
+        dates = _date_level_values(X.index)
+        daily = (
+            _daily_ic_matrix(Xs, y_np, dates, corr_fn)
+            if dates is not None else None
+        )
+        if daily is not None:
+            ic_values = daily[0].mean(axis=0)
+        else:
+            ic_values = np.array(
+                [corr_fn(Xs[:, j], y_np) for j in range(Xs.shape[1])]
+            )
         self._ic = pd.Series(ic_values, index=self._feature_names, name="ic")
 
         masked = np.where(np.abs(ic_values) >= self.min_abs_ic, ic_values, 0.0)
@@ -227,30 +285,56 @@ class IRWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _Standardisi
             self._ir = pd.Series(dtype=float)
             return
 
-        n = Xs.shape[0]
-        n_chunks = min(self.n_chunks, max(1, n // 5))
-        bounds = np.linspace(0, n, n_chunks + 1, dtype=int)
         corr_fn = _spearman_corr if self.use_rank else _pearson_corr
         y_np = y.to_numpy(dtype=float)
+        F = Xs.shape[1]
 
-        ir_values = np.zeros(Xs.shape[1])
-        for j in range(Xs.shape[1]):
-            chunk_ics = []
-            for c in range(n_chunks):
-                lo, hi = bounds[c], bounds[c + 1]
-                if hi - lo < 2:
+        # P2-1: pooled 训练集 → 逐日截面 IC 序列,再按**自然时间**切块聚合
+        # IR = mean(日IC)/std(日IC)。旧实现按行号切块,行序是 stock-major 时
+        # 每块是"一组股票的全历史",算出的是跨股稳定性而非时间稳定性,且
+        # 同配置因构建路径不同而语义漂移 —— 现按 date level 聚合,与行序解耦。
+        dates = _date_level_values(X.index)
+        daily = (
+            _daily_ic_matrix(Xs, y_np, dates, corr_fn)
+            if dates is not None else None
+        )
+        ir_values = np.zeros(F)
+        if daily is not None:
+            ic_mat, _day_keys = daily  # 已按日期升序
+            d = ic_mat.shape[0]
+            n_chunks = min(self.n_chunks, max(1, d // 2))
+            bounds = np.linspace(0, d, n_chunks + 1, dtype=int)
+            for j in range(F):
+                chunk_ics = [
+                    ic_mat[bounds[c]:bounds[c + 1], j].mean()
+                    for c in range(n_chunks)
+                    if bounds[c + 1] - bounds[c] >= 1
+                ]
+                if len(chunk_ics) < 2:
+                    ir_values[j] = ic_mat[:, j].mean()
                     continue
-                chunk_ics.append(corr_fn(Xs[lo:hi, j], y_np[lo:hi]))
-            if len(chunk_ics) < 2:
-                # Fall back to single IC (= IR with denominator dropped).
-                ir_values[j] = corr_fn(Xs[:, j], y_np)
-                continue
-            arr = np.array(chunk_ics)
-            std = arr.std(ddof=0)
-            if std < 1e-12:
-                ir_values[j] = arr.mean()
-            else:
-                ir_values[j] = arr.mean() / std
+                arr = np.array(chunk_ics)
+                std = arr.std(ddof=0)
+                ir_values[j] = arr.mean() if std < 1e-12 else arr.mean() / std
+        else:
+            # per_stock 单股(普通 date 索引):行序即时间序,按行号切块仍然
+            # 是时间块 —— 保留 legacy 行为。
+            n = Xs.shape[0]
+            n_chunks = min(self.n_chunks, max(1, n // 5))
+            bounds = np.linspace(0, n, n_chunks + 1, dtype=int)
+            for j in range(F):
+                chunk_ics = []
+                for c in range(n_chunks):
+                    lo, hi = bounds[c], bounds[c + 1]
+                    if hi - lo < 2:
+                        continue
+                    chunk_ics.append(corr_fn(Xs[lo:hi, j], y_np[lo:hi]))
+                if len(chunk_ics) < 2:
+                    ir_values[j] = corr_fn(Xs[:, j], y_np)
+                    continue
+                arr = np.array(chunk_ics)
+                std = arr.std(ddof=0)
+                ir_values[j] = arr.mean() if std < 1e-12 else arr.mean() / std
 
         self._ir = pd.Series(ir_values, index=self._feature_names, name="ir")
         masked = np.where(np.abs(ir_values) >= self.min_abs_ir, ir_values, 0.0)

@@ -105,30 +105,26 @@ def test_roe_missing_code_in_fundamentals_is_nan(monkeypatch, panel, mock_profit
 
 
 def test_pe_negative_earnings_returns_nan(monkeypatch, panel):
-    """亏损 (net_income_ttm <= 0) → PE = NaN。"""
+    """亏损 (epsTTM <= 0) → PE = NaN。"""
     from stockpool import fundamentals_loader as fl
-    # 构造净利润全为负的 mock(4 季,符合 TTM min_periods=4)
+    # 构造 epsTTM 全为负的 mock(PE = close / epsTTM,亏损无意义)
     bad = pd.DataFrame([
         {"code": "000001", "statDate": pd.Timestamp(f"2023-{q*3:02d}-30"),
          "pubDate": pd.Timestamp(f"2023-{q*3:02d}-30") + pd.Timedelta(days=30),
-         "netProfit": -1e8 * q}
+         "epsTTM": -0.5 * q}
         for q in (1, 2, 3, 4)
     ])
-    bal = pd.DataFrame([
-        {"code": "000001", "statDate": pd.Timestamp("2023-12-31"),
-         "pubDate": pd.Timestamp("2024-01-30"), "totalShare": 1e10}
-    ])
     def fake(table, **kw):
-        return {"profit": bad, "balance": bal}.get(table, pd.DataFrame())
+        return {"profit": bad}.get(table, pd.DataFrame())
     monkeypatch.setattr(fl, "load_or_build_fundamentals", fake)
 
     f = make_factor("pe")
     out = f.compute(panel)
-    assert out["000001"].dropna().empty or (out["000001"] <= 0).any() is False
+    assert out["000001"].dropna().empty
 
 
 def test_specs_registered():
     for name in ("roe", "roa", "pe", "pb", "gross_margin", "net_margin",
-                 "revenue_yoy"):
+                 "netprofit_yoy"):
         spec = get_spec(name)
         assert spec is not None

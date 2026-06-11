@@ -93,22 +93,42 @@ def _fmt_sharpe(x: float | None) -> str:
     return f"{x:+.2f}"
 
 
+def _fmt_avg_trade(x: float | None) -> str:
+    if x is None:
+        return "—"
+    return f"{x:+.2f}%"
+
+
+def _metric_row(label: str, m: dict) -> str:
+    """One <tr> of the metrics table; every cell tolerates None (shown as —)."""
+    return (
+        f"<tr>"
+        f"<td>{label}</td>"
+        f"<td>{_fmt_pct(m['total_return'], signed=True)}</td>"
+        f"<td>{_fmt_pct(m['annualized_return'], signed=True)}</td>"
+        f"<td>{_fmt_pct(m['max_drawdown'])}</td>"
+        f"<td>{_fmt_sharpe(m.get('sharpe'))}</td>"
+        f"<td>{m['trade_count']}</td>"
+        f"<td>{_fmt_pct(m['win_rate'])}</td>"
+        f"<td>{_fmt_avg_trade(m['avg_trade_return_pct'])}</td>"
+        f"</tr>"
+    )
+
+
 def _metrics_table(result: EquityResult) -> str:
     rows = []
+    has_active = False
+    active_map = getattr(result, "metrics_active", None) or {}
     for N in sorted(result.curves.keys()):
-        m = result.metrics[N]
-        rows.append(
-            f"<tr>"
-            f"<td>N={N}</td>"
-            f"<td>{_fmt_pct(m['total_return'], signed=True)}</td>"
-            f"<td>{_fmt_pct(m['annualized_return'], signed=True)}</td>"
-            f"<td>{_fmt_pct(m['max_drawdown'])}</td>"
-            f"<td>{_fmt_sharpe(m.get('sharpe'))}</td>"
-            f"<td>{m['trade_count']}</td>"
-            f"<td>{_fmt_pct(m['win_rate'])}</td>"
-            f"<td>{m['avg_trade_return_pct']:+.2f}%</td>"
-            f"</tr>"
-        )
+        rows.append(_metric_row(f"N={N}(全程)", result.metrics[N]))
+        m_active = active_map.get(N)
+        if m_active is not None:
+            has_active = True
+            rows.append(_metric_row(
+                f"N={N}"
+                f"<span style='color:#888;font-size:.85em'>(活跃段)</span>",
+                m_active,
+            ))
     if result.buy_and_hold_metrics is not None:
         m = result.buy_and_hold_metrics
         rows.append(
@@ -123,6 +143,14 @@ def _metrics_table(result: EquityResult) -> str:
             f"<td>—</td>"
             f"</tr>"
         )
+    active_note = (
+        "<p class='meta' style='font-size:.85em'>"
+        "口径:<strong>全程</strong> = 从回测第 1 根 bar 起;"
+        "<strong>活跃段</strong> = 从该 N 第一笔交易的进场 bar 起算,"
+        "剔除策略冷启动(训练样本不足、全程空仓)的平头,"
+        "年化与夏普不被前段稀释。年化在有效天数 &lt; 60 时、"
+        "夏普在 &lt; 20 时显示 —。</p>"
+    ) if has_active else ""
     return f"""
       <table>
         <thead><tr>
@@ -131,6 +159,7 @@ def _metrics_table(result: EquityResult) -> str:
         </tr></thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
+      {active_note}
     """
 
 

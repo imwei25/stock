@@ -144,11 +144,17 @@ class EquityResult:
     buy_and_hold             — DataFrame with columns ``date``, ``equity`` (or None).
     buy_and_hold_metrics     — same metrics dict shape; win_rate /
                                avg_trade_return_pct are ``None`` for B&H.
+    metrics_active[N]        — same metric keys, computed from the first
+                               trade's entry bar onwards (cold-start head
+                               excluded); ``None`` per N when that run closed
+                               no trades, or ``None`` overall for legacy
+                               constructions.
     """
     curves: dict[int, pd.DataFrame]
     metrics: dict[int, dict]
     buy_and_hold: pd.DataFrame | None = None
     buy_and_hold_metrics: dict | None = None
+    metrics_active: dict[int, dict | None] | None = None
 
 
 def simulate_equity_curve(
@@ -215,10 +221,12 @@ def simulate_equity_curve(
 
     curves: dict[int, pd.DataFrame] = {}
     metrics: dict[int, dict] = {}
+    metrics_active: dict[int, dict | None] = {}
     for N in holding_days_list:
         result = bt.run_on_signals(signals, max_holding_days=N)
         curves[N] = result.curve
         metrics[N] = result.metrics
+        metrics_active[N] = result.metrics_active
 
     bh_curve = None
     bh_metrics = None
@@ -232,4 +240,5 @@ def simulate_equity_curve(
         metrics=metrics,
         buy_and_hold=bh_curve,
         buy_and_hold_metrics=bh_metrics,
+        metrics_active=metrics_active,
     )

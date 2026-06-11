@@ -233,10 +233,10 @@ def _per_offset_cards_html(ensemble: EnsembleResult) -> str:
         m = r.metrics
         rows.append(
             f"<tr><td>k={k}</td>"
-            f"<td>{m.get('total_return', 0.0):+.3f}</td>"
-            f"<td>{m.get('annualized_return', 0.0):+.3f}</td>"
+            f"<td>{m.get('total_return', 0.0) or 0.0:+.3f}</td>"
+            f"<td>{m.get('annualized_return', 0.0) or 0.0:+.3f}</td>"
             f"<td>{m.get('sharpe', 0.0) or 0.0:+.2f}</td>"
-            f"<td>{m.get('max_drawdown', 0.0):.3f}</td>"
+            f"<td>{m.get('max_drawdown', 0.0) or 0.0:.3f}</td>"
             f"<td>{m.get('trade_count', len(r.trades))}</td>"
             f"</tr>"
         )

@@ -5,8 +5,8 @@ the engine applies score-based ranking. Three checks:
 
   * ``min_history_bars`` — enough bars to compute factors / metrics
   * ``exclude_st`` — name contains "ST" / "*ST" / etc.
-  * ``min_avg_amount_20d`` — last-20-bar mean of ``close * volume * 100``
-    (mootdx volume unit = 手; 1 手 = 100 股 → multiply by 100 for amount in 元)
+  * ``min_avg_amount_20d`` — last-20-bar mean of ``close * volume``
+    (volume 单位已在数据层统一为"股", P1-6; amount 单位为元)
 
 Industry cap is *not* here: it depends on the engine's evolving target set
 (per-target greedy walk), so it lives in the engine.
@@ -63,10 +63,10 @@ class EligibilityFilter:
                 recent = df.tail(20)
                 if len(recent) == 0:
                     continue
+                # volume 单位已在数据层统一为"股"(P1-6),amount = close*volume (元)
                 avg_amount = float(
                     (recent["close"].astype(float)
-                     * recent["volume"].astype(float)
-                     * 100.0).mean()
+                     * recent["volume"].astype(float)).mean()
                 )
                 if pd.isna(avg_amount) or avg_amount < self.cfg.min_avg_amount_20d:
                     continue

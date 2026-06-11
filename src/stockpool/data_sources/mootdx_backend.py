@@ -3,7 +3,10 @@
 特点:
 - 不依赖 HTTP 爬虫,稳定性高;
 - 支持拉到当日盘中/收盘数据(几分钟级延迟);
-- 单次请求最多 800 根 K 线,我们按需要 offset;
+- 单次请求最多 800 根 K 线,fetch_stock 内部按 start=0/800/1600/... 分页
+  拼接,直到覆盖目标起始日期 / 凑够 min_bars / 数据到头(硬上限 4800 根);
+- 个股 volume 原始单位为"手",统一放大为"股"(与 baostock 口径一致);
+  指数/板块 volume 保持 TDX 原始单位(只做比值类用途);
 - 复权:bars 原始数据为不复权价,本模块用同源 xdxr 事件(TCP)做
   **段内锚定后复权**——段首因子=1,事件因子只依赖段内 prev_close,
   增量段由 fetcher 用缓存重叠 bar 锚定到既有尺度,天然无接缝。
@@ -22,7 +25,8 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 _RETRY_DELAYS = [2, 4, 8]
-_MAX_BARS_PER_CALL = 800  # mootdx 单次上限
+_MAX_BARS_PER_CALL = 800   # mootdx 单次上限
+_MAX_TOTAL_BARS = 4800     # 分页拼接硬上限 (6 页),防止异常参数下失控翻页
 _FREQ_DAILY = 9            # mootdx frequency 编码: 9 = 日线
 
 # Per-thread Quotes client. mootdx 的 TCP 连接非线程安全,共享会互相打架;
@@ -37,7 +41,7 @@ def _get_client(force_new: bool = False):
     return _local.client
 
 
-def _normalize(df: pd.DataFrame) -> pd.DataFrame:
+def _normalize(df: pd.DataFrame, scale_volume: bool = True) -> pd.DataFrame:
     out = df.copy()
     # mootdx 不同版本可能同时返回 vol 和 volume,优先用 volume
     if "volume" not in out.columns and "vol" in out.columns:
@@ -49,11 +53,16 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     out["date"] = pd.to_datetime(out["date"]).dt.normalize()
     out = out[["date", "open", "high", "low", "close", "volume"]]
     out = out.sort_values("date").drop_duplicates("date").reset_index(drop=True)
-    # 丢弃 TDX "未开盘"占位行(末根 bar 成交量近零 & OHLC 同价)
+    # 丢弃 TDX "未开盘"占位行(末根 bar 成交量近零 & OHLC 同价)。
+    # 注意:volume < 1 的判断以原始单位"手"为准,必须在下方放大为"股"之前执行。
     if len(out) > 1:
         last = out.iloc[-1]
         if last["volume"] < 1 and last["open"] == last["high"] == last["low"] == last["close"]:
             out = out.iloc[:-1].reset_index(drop=True)
+    if scale_volume:
+        # TDX 个股 volume 原始单位为"手"(1 手 = 100 股);×100 统一为"股",
+        # 与 baostock 口径一致(P1-6)。指数/板块路径传 scale_volume=False。
+        out["volume"] = out["volume"] * 100.0
     return out
 
 
@@ -64,6 +73,64 @@ def _offset_for_start(start: str | None) -> int:
     # 日历日 → 交易日的粗估 (~0.7 倍) + 缓冲
     est_bars = int(days_back * 0.75) + 10
     return max(5, min(est_bars, _MAX_BARS_PER_CALL))
+
+
+def _fetch_bars_paged(
+    code: str,
+    start: str | None = None,
+    min_bars: int | None = None,
+) -> pd.DataFrame:
+    """分页拉日线 K 并拼接(mootdx 单次最多 800 根)。
+
+    ``client.bars`` 的 ``start`` 是"从最近一根往回数的偏移位置":
+    start=0 取最新一页,start=800 取再往前一页,以此类推。
+
+    终止条件(任一满足即停):
+      ① 已覆盖到 ``start`` 目标起始日期;
+      ② 累计根数达到 ``min_bars``;
+      ③ 服务器返回空页/短页(历史数据到头);
+      ④ 累计达到 ``_MAX_TOTAL_BARS`` 硬上限,防失控。
+    两者都未给时保持旧行为:只拉最近一页(≤800 根)。
+    """
+    target = pd.to_datetime(start) if start is not None else None
+    pages: list[pd.DataFrame] = []
+    total = 0
+    pos = 0
+    while pos < _MAX_TOTAL_BARS:
+        # 首页按 start 粗估根数(增量拉取通常只差几根,不必整页 800)
+        if pos == 0:
+            req = _offset_for_start(start)
+        else:
+            req = min(_MAX_BARS_PER_CALL, _MAX_TOTAL_BARS - pos)
+        try:
+            raw = _call_with_retry("bars", symbol=code, frequency=_FREQ_DAILY,
+                                   start=pos, offset=req)
+        except Exception:
+            if not pages:
+                raise  # 首页都拉不到 → 真网络错误,向上抛
+            raw = None  # 翻页越过最早历史时服务器返回空(重试耗尽)→ 视为到头
+        if raw is None or len(raw) == 0:
+            break  # ③ 空页:数据到头
+        pages.append(raw)
+        total += len(raw)
+        if len(raw) < req:
+            break  # ③ 短页:数据到头
+        date_col = "date" if "date" in raw.columns else "datetime"
+        covered = target is not None and pd.to_datetime(raw[date_col]).min() <= target
+        enough = min_bars is not None and total >= min_bars
+        if covered or enough:
+            break  # ① / ②
+        if target is None and min_bars is None:
+            break  # 兼容旧行为:无明确需求只拉最近一页
+        pos += req
+
+    if not pages:
+        raise RuntimeError(f"mootdx bars 返回空: {code}")
+    out = _normalize(pd.concat(pages, ignore_index=True))
+    if min_bars is not None and len(out) < min_bars:
+        log.warning("mootdx %s: 历史数据到头,仅拉到 %d 根 (请求 min_bars=%d)",
+                    code, len(out), min_bars)
+    return out
 
 
 def _call_with_retry(method_name: str, *args, **kwargs):
@@ -166,17 +233,23 @@ def _apply_hfq(bars: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def fetch_stock(code: str, start: str | None = None) -> pd.DataFrame:
-    """拉 A 股日线,段内锚定后复权 (hfq)。
+def fetch_stock(
+    code: str,
+    start: str | None = None,
+    min_bars: int | None = None,
+) -> pd.DataFrame:
+    """拉 A 股日线,段内锚定后复权 (hfq)。volume 单位为"股"。
 
-    mootdx bars 返回不复权价;本函数叠加同源 xdxr 事件做段内 hfq:
-    返回段的首根 bar 即原始价(因子=1),段内除权事件之后的 bar 已被
-    放大到连续口径。增量调用方(fetcher.fetch_daily)用缓存重叠 bar
-    把本段锚定到既有缓存尺度。
+    mootdx 单次最多 800 根,内部经 ``_fetch_bars_paged`` 分页拼接:
+    给 ``start`` 时翻页直到覆盖目标起始日期;给 ``min_bars`` 时翻页直到
+    凑够根数(或数据到头);都不给时保持旧行为只拉最近一页。
+
+    mootdx bars 返回不复权价;本函数在**完整拼接后的窗口**上叠加同源
+    xdxr 事件做段内 hfq:返回段的首根 bar 即原始价(因子=1),段内除权
+    事件之后的 bar 已被放大到连续口径。增量调用方(fetcher.fetch_daily)
+    用缓存重叠 bar 把本段锚定到既有缓存尺度。
     """
-    offset = _offset_for_start(start)
-    raw = _call_with_retry("bars", symbol=code, frequency=_FREQ_DAILY, offset=offset)
-    out = _normalize(raw)
+    out = _fetch_bars_paged(code, start=start, min_bars=min_bars)
     if start is not None:
         out = out[out["date"] >= pd.to_datetime(start)]
     out = out.reset_index(drop=True)
@@ -184,10 +257,14 @@ def fetch_stock(code: str, start: str | None = None) -> pd.DataFrame:
 
 
 def fetch_index(symbol: str) -> pd.DataFrame:
-    """拉指数日线。symbol 形如 'sh000001' / 'sz399001'。"""
+    """拉指数日线。symbol 形如 'sh000001' / 'sz399001'。
+
+    指数 volume 跨源单位不保证一致(下游只做量比等比值类用途),
+    保持 TDX 原始单位,不做手→股放大。
+    """
     sym = symbol[2:] if symbol[:2].lower() in ("sh", "sz") else symbol
     raw = _call_with_retry("index", symbol=sym, frequency=_FREQ_DAILY, offset=_MAX_BARS_PER_CALL)
-    return _normalize(raw)
+    return _normalize(raw, scale_volume=False)
 
 
 # 通达信行业指数代码 (88xxxx 系列)。新增映射时直接在这里加一行即可。
@@ -273,7 +350,8 @@ def fetch_sector(name_or_code: str) -> pd.DataFrame:
 
     输入可以是行业名(如 '化工')或 6 位 TDX 代码(如 '880305')。
     底层走 ``client.index()``,因为 TDX 把行业板块也建模成指数。
+    板块 volume 跨源单位不保证一致(只做比值类用途),保持原始单位。
     """
     code = _resolve_sector_code(name_or_code)
     raw = _call_with_retry("index", symbol=code, frequency=_FREQ_DAILY, offset=_MAX_BARS_PER_CALL)
-    return _normalize(raw)
+    return _normalize(raw, scale_volume=False)

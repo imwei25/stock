@@ -170,8 +170,8 @@ def _apply_funnel(
         if "ST" in name.upper():
             continue
         tail = daily.tail(20)
-        # mootdx volume is 手 (1 手 = 100 股); amount in 元
-        avg_amount = float((tail["volume"] * tail["close"] * 100).mean())
+        # volume 单位已在数据层统一为"股"(P1-6, 全部数据源一致);amount 单位为元
+        avg_amount = float((tail["volume"] * tail["close"]).mean())
         if avg_amount < min_avg_amount_20d:
             continue
         out[code] = daily

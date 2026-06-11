@@ -467,6 +467,13 @@ class MLFactorConfig(BaseModel):
     # raise NotImplementedError until a later PR fills them in.
     label_type: Literal["return", "vol_adjusted", "cross_sec_rank"] = "return"
 
+    # 标签价格基准(2026-06 审查 P2-3):
+    #   open  — open[t+1+h]/open[t+1] − 1,与 T+1 次日开盘成交的执行口径对齐
+    #           (默认;决策 bar 拿不到的 close[t]→open[t+1] 隔夜段不进标签)。
+    #   close — legacy close[t+h]/close[t] − 1(含隔夜段,偏乐观)。
+    # 注意:open 基准的标签多看 1 根 bar,embargo/截断数学自动 +1。
+    label_basis: Literal["open", "close"] = "open"
+
     selector: SelectorConfig = Field(default_factory=SelectorConfig)
     weighter: WeighterConfig = Field(default_factory=WeighterConfig)
     thresholds: QuantileThresholds = Field(default_factory=QuantileThresholds)
@@ -532,8 +539,8 @@ class RecommendPoolConfig(BaseModel):
     top_n: int = Field(default=30, gt=0)
     min_avg_amount_20d: float = Field(
         default=5e7, ge=0.0,
-        description="最近 20 日均成交额下限 (元)。mootdx volume 单位是手, "
-                    "amount = volume * close * 100。",
+        description="最近 20 日均成交额下限 (元)。volume 单位已在数据层统一"
+                    "为股 (P1-6), amount = volume * close。",
     )
     max_per_industry: int = Field(default=5, gt=0)
     refresh: Literal["weekly", "always", "never"] = "weekly"

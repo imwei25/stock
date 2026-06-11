@@ -341,17 +341,23 @@ def test_simulate_equity_curve_invalid_engine_raises():
 
 def test_round_trip_cost_total_return():
     """Exact arithmetic: buy at 100, hold N=3 bars to 130, costs 0.1% buy + 0.2% sell.
+    pre_buy_equity = 1.0
     entry_equity = 1.0 * (1 - 0.001) = 0.999
     after 3 bars at +30%: equity = 0.999 * 1.30 = 1.2987
     exit_equity = 1.2987 * (1 - 0.002) = 1.29610...
-    net_ret = 1.29610 / 0.999 - 1 ≈ 0.2974
+    net_ret = 1.29610 / 1.0 - 1 ≈ 0.2961
+
+    Updated for P2-8: Trade.ret denominator is the PRE-buy equity (1.0), so
+    the per-trade return is net of buy_cost AND sell_cost; the old expectation
+    divided by post-buy-cost entry_eq, cancelling buy_cost.
     """
     closes = [100, 110, 120, 130, 125, 125, 125]
     wf = _wf_from_verdicts(["buy"] + ["neutral"] * 6, closes)
     result = simulate_equity_curve(wf, [3], with_buy_and_hold=False,
                                     buy_cost=0.001, sell_cost=0.002)
-    entry_eq = 1.0 * (1 - 0.001)
+    pre_buy_eq = 1.0
+    entry_eq = pre_buy_eq * (1 - 0.001)
     after_hold = entry_eq * (130 / 100)
     exit_eq = after_hold * (1 - 0.002)
-    expected_net_ret = (exit_eq / entry_eq - 1) * 100
+    expected_net_ret = (exit_eq / pre_buy_eq - 1) * 100
     assert result.metrics[3]["avg_trade_return_pct"] == pytest.approx(expected_net_ret, rel=1e-4)

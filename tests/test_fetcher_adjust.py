@@ -180,11 +180,12 @@ def test_baostock_query_uses_hfq(monkeypatch):
 
     def fake_query(code, fields, **kwargs):
         captured.update(kwargs)
-        return _FakeRS(
-            fields.split(","),
-            [["2026-01-05", "10.0", "10.2", "9.8", "10.1", "100000"],
-             ["2026-01-06", "10.1", "10.3", "9.9", "10.2", "110000"]],
-        )
+        cols = fields.split(",")
+        rows = [["2026-01-05", "10.0", "10.2", "9.8", "10.1", "100000"],
+                ["2026-01-06", "10.1", "10.3", "9.9", "10.2", "110000"]]
+        if "tradestatus" in cols:
+            rows = [r + ["1"] for r in rows]
+        return _FakeRS(cols, rows)
 
     fake_bs = types.SimpleNamespace(
         login=lambda: types.SimpleNamespace(error_code="0", error_msg=""),
@@ -385,7 +386,8 @@ def test_seam_match_appends_without_full_refresh(tmp_path):
                 float(last_row["close"]) + 0.2],
         "最高": [float(last_row["high"])] * 3,
         "最低": [float(last_row["low"])] * 3,
-        "成交量": [float(last_row["volume"])] * 3,
+        # akshare 原始单位是"手",缓存里已是"股"(×100)——除回去保持重叠一致
+        "成交量": [float(last_row["volume"]) / 100.0] * 3,
         "成交额": [1e7] * 3,
     })
 
@@ -445,7 +447,8 @@ def test_mootdx_incremental_anchors_to_cached_scale(tmp_path):
 def test_marker_includes_adjust_mode(tmp_path):
     update_source_marker(tmp_path, "mootdx")
     content = (tmp_path / ".data_source").read_text(encoding="utf-8").strip()
-    assert content == "mootdx:hfq", f"marker 应含复权模式,实际 {content!r}"
+    # v2 = volume 单位统一为"股"(P1-6);格式 <source>:<adjust>:<schema>
+    assert content == "mootdx:hfq:v2", f"marker 应含复权模式+schema 版本,实际 {content!r}"
 
 
 def test_legacy_marker_triggers_full_refresh(tmp_path):

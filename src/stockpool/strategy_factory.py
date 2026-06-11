@@ -473,10 +473,12 @@ def simulate_strategy_equity_curve(
     signals = strategy.generate_signals(daily_df)
     curves: dict[int, pd.DataFrame] = {}
     metrics: dict[int, dict] = {}
+    metrics_active: dict[int, dict | None] = {}
     for N in holding_days_list:
         result = bt.run_on_signals(signals, max_holding_days=N)
         curves[N] = result.curve
         metrics[N] = result.metrics
+        metrics_active[N] = result.metrics_active
 
     bh_curve = None
     bh_metrics = None
@@ -490,4 +492,5 @@ def simulate_strategy_equity_curve(
         metrics=metrics,
         buy_and_hold=bh_curve,
         buy_and_hold_metrics=bh_metrics,
+        metrics_active=metrics_active,
     )

@@ -31,15 +31,16 @@ def test_min_history_bars_filters_short():
 
 
 def test_liquidity_boundary():
-    """Avg amount = close * volume * 100. Just-above passes, just-below fails."""
+    """Avg amount = close * volume(volume 单位 = 股, P1-6)。
+    Just-above passes, just-below fails."""
     cfg = PortfolioEligibilityConfig(
         min_avg_amount_20d=5e7, exclude_st=False, min_history_bars=1,
     )
-    # 10 * 50_001 * 100 = 50_001_000 > 5e7 ✓
-    # 10 * 49_999 * 100 = 49_999_000 < 5e7 ✗
+    # 10 * 5_000_100 = 50_001_000 > 5e7 ✓
+    # 10 * 4_999_900 = 49_999_000 < 5e7 ✗
     panel = {
-        "PASS": _mk_daily(30, 10.0, 50_001),
-        "FAIL": _mk_daily(30, 10.0, 49_999),
+        "PASS": _mk_daily(30, 10.0, 5_000_100),
+        "FAIL": _mk_daily(30, 10.0, 4_999_900),
     }
     out = EligibilityFilter(cfg).eligible(pd.Timestamp("2024-12-31"), panel)
     assert out == {"PASS"}
@@ -86,18 +87,18 @@ def test_date_truncation():
     cfg = PortfolioEligibilityConfig(
         min_avg_amount_20d=5e7, exclude_st=False, min_history_bars=20,
     )
-    # First 30 bars have low volume, then volume jumps.
+    # First 30 bars have low volume, then volume jumps.(volume 单位 = 股)
     dates = pd.date_range("2024-01-02", periods=60, freq="B")
     df = pd.DataFrame({
         "date": dates,
         "close": [10.0] * 60,
-        "volume": [10_000] * 30 + [100_000] * 30,   # 30M vs 100M
+        "volume": [1_000_000] * 30 + [10_000_000] * 30,   # 10M vs 100M 元
     })
     panel = {"A": df}
     f = EligibilityFilter(cfg)
-    # At date 30 (low-vol period): avg = 10 * 10_000 * 100 = 10M < 50M → fail
+    # At date 30 (low-vol period): avg = 10 * 1_000_000 = 10M < 50M → fail
     assert f.eligible(dates[29], panel) == set()
-    # At date 59 (after jump): last 20 bars all 100k → avg = 100M ≥ 50M → pass
+    # At date 59 (after jump): last 20 bars all 10M 股 → avg = 100M ≥ 50M → pass
     assert f.eligible(dates[59], panel) == {"A"}
 
 
