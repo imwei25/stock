@@ -48,8 +48,43 @@ def _no_proxy():
         _req.get = _orig
 
 
+_ADJUST_MODE = "hfq"  # 全链路统一后复权;改动此值会使全部价格缓存失效重拉
+
+# 收盘集合竞价 15:00 结束,留 5 分钟缓冲;在此之前拉到的当日 bar 视为
+# 未完成(成交量/价格仍在变化),不得写入缓存。
+_INTRADAY_CUTOFF = pd.Timedelta(hours=15, minutes=5)
+
+# 接缝校验容差:重叠 bar 的 close 相对偏差超过 0.1% 视为复权基准漂移,
+# 成交量相对偏差超过 1% 视为缓存里是半根盘中 bar;两者都触发全量重拉。
+_SEAM_CLOSE_RTOL = 1e-3
+_SEAM_VOLUME_RTOL = 0.01
+
+
 def _today() -> pd.Timestamp:
     return pd.Timestamp.today().normalize()
+
+
+def _now() -> pd.Timestamp:
+    return pd.Timestamp.now()
+
+
+def _drop_in_progress_bar(df: pd.DataFrame) -> pd.DataFrame:
+    """丢弃当日未完成的盘中 bar(15:05 前拉到的 date==今天 的行)。
+
+    盘中拉到的半根 bar 一旦写入缓存,增量逻辑不会再用完整版替换它,
+    会永久污染指标与回测;收盘后(>=15:05)当日 bar 已完整,正常保留。
+    """
+    if df.empty:
+        return df
+    now = _now()
+    today = now.normalize()
+    if (now - today) >= _INTRADAY_CUTOFF:
+        return df
+    mask = df["date"] == today
+    if not mask.any():
+        return df
+    log.info("Dropping in-progress bar for %s (fetched intraday)", today.date())
+    return df[~mask].reset_index(drop=True)
 
 
 def _last_business_day(today: pd.Timestamp) -> pd.Timestamp:
@@ -72,12 +107,19 @@ def _source_marker_path(cache_dir: str | Path) -> Path:
     return Path(cache_dir) / ".data_source"
 
 
+def _marker_value(source: Source) -> str:
+    """marker 同时编码数据源与复权模式;任一变化都意味着缓存价格口径变了。"""
+    return f"{source}:{_ADJUST_MODE}"
+
+
 def check_source_change(cache_dir: str | Path, source: Source) -> bool:
-    """Return True if cached data was last written by a different source.
+    """Return True if cached data was last written by a different source
+    or under a different adjustment mode.
 
     Returns False when no marker exists (first-time use — nothing to invalidate)
-    or when the marker matches ``source``. Mootdx/baostock/akshare disagree on
-    volume units and adjustment rules; mixing them in one parquet silently
+    or when the marker matches ``source`` + current adjust mode. Mootdx/baostock/
+    akshare disagree on volume units and adjustment rules; mixing them (or mixing
+    复权口径, e.g. legacy unadjusted/qfq caches vs hfq) in one parquet silently
     corrupts liquidity / return calculations downstream, so any mismatch
     means the existing cache for this directory must be discarded.
     """
@@ -88,12 +130,19 @@ def check_source_change(cache_dir: str | Path, source: Source) -> bool:
         prev = marker.read_text(encoding="utf-8").strip()
     except OSError:
         return False
-    return prev != source
+    return prev != _marker_value(source)
 
 
 def update_source_marker(cache_dir: str | Path, source: Source) -> None:
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    _source_marker_path(cache_dir).write_text(source, encoding="utf-8")
+    marker = _source_marker_path(cache_dir)
+    value = _marker_value(source)
+    try:
+        if marker.exists() and marker.read_text(encoding="utf-8").strip() == value:
+            return  # 内容未变就不写,避免并发 fetch 时 Windows 上的写文件竞态
+    except OSError:
+        pass
+    marker.write_text(value, encoding="utf-8")
 
 
 def validate_ohlcv(df: pd.DataFrame) -> list[str]:
@@ -144,7 +193,10 @@ def _fetch_from_akshare(code: str, start: str | None = None) -> pd.DataFrame:
                     period="daily",
                     start_date=start or "19900101",
                     end_date="20991231",
-                    adjust="qfq",
+                    # hfq 锚在上市日,历史价格不随新除权事件改变,
+                    # 增量追加缓存才是自洽的(qfq 锚在最新价,每次除权
+                    # 全历史平移,与增量缓存根本不兼容)。
+                    adjust="hfq",
                 )
             return _normalize(raw)
         except Exception as e:
@@ -220,13 +272,27 @@ def fetch_daily(
     )
 
     if need_fetch:
-        start = None
-        if cached is not None and not force_refresh:
-            last = cached["date"].max()
-            start = (last + pd.Timedelta(days=1)).strftime("%Y%m%d")
-        fresh = _dispatch_stock(source, code, start=start)
-        if cached is not None and not force_refresh:
-            combined = pd.concat([cached, fresh]).drop_duplicates("date").sort_values("date")
+        incremental = cached is not None and not force_refresh and len(cached) > 0
+        if incremental:
+            # 增量从缓存最后一天(含)开始重叠拉取:重叠 bar 用来
+            # ① 校验接缝(复权基准漂移 / 缓存里的半根盘中 bar);
+            # ② 给 mootdx 段内 hfq 提供锚定基准;
+            # ③ 用完整版覆盖缓存末根 bar(keep="last")。
+            last = pd.Timestamp(cached["date"].max())
+            start = last.strftime("%Y%m%d")
+            fresh = _drop_in_progress_bar(_dispatch_stock(source, code, start=start))
+            fresh, ok = _reconcile_increment(source, code, fresh, cached, last)
+            if not ok:
+                incremental = False  # 接缝校验失败 → 丢弃缓存,全量重拉
+        if not incremental:
+            fresh = _drop_in_progress_bar(_dispatch_stock(source, code, start=None))
+
+        if incremental:
+            combined = (
+                pd.concat([cached, fresh])
+                .drop_duplicates("date", keep="last")
+                .sort_values("date")
+            )
         else:
             combined = fresh
         combined = combined.reset_index(drop=True)
@@ -234,6 +300,65 @@ def fetch_daily(
         cached = combined
 
     return cached.tail(history_days).reset_index(drop=True)
+
+
+def _reconcile_increment(
+    source: Source,
+    code: str,
+    fresh: pd.DataFrame,
+    cached: pd.DataFrame,
+    last: pd.Timestamp,
+) -> tuple[pd.DataFrame, bool]:
+    """校验增量段与缓存的重叠 bar,并把 mootdx 段锚定到缓存价格尺度。
+
+    返回 (可合并的 fresh, 接缝是否一致)。不一致(close 偏差 >0.1% 视为
+    复权基准漂移,volume 偏差 >1% 视为缓存末根是半根盘中 bar)或重叠 bar
+    缺失时返回 False,调用方应丢弃缓存全量重拉——这同时让历史上已被
+    污染的缓存在下一次增量时自愈。
+    """
+    overlap = fresh[fresh["date"] == last]
+    if overlap.empty:
+        log.warning("%s: incremental fetch missing overlap bar %s; full refresh",
+                    code, last.date())
+        return fresh, False
+    cached_last = cached[cached["date"] == last].iloc[-1]
+    fresh_last = overlap.iloc[-1]
+
+    cached_vol = float(cached_last["volume"])
+    fresh_vol = float(fresh_last["volume"])
+    if abs(fresh_vol - cached_vol) > _SEAM_VOLUME_RTOL * max(cached_vol, 1.0):
+        log.warning(
+            "%s: overlap bar %s volume mismatch (cached=%s fresh=%s) — cached bar "
+            "was likely written intraday; full refresh",
+            code, last.date(), cached_vol, fresh_vol,
+        )
+        return fresh, False
+
+    cached_close = float(cached_last["close"])
+    fresh_close = float(fresh_last["close"])
+    if cached_close <= 0 or fresh_close <= 0:
+        return fresh, False
+
+    if source == "mootdx":
+        # mootdx 段内 hfq 以段首为基准(因子=1);用重叠 bar 把整段缩放到
+        # 缓存既有尺度,缩放后重叠 bar 与缓存严格相等,接缝天然连续。
+        scale = cached_close / fresh_close
+        if abs(scale - 1.0) > 1e-12:
+            fresh = fresh.copy()
+            for col in ("open", "high", "low", "close"):
+                fresh[col] = fresh[col] * scale
+        return fresh, True
+
+    # baostock/akshare 的 hfq 锚在上市日,重叠 bar 理应与缓存一致;
+    # 不一致说明复权因子被修订(或历史缓存口径不同),必须全量重拉。
+    if abs(fresh_close - cached_close) > _SEAM_CLOSE_RTOL * cached_close:
+        log.warning(
+            "%s: overlap bar %s close mismatch (cached=%.4f fresh=%.4f) — "
+            "adjustment baseline drifted; full refresh",
+            code, last.date(), cached_close, fresh_close,
+        )
+        return fresh, False
+    return fresh, True
 
 
 def _fetch_index_from_akshare(symbol: str) -> pd.DataFrame:
@@ -297,10 +422,16 @@ def fetch_index_daily(
     )
 
     if need_fetch:
-        fresh = _dispatch_index(source, symbol)
-        # 增量合并(mootdx/baostock 都能拿到全量或长尾,直接覆盖也安全)
+        fresh = _drop_in_progress_bar(_dispatch_index(source, symbol))
+        # 增量合并(mootdx/baostock 都能拿到全量或长尾;keep="last" 让
+        # 完整的新 bar 覆盖历史上可能盘中写入的半根 bar)
         if cached is not None and not force_refresh:
-            fresh = pd.concat([cached, fresh]).drop_duplicates("date").sort_values("date").reset_index(drop=True)
+            fresh = (
+                pd.concat([cached, fresh])
+                .drop_duplicates("date", keep="last")
+                .sort_values("date")
+                .reset_index(drop=True)
+            )
         fresh.to_parquet(cache_file, index=False)
         cached = fresh
 
@@ -380,11 +511,16 @@ def fetch_sector_daily(
     if need_fetch:
         start = None
         if cached is not None and not force_refresh:
+            # 含重叠日:让完整的新 bar 覆盖可能盘中写入的半根 bar
             last = cached["date"].max()
-            start = (last + pd.Timedelta(days=1)).strftime("%Y%m%d")
-        fresh = _dispatch_sector(source, sector_name, start=start)
+            start = pd.Timestamp(last).strftime("%Y%m%d")
+        fresh = _drop_in_progress_bar(_dispatch_sector(source, sector_name, start=start))
         if cached is not None and not force_refresh:
-            combined = pd.concat([cached, fresh]).drop_duplicates("date").sort_values("date")
+            combined = (
+                pd.concat([cached, fresh])
+                .drop_duplicates("date", keep="last")
+                .sort_values("date")
+            )
         else:
             combined = fresh
         combined = combined.reset_index(drop=True)

@@ -43,7 +43,7 @@ def _query(bs_code: str, start: str, fields: str) -> pd.DataFrame:
     rs = bs.query_history_k_data_plus(
         bs_code, fields,
         start_date=start, end_date=end,
-        frequency="d", adjustflag="2",  # 2 = 前复权
+        frequency="d", adjustflag="1",  # 1 = 后复权(锚在上市日,历史不变,增量追加自洽)
     )
     if rs.error_code != "0":
         raise RuntimeError(f"baostock query failed for {bs_code}: {rs.error_msg}")

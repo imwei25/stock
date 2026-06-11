@@ -3,7 +3,12 @@
 特点:
 - 不依赖 HTTP 爬虫,稳定性高;
 - 支持拉到当日盘中/收盘数据(几分钟级延迟);
-- 单次请求最多 800 根 K 线,我们按需要 offset。
+- 单次请求最多 800 根 K 线,我们按需要 offset;
+- 复权:bars 原始数据为不复权价,本模块用同源 xdxr 事件(TCP)做
+  **段内锚定后复权**——段首因子=1,事件因子只依赖段内 prev_close,
+  增量段由 fetcher 用缓存重叠 bar 锚定到既有尺度,天然无接缝。
+  (不用 mootdx 自带 to_adjust:它走新浪 HTTP 拉因子,且对部分窗口
+  有 fillna(1.0) 边界 bug。)
 """
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ import logging
 import threading
 import time
 
+import numpy as np
 import pandas as pd
 
 log = logging.getLogger(__name__)
@@ -82,19 +88,99 @@ def _call_with_retry(method_name: str, *args, **kwargs):
     raise last_err
 
 
-def fetch_stock(code: str, start: str | None = None) -> pd.DataFrame:
-    """拉 A 股日线 (前复权语义未处理: mootdx bars 返回不复权价)。
+_XDXR_EVENT_COLS = ["date", "fenhong", "peigu", "peigujia", "songzhuangu"]
 
-    Note:
-        mootdx 的 bars 默认返回不复权价。本项目使用价格做技术指标(MA/MACD/...)
-        和回测,在没有除权事件的票上影响有限;若需精确复权,后续可加 xdxr 处理。
+
+def _fetch_xdxr(code: str) -> pd.DataFrame:
+    """拉除权除息事件 (category==1: 分红/送转/配股),可能为空。
+
+    返回列: date, fenhong, peigu, peigujia, songzhuangu(均为每 10 股口径)。
+    网络失败时 raise(宁可整次拉取失败,也不能把未复权数据当 hfq 写入缓存)。
+    """
+    last_err: Exception | None = None
+    for attempt, delay in enumerate(_RETRY_DELAYS, 1):
+        try:
+            client = _get_client(force_new=(attempt > 1))
+            raw = client.xdxr(symbol=code)
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            log.warning("mootdx xdxr attempt %d/%d for %s failed: %s",
+                        attempt, len(_RETRY_DELAYS), code, e)
+            if attempt < len(_RETRY_DELAYS):
+                time.sleep(delay)
+    else:
+        assert last_err is not None
+        raise last_err
+
+    if raw is None or len(raw) == 0:
+        return pd.DataFrame(columns=_XDXR_EVENT_COLS)
+    df = raw.reset_index() if "date" in getattr(raw.index, "names", []) else raw.copy()
+    if "date" not in df.columns:
+        df["date"] = pd.to_datetime(df[["year", "month", "day"]])
+    df = df[df.get("category", pd.Series(dtype=float)) == 1].copy()
+    if df.empty:
+        return pd.DataFrame(columns=_XDXR_EVENT_COLS)
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    for col in ("fenhong", "peigu", "peigujia", "songzhuangu"):
+        df[col] = pd.to_numeric(df.get(col), errors="coerce").fillna(0.0)
+    return df[_XDXR_EVENT_COLS].sort_values("date").reset_index(drop=True)
+
+
+def _apply_hfq(bars: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+    """段内锚定后复权:段首因子=1,只用段内可见的除权事件。
+
+    每个事件 e(每 10 股分红 fenhong、送转 songzhuangu、配股 peigu @ peigujia):
+        理论除权价 P_ex = (P_prev*10 - fenhong + peigu*peigujia)
+                          / (10 + peigu + songzhuangu)
+        因子 ratio_e = P_prev / P_ex,自事件日起乘到所有后续 bar。
+    P_prev 取段内事件日前最后一根 bar 的原始 close;事件落在段首 bar 或
+    段外时只贡献常数尺度,在段内锚定语义下直接忽略(增量段由 fetcher
+    用缓存重叠 bar 锚定,全量段以窗口起点为基准)。
+
+    OHLC 同步缩放;volume 保持原始值(与 baostock/akshare 口径一致)。
+    """
+    if bars.empty or events is None or events.empty:
+        return bars
+    out = bars.reset_index(drop=True).copy()
+    dates = out["date"].to_numpy()
+    raw_close = out["close"].to_numpy(dtype=float)
+    factor = np.ones(len(out))
+
+    for ev in events.sort_values("date").itertuples(index=False):
+        ev_date = np.datetime64(pd.Timestamp(ev.date))
+        idx = int(np.searchsorted(dates, ev_date, side="left"))
+        if idx <= 0 or idx >= len(out):
+            continue  # 段首/段前事件 → 常数尺度,忽略;段后事件无 bar 可调
+        p_prev = raw_close[idx - 1]
+        denom = 10.0 + ev.peigu + ev.songzhuangu
+        p_ex = (p_prev * 10.0 - ev.fenhong + ev.peigu * ev.peigujia) / denom
+        if not np.isfinite(p_ex) or p_ex <= 0 or p_prev <= 0:
+            log.warning("xdxr event at %s yields invalid ex-price (%s); skipped",
+                        ev.date, p_ex)
+            continue
+        factor[idx:] *= p_prev / p_ex
+
+    for col in ("open", "high", "low", "close"):
+        out[col] = out[col].to_numpy(dtype=float) * factor
+    return out
+
+
+def fetch_stock(code: str, start: str | None = None) -> pd.DataFrame:
+    """拉 A 股日线,段内锚定后复权 (hfq)。
+
+    mootdx bars 返回不复权价;本函数叠加同源 xdxr 事件做段内 hfq:
+    返回段的首根 bar 即原始价(因子=1),段内除权事件之后的 bar 已被
+    放大到连续口径。增量调用方(fetcher.fetch_daily)用缓存重叠 bar
+    把本段锚定到既有缓存尺度。
     """
     offset = _offset_for_start(start)
     raw = _call_with_retry("bars", symbol=code, frequency=_FREQ_DAILY, offset=offset)
     out = _normalize(raw)
     if start is not None:
         out = out[out["date"] >= pd.to_datetime(start)]
-    return out.reset_index(drop=True)
+    out = out.reset_index(drop=True)
+    return _apply_hfq(out, _fetch_xdxr(code))
 
 
 def fetch_index(symbol: str) -> pd.DataFrame:

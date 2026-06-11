@@ -56,6 +56,25 @@
        → HTML
 ```
 
+### 复权与缓存增量约定(2026-06 P0 修复)
+
+- **全链路统一后复权 (hfq)**:akshare `adjust="hfq"`、baostock `adjustflag="1"`;
+  mootdx 原始 bars 不复权,由 `mootdx_backend._apply_hfq` 叠加同源 xdxr 事件
+  (TCP,`client.xdxr`)做**段内锚定 hfq**——返回段的段首因子=1,事件因子
+  `P_prev/P_ex` 只依赖段内 prev_close;窗口外事件只贡献常数尺度,直接忽略。
+  不用 mootdx 自带 `to_adjust`(走新浪 HTTP 且对部分窗口有 fillna(1.0) 边界 bug)。
+  volume 各源均不复权。**为何 hfq 而非 qfq**:qfq 锚在最新价,每次除权全历史平移,
+  与增量缓存根本不兼容;hfq 历史不变,增量追加自洽。
+- **盘中保护**:`_drop_in_progress_bar` 在 15:05 前丢弃 `date==今天` 的行,
+  半根盘中 bar 不会写入缓存(股票/指数/板块路径都生效)。
+- **增量重叠拉取 + 接缝校验**:`fetch_daily` 增量从缓存最后一天**含**开始拉
+  (非 last+1),`_reconcile_increment` 用重叠 bar 校验:close 偏差 >0.1%(复权
+  基准漂移)或 volume 偏差 >1%(缓存末根是历史污染的半根 bar)→ 丢弃缓存全量
+  重拉(自愈);mootdx 增量段用重叠 bar 锚定到缓存既有价格尺度。合并用
+  `drop_duplicates(keep="last")`,新 bar 覆盖旧 bar。
+- **绝对价格语义**:hfq 价格 ≠ 真实成交价(被复权因子缩放)。收益率/指标/回测
+  PnL 正确;依赖绝对价位的逻辑(如 mcap = close×shares)是近似,见 review P2-22。
+
 **日报路径 verdict 来自 `cfg.strategy.name`**(`cli._analyze_one`):
 - 仍计算综合评级 triggers/scores/hit_rates 作展示补充
 - 最终 `verdict` / `final_score` 由 `strategy.predict_latest(daily)` 给出
@@ -94,7 +113,7 @@
 | `fundamentals_{profit,growth,balance,cash_flow,dupont}.parquet` | baostock 季度财务长期缓存,30 天有效 |
 | `recommend_pool/poolb_<hash>_<isoyear>w<NN>.parquet` | Pool B 本周排名缓存 |
 | `factor_panels/<sig>/{manifest.json, close.parquet, <factor>.parquet × N}` | ml_factor pooled 因子面板 + close 宽表落盘缓存;sig hash 含 factors / sorted codes / last_date / preprocess。`--refresh-factor-panel` 旁路 |
-| `.data_source` | 单行文本,记录上次写入该 cache_dir 的 source;`fetch_*` 启动时比对,不一致触发 force_refresh |
+| `.data_source` | 单行文本 `<source>:<adjust>`(如 `mootdx:hfq`),记录上次写入该 cache_dir 的数据源与复权模式;`fetch_*` 启动时比对,任一不匹配(含旧格式纯 source 的遗留 marker)触发 force_refresh 全量重拉 |
 
 ## 报告路径
 

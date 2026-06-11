@@ -14,9 +14,9 @@
 
 | 文件 | 职责 |
 |---|---|
-| `src/stockpool/fetcher.py` | 公开 API + Parquet 缓存 + OHLCV 校验;按 `cfg.data.source` 派发后端;`fetch_universe`/`list_universe`/`load_universe_cache` 全市场批拉与读盘;`check_source_change`/`update_source_marker` 维护 `data/.data_source` 标记,源变化时自动 force_refresh |
-| `src/stockpool/data_sources/mootdx_backend.py` | 通达信 TCP 后端(默认)。股票/指数/**行业板块(88xxxx)**;含当日盘中,TDX 占位 bar 会被丢弃。行业名→代码映射 `_TDX_INDUSTRY_CODES` |
-| `src/stockpool/data_sources/baostock_backend.py` | baostock 后端(无 token,收盘后约 18:00 更新);不支持板块,板块自动走 mootdx |
+| `src/stockpool/fetcher.py` | 公开 API + Parquet 缓存 + OHLCV 校验;按 `cfg.data.source` 派发后端;价格统一**后复权 (hfq)**,akshare 走 `adjust="hfq"`;`_drop_in_progress_bar` 在 15:05 前丢当日半根 bar;增量从缓存最后一天(含)重叠拉取,`_reconcile_increment` 接缝校验(close >0.1% / volume >1% 偏差 → 全量重拉)+ mootdx 段锚定;`fetch_universe`/`list_universe`/`load_universe_cache` 全市场批拉与读盘;`check_source_change`/`update_source_marker` 维护 `data/.data_source` 标记(`<source>:hfq`),源或复权口径变化时自动 force_refresh |
+| `src/stockpool/data_sources/mootdx_backend.py` | 通达信 TCP 后端(默认)。股票/指数/**行业板块(88xxxx)**;含当日盘中,TDX 占位 bar 会被丢弃。`_fetch_xdxr` + `_apply_hfq` 做段内锚定后复权(段首因子=1,事件因子 `P_prev/P_ex`,volume 不复权)。行业名→代码映射 `_TDX_INDUSTRY_CODES` |
+| `src/stockpool/data_sources/baostock_backend.py` | baostock 后端(无 token,收盘后约 18:00 更新);`adjustflag="1"` 后复权;不支持板块,板块自动走 mootdx |
 | `src/stockpool/fundamentals_loader.py` | baostock 5 张季度财务表 (profit/growth/balance/cash_flow/dupont) PIT 长期缓存,parquet 30 天 staleness |
 | `src/stockpool/industry_map.py` | `code → 行业` 映射;多源(`auto` / `baostock` / `akshare`);缓存 `data/stock_industry_map.parquet`,>30 天过期自动重拉。**mootdx 路径无效**:TDX 服务器对 `block_hy.dat` 返回 0 字节 |
 | `src/stockpool/ipo_dates.py` | `code → IPO 日期` 映射(baostock `query_stock_basic`,5500+ 股一次性 ~3-5 秒);缓存 `data/ipo_dates.parquet` 30 天有效。`mask.enabled=true` 时 `MLFactorStrategy._get_ipo_dates` 自动加载,传给 `_listing_mask`,替代有 bug 的 `first_valid_index` 启发式 |

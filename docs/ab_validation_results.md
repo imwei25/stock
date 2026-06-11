@@ -1,5 +1,12 @@
 # A/B 验证结果(2026-05-24)
 
+> ⚠️ **数据基线变更 (2026-06-11)**:以下全部结论产出于**复权修复之前**——当时
+> mootdx 缓存是不复权价,除权除息跳空污染训练标签与回测 PnL(见
+> `docs/project_review_2026-06.md` P0-1/2/3,已修复:全链路 hfq + 盘中 bar 防护)。
+> 两 arm 共担同一份失真数据,**相对比较(verdict 方向)仍有参考价值,绝对数字
+> (sharpe/return/drawdown)不可采信**。重建全市场缓存(`fetch-universe`)后需
+> 按 runbook 重跑本表并标记 before/after。
+
 > 7 个对照按 `docs/ab_validation_runbook.md` 跑出。共同条件: equity_curve_holding_days=[10], history_days=500,16 只 cfg.stocks(P3-2 因时间约束 + share_pool 实现 bug 缩减到 3 只)。
 > Verdict 标准(对应 runbook §1):✅ B 改善 sharpe ≥ +0.2 且 ≥10/16 胜 | ⚠️ Δsharpe 在 ±0.1 / 7-9 胜 | ❌ Δsharpe ≤ -0.2 或 ≤6/16 胜 | 🚫 跑不通
 

@@ -203,7 +203,9 @@ recommend_pool:
 | `baostock` | 免费无 token;**收盘后约 18:00 更新** | 稳定历史回测、盘后跑批 |
 | `akshare` | 东财 HTTP 爬虫;字段易变 | 想用东财行业板块时 |
 
-**切换 source 自动 force_refresh**(`data/.data_source` 标记比对,避免混源污染相对成交量指标)。
+**价格统一后复权 (hfq)**:三个源的除权除息跳空都已消除(mootdx 用同源 xdxr 事件复权);
+盘中 15:05 前拉到的当日半根 K 线不会写入缓存;增量更新自带接缝校验,数据异常自动全量重拉。
+**切换 source(或复权口径升级)自动 force_refresh**(`data/.data_source` 标记比对,避免混源/混口径污染)。
 行业板块在 mootdx/baostock 下统一走 mootdx 的通达信行业指数(88xxxx)。
 
 ```yaml
