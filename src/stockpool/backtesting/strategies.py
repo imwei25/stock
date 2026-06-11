@@ -124,19 +124,25 @@ class CompositeVerdictStrategy(Strategy):
         return ctx.signal in self.refresh_verdicts
 
     def predict_latest(self, daily_df: pd.DataFrame) -> dict:
-        """Single-bar verdict for the daily report (skips the walk-forward)."""
+        """Single-bar verdict for the daily report (skips the walk-forward).
+
+        P3-21:这是综合评级"末根 bar 评级"的唯一实现 —— cli 的
+        ``_compute_verdict``(指数/板块路径)委托到这里,改权重逻辑只动一处。
+        """
         if len(daily_df) < DAILY_WARMUP:
             return {
                 "signal": "neutral",
                 "daily_score": 0, "weekly_score": 0, "final_score": 0.0,
+                "triggers_daily": [], "triggers_weekly": [],
             }
         enriched = add_all(daily_df, self.indicators_cfg)
-        d_score = score_triggers(detect_signals(enriched, self.weights))
+        trig_d = detect_signals(enriched, self.weights)
+        d_score = score_triggers(trig_d)
         weekly = resample_to_weekly(daily_df)
+        trig_w: list = []
         if len(weekly) >= WEEKLY_WARMUP:
-            w_score = score_triggers(
-                detect_signals(add_all(weekly, self.indicators_cfg), self.weights)
-            )
+            trig_w = detect_signals(add_all(weekly, self.indicators_cfg), self.weights)
+            w_score = score_triggers(trig_w)
         else:
             w_score = 0
         final = combine_daily_weekly(d_score, w_score, self.scoring)
@@ -146,6 +152,8 @@ class CompositeVerdictStrategy(Strategy):
             "daily_score": int(d_score),
             "weekly_score": int(w_score),
             "final_score": float(final),
+            "triggers_daily": trig_d,
+            "triggers_weekly": trig_w,
         }
 
 
@@ -548,8 +556,13 @@ class MLFactorStrategy(Strategy):
         if shared_key is not None and self._shared_cache is not None:
             hit = self._shared_cache.get(shared_key)
 
+        fit_date: pd.Timestamp | None = None  # P1-7: 日报标注模型训练时点
         if hit is not None:
             pipeline, quantiles = hit
+            fit_date = (
+                self._shared_cache.get((*shared_key, "__fit_date__"))
+                if self._shared_cache is not None else None
+            )
         else:
             cached = self._load_cached_pipeline()
             same_month = (
@@ -560,14 +573,19 @@ class MLFactorStrategy(Strategy):
             if same_month:
                 pipeline = cached["pipeline"]
                 quantiles = cached["quantiles"]
+                fit_date = pd.Timestamp(cached["fit_date"])
                 if shared_key is not None and self._shared_cache is not None:
                     self._shared_cache[shared_key] = (pipeline, quantiles)
+                    self._shared_cache[(*shared_key, "__fit_date__")] = fit_date
             else:
                 fitted = self._try_fit(daily_df, X_full, y_full, current_bar)
                 if fitted is None:
                     return {"signal": "neutral", "score": float("nan")}
                 pipeline, quantiles = fitted
+                fit_date = today
                 self._save_cached_pipeline(pipeline, quantiles, today)
+                if shared_key is not None and self._shared_cache is not None:
+                    self._shared_cache[(*shared_key, "__fit_date__")] = fit_date
 
         xi_row = X_full.iloc[[-1]]
         # Partial NaN tolerance: impute missing factor values with 0 so a
@@ -584,6 +602,11 @@ class MLFactorStrategy(Strategy):
         return {
             "signal": signal, "score": pred, "final_score": pred,
             "triggers_daily": triggers, "triggers_weekly": [],
+            # P1-7: 模型实际训练时点(月度缓存可能早于今天)——日报应标注,
+            # 让"信号来自几号训练的模型"可见。shared-cache 旧条目可能为 None。
+            "model_fit_date": (
+                fit_date.date().isoformat() if fit_date is not None else None
+            ),
         }
 
     def _build_x_full(self, daily_df: pd.DataFrame) -> pd.DataFrame:

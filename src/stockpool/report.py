@@ -240,6 +240,11 @@ class StockAnalysis:
     warnings: list[str] = field(default_factory=list)
     context: list[ContextSignal] = field(default_factory=list)
     strategy_name: str = "composite_verdict"
+    # P3-20: 展示公式跟配置走(此前 ×0.7/×0.3 写死,改 scoring 后报告说谎)
+    daily_weight: float = 0.7
+    weekly_weight: float = 0.3
+    # P1-7: ml_factor 模型实际训练时点(月度缓存可能早于报告日)
+    model_fit_date: str | None = None
 
 
 def _overview_row(a: StockAnalysis) -> str:
@@ -266,21 +271,26 @@ def _triggers_section_html(a: "StockAnalysis") -> str:
     ml_factor → 单列 "主要因子贡献" (按 |z×w| 降序), 不显示加权公式。
     """
     if a.strategy_name == "ml_factor":
+        fit_note = (
+            f" <span style='color:#888;font-size:.85em'>(模型训练于 "
+            f"{a.model_fit_date})</span>" if a.model_fit_date else ""
+        )
         return (
             "<div class='signal-cols'>"
             "<div>"
-            f"<h4>主要因子贡献 (预测分 {a.final_score:+.3f})</h4>"
+            f"<h4>主要因子贡献 (预测分 {a.final_score:+.3f}){fit_note}</h4>"
             f"<ul>{_trigger_list_html(a.triggers_daily)}</ul>"
             "</div></div>"
         )
+    dw, ww = a.daily_weight, a.weekly_weight
     return (
         "<div class='signal-cols'>"
         "<div>"
-        f"<h4>触发信号(日 K)— 日分 {a.daily_score:+d} × 0.7 = {a.daily_score * 0.7:+.2f}</h4>"
+        f"<h4>触发信号(日 K)— 日分 {a.daily_score:+d} × {dw:g} = {a.daily_score * dw:+.2f}</h4>"
         f"<ul>{_trigger_list_html(a.triggers_daily)}</ul>"
         "</div>"
         "<div>"
-        f"<h4>触发信号(周 K)— 周分 {a.weekly_score:+d} × 0.3 = {a.weekly_score * 0.3:+.2f}</h4>"
+        f"<h4>触发信号(周 K)— 周分 {a.weekly_score:+d} × {ww:g} = {a.weekly_score * ww:+.2f}</h4>"
         f"<ul>{_trigger_list_html(a.triggers_weekly)}</ul>"
         "</div></div>"
     )

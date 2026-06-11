@@ -50,22 +50,25 @@ log = logging.getLogger("stockpool")
 
 
 def _compute_verdict(df: pd.DataFrame, cfg: AppConfig):
-    """Run indicator+signal pipeline. Returns (d_score, w_score, final, verdict, trig_d, trig_w)."""
-    from stockpool.indicators import add_all as _add_all
-    enriched = _add_all(df, cfg.indicators)
-    trig_d = detect_signals(enriched, cfg.weights)
-    d_score = score_triggers(trig_d)
+    """Run indicator+signal pipeline. Returns (d_score, w_score, final, verdict, trig_d, trig_w).
 
-    weekly = resample_to_weekly(df)
-    trig_w: list = []
-    w_score = 0
-    if len(weekly) >= 30:
-        trig_w = detect_signals(_add_all(weekly, cfg.indicators), cfg.weights)
-        w_score = score_triggers(trig_w)
-
-    final = combine_daily_weekly(d_score, w_score, cfg.scoring)
-    verdict = verdict_of(final, cfg.verdicts)
-    return d_score, w_score, final, verdict, trig_d, trig_w
+    P3-21:委托 ``CompositeVerdictStrategy.predict_latest``(单一实现),
+    不再维护复制粘贴的同一逻辑。
+    """
+    from stockpool.backtesting.strategies import CompositeVerdictStrategy
+    strat = CompositeVerdictStrategy(
+        weights=cfg.weights, scoring=cfg.scoring,
+        verdicts_cfg=cfg.verdicts, indicators_cfg=cfg.indicators,
+    )
+    latest = strat.predict_latest(df)
+    return (
+        int(latest.get("daily_score", 0)),
+        int(latest.get("weekly_score", 0)),
+        float(latest.get("final_score", 0.0)),
+        latest.get("signal", "neutral"),
+        list(latest.get("triggers_daily", [])),
+        list(latest.get("triggers_weekly", [])),
+    )
 
 
 def _is_trading_day(today: date) -> bool:
@@ -148,6 +151,7 @@ def _analyze_one(
     # pipeline is refit at most once per calendar month per stock — see
     # MLFactorStrategy.predict_latest.
     strategy_name = cfg.strategy.name
+    latest: dict = {}
     try:
         strategy = build_strategy(
             cfg, pool_data=pool_data, current_stock_code=stock.code,
@@ -221,6 +225,10 @@ def _analyze_one(
         warnings=warnings,
         context=context,
         strategy_name=strategy_name,
+        daily_weight=cfg.scoring.daily_weight,
+        weekly_weight=cfg.scoring.weekly_weight,
+        model_fit_date=(latest.get("model_fit_date")
+                        if isinstance(latest, dict) else None),
     )
 
 

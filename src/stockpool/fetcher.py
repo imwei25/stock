@@ -704,8 +704,18 @@ def load_universe_cache(
     return out
 
 
-def resample_to_weekly(daily: pd.DataFrame) -> pd.DataFrame:
-    """Daily K → Weekly K (W-FRI: each week ends on Friday)."""
+def resample_to_weekly(
+    daily: pd.DataFrame, completed_only: bool = True,
+) -> pd.DataFrame:
+    """Daily K → Weekly K (W-FRI: each week ends on Friday)。
+
+    P2-27:默认只保留**已完成周**。进行中的周会 repaint —— 周三看到的
+    "周线金叉"周五可能消失,日报与三天后回放同一日期不一致,而
+    resonance_bonus(+2,占 buy 阈值 3 的 2/3)会放大该噪声。
+    判定:末组的 W-FRI 标签晚于最后一根日 bar,且(按交易日历)标签之前
+    还有未走完的交易日 → 丢弃末组;日历不可用时保守地按"最后 bar 早于
+    标签即未完成"处理。
+    """
     df = daily.copy()
     df = df.set_index(pd.DatetimeIndex(df["date"]))
     weekly = df.resample("W-FRI").agg({
@@ -716,4 +726,15 @@ def resample_to_weekly(daily: pd.DataFrame) -> pd.DataFrame:
         "volume": "sum",
     }).dropna()
     weekly = weekly.reset_index().rename(columns={"index": "date"})
+    if completed_only and len(weekly) > 0 and len(df) > 0:
+        last_bar = pd.Timestamp(df.index.max()).normalize()
+        last_label = pd.Timestamp(weekly["date"].iloc[-1]).normalize()
+        if last_label > last_bar:
+            cal = _trade_calendar()
+            if cal is not None:
+                pending = any(last_bar < d <= last_label for d in cal)
+            else:
+                pending = True  # 无日历 → 保守视为未完成
+            if pending:
+                weekly = weekly.iloc[:-1].reset_index(drop=True)
     return weekly
