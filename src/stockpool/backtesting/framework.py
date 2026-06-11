@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 import numpy as np
 import pandas as pd
 
+from stockpool.backtesting.limits import open_hits_limit_down, open_hits_limit_up
 from stockpool.backtesting.metrics import compute_metrics
 
 
@@ -196,10 +197,14 @@ class BacktestEngine:
         strategy: Strategy,
         costs: TradeCosts = TradeCosts(),
         risk_free_rate: float = 0.02,
+        limit_pct: float | None = None,
     ):
         self.strategy = strategy
         self.costs = costs
         self.risk_free_rate = risk_free_rate
+        # P1-3: 涨跌停拒单。None = 不检查(单测夹具/非 A 股数据);
+        # 生产路径由调用方用 ``limits.infer_limit_pct(code)`` 注入。
+        self.limit_pct = limit_pct
 
     def run(self, daily_df: pd.DataFrame, max_holding_days: int) -> BacktestResult:
         """Generate signals and simulate in one call."""
@@ -221,6 +226,7 @@ class BacktestEngine:
             max_holding_days=max_holding_days,
             costs=self.costs,
             risk_free_rate=self.risk_free_rate,
+            limit_pct=self.limit_pct,
         )
 
     def sweep_holding_days(
@@ -259,6 +265,7 @@ def _simulate(
     max_holding_days: int,
     costs: TradeCosts,
     risk_free_rate: float,
+    limit_pct: float | None = None,
 ) -> BacktestResult:
     n = len(signals)
     if n == 0:
@@ -299,8 +306,12 @@ def _simulate(
                 bar_idx=t - 1, date=prev_date,
                 close=prev_close, signal=prev_signal,
             )
-            if strategy.should_enter(ctx):
+            if strategy.should_enter(ctx) and not (
+                limit_pct is not None
+                and open_hits_limit_up(open_t, prev_close, limit_pct)
+            ):
                 # Fill at open[t]; exposure runs open[t] → close[t] this bar.
+                # 一字涨停开盘买不进(P1-3)→ 跳过本 bar,信号若持续次日重试。
                 position[t] = 1
                 entry_idx = t
                 entry_price = open_t
@@ -326,9 +337,14 @@ def _simulate(
                 equity[t] = equity[t - 1] * (1 + hold_ret)
                 continue
             time_exit = held_now >= max_holding_days
-            if time_exit or strategy.should_exit(pctx):
+            sell_blocked = (
+                limit_pct is not None
+                and open_hits_limit_down(open_t, prev_close, limit_pct)
+            )
+            if (time_exit or strategy.should_exit(pctx)) and not sell_blocked:
                 # Realize at open[t]: ride close[t-1] → open[t], pay sell_cost,
                 # then flat for the rest of the day.
+                # 一字跌停开盘卖不出(P1-3)→ 继续持仓吃后续走势,次日重试。
                 position[t] = 0
                 equity_at_open = equity[t - 1] * (open_t / prev_close)
                 exit_equity = equity_at_open * (1 - costs.sell_cost)
@@ -439,6 +455,7 @@ class MultiLotBacktestEngine:
         costs: TradeCosts = TradeCosts(),
         risk_free_rate: float = 0.02,
         max_concurrent_lots: int | None = None,
+        limit_pct: float | None = None,
     ):
         if lot_sizer is not None and position_size is not None:
             raise ValueError(
@@ -456,6 +473,7 @@ class MultiLotBacktestEngine:
         self.costs = costs
         self.risk_free_rate = risk_free_rate
         self.max_concurrent_lots = max_concurrent_lots
+        self.limit_pct = limit_pct  # P1-3,语义同 BacktestEngine
 
     def run(self, daily_df: pd.DataFrame, max_holding_days: int) -> BacktestResult:
         signals = self.strategy.generate_signals(daily_df)
@@ -472,6 +490,7 @@ class MultiLotBacktestEngine:
             max_holding_days=max_holding_days,
             costs=self.costs,
             risk_free_rate=self.risk_free_rate,
+            limit_pct=self.limit_pct,
         )
 
     def sweep_holding_days(
@@ -492,6 +511,7 @@ def _simulate_multi_lot(
     max_holding_days: int,
     costs: TradeCosts,
     risk_free_rate: float,
+    limit_pct: float | None = None,
 ) -> BacktestResult:
     n = len(signals)
     if n == 0:
@@ -543,7 +563,11 @@ def _simulate_multi_lot(
                 still_open.append(lot)
                 continue
             time_exit = lot.days_held >= max_holding_days
-            if time_exit or strategy.should_exit(pctx):
+            sell_blocked = (
+                limit_pct is not None
+                and open_hits_limit_down(open_t, prev_close, limit_pct)
+            )
+            if (time_exit or strategy.should_exit(pctx)) and not sell_blocked:
                 value_at_open = lot.current_value * (open_t / prev_close)
                 exit_value = value_at_open * (1 - costs.sell_cost)
                 cash += exit_value
@@ -579,7 +603,11 @@ def _simulate_multi_lot(
             max_concurrent_lots is None
             or len(open_lots) < max_concurrent_lots
         )
-        if strategy.should_enter(bctx) and capacity_ok:
+        buy_blocked = (
+            limit_pct is not None
+            and open_hits_limit_up(open_t, prev_close, limit_pct)
+        )
+        if strategy.should_enter(bctx) and capacity_ok and not buy_blocked:
             size = lot_sizer(t, opens, closes)
             if size > 0 and cash >= size:
                 cash -= size

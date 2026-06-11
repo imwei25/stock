@@ -39,6 +39,8 @@ if TYPE_CHECKING:
 def compute_factor_panel(
     panel: Mapping[str, pd.DataFrame],
     factor_names: Sequence[str],
+    *,
+    on_dead: str = "raise",
 ) -> dict[str, pd.DataFrame]:
     """在 OHLCV Panel 上算所有因子,返回 ``{name: T×N DataFrame}``。
 
@@ -52,7 +54,19 @@ def compute_factor_panel(
     for name in factor_names:
         f = make_factor(name)
         wide = f.compute(panel)
-        _check_factor_coverage(f.name, wide)
+        try:
+            _check_factor_coverage(f.name, wide)
+        except ValueError:
+            # on_dead="skip":探索性分析(factors analyze 全集扫描)跳过
+            # 死因子继续,并把它从输出剔除;生产训练路径保持 fail loud。
+            if on_dead == "skip":
+                import logging
+                logging.getLogger(__name__).warning(
+                    "factor %r 覆盖率为 0,已从分析中剔除(on_dead=skip)",
+                    f.name,
+                )
+                continue
+            raise
         out[f.name] = wide
     return out
 

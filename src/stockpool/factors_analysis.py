@@ -312,7 +312,11 @@ def analyze_factors(
     # compute_factor_panel output align. Pre-resolved names round-trip unchanged.
     factor_names = [make_factor(n).name for n in factor_names]
 
-    fp = compute_factor_panel(panel, factor_names)
+    # 探索性全集扫描:死因子(0% 覆盖)跳过并告警,不让单个因子崩掉全局分析
+    fp = compute_factor_panel(panel, factor_names, on_dead="skip")
+    factor_names = [n for n in factor_names if n in fp]
+    if not factor_names:
+        raise ValueError("所有因子覆盖率均为 0 —— 检查数据/context 注入")
     if preprocess_cfg is not None:
         from stockpool.strategy_factory import apply_production_preprocess
         fp = apply_production_preprocess(

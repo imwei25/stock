@@ -127,6 +127,14 @@ def backtest_stocks(
     failed: list[tuple[str, str]] = []
     needs_pool = pool_data is not None
 
+    # P1-3: 涨跌停拒单按代码前缀 + ST 标记推断幅度(ST 集合缓存缺失则空集)
+    from stockpool.backtesting.limits import infer_limit_pct
+    try:
+        from stockpool.ipo_dates import load_st_codes
+        st_codes = load_st_codes(cfg.data.cache_dir)
+    except Exception:  # noqa: BLE001
+        st_codes = set()
+
     for s in stocks:
         log.info("Backtesting %s (%s)...", s.code, s.name)
         try:
@@ -153,6 +161,7 @@ def backtest_stocks(
                     engine=cfg.backtest.engine,
                     lot_sizer=build_lot_sizer(cfg.backtest.sizing),
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
+                    limit_pct=infer_limit_pct(s.code, st_codes),
                 )
             else:
                 strategy = build_strategy(
@@ -173,6 +182,7 @@ def backtest_stocks(
                     engine=cfg.backtest.engine,
                     lot_sizer=build_lot_sizer(cfg.backtest.sizing),
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
+                    limit_pct=infer_limit_pct(s.code, st_codes),
                 )
             per_stock.append((s.code, s.name, result))
         except Exception as e:

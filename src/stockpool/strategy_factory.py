@@ -555,6 +555,7 @@ def simulate_strategy_equity_curve(
     position_size: float | None = None,
     lot_sizer: LotSizer | None = None,
     max_concurrent_lots: int | None = None,
+    limit_pct: float | None = None,
 ) -> EquityResult:
     """Generic equity-curve simulator: runs ``strategy`` for each holding-day cap.
 
@@ -578,7 +579,8 @@ def simulate_strategy_equity_curve(
     """
     costs = TradeCosts(buy_cost=buy_cost, sell_cost=sell_cost)
     if engine == "single":
-        bt = BacktestEngine(strategy, costs=costs, risk_free_rate=risk_free_rate)
+        bt = BacktestEngine(strategy, costs=costs, risk_free_rate=risk_free_rate,
+                            limit_pct=limit_pct)
     elif engine == "multi_lot":
         if lot_sizer is None:
             size = position_size if position_size is not None else 0.1
@@ -590,6 +592,7 @@ def simulate_strategy_equity_curve(
         bt = MultiLotBacktestEngine(
             strategy, lot_sizer=lot_sizer, costs=costs,
             risk_free_rate=risk_free_rate, max_concurrent_lots=max_concurrent_lots,
+            limit_pct=limit_pct,
         )
     else:
         raise ValueError(f"engine must be 'single' or 'multi_lot', got {engine!r}")
