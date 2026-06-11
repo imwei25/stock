@@ -78,10 +78,17 @@ def _minimal_cfg_yaml(tmp_path: Path, **overrides) -> Path:
 
 
 class _StubStrategy:
-    """Returns a per-code score lookup. predict_latest only uses ``code``."""
-    def __init__(self, code: str, scores: dict[str, float]):
+    """Returns a per-code score lookup.
+
+    P2-30 起 Pool B 只 build 一次 strategy,逐股 ``with_stock(code)`` 绑定
+    (与 ml_factor 真实路径一致),stub 同样实现该协议。
+    """
+    def __init__(self, code: str | None, scores: dict[str, float]):
         self._code = code
         self._scores = scores
+
+    def with_stock(self, code: str) -> "_StubStrategy":
+        return _StubStrategy(code, self._scores)
 
     def predict_latest(self, daily_df):
         s = self._scores.get(self._code)
@@ -287,8 +294,10 @@ def test_per_stock_predict_failure_skipped(monkeypatch, tmp_path):
                 industries={c: f"sec-{c}" for c in codes})
 
     class _FailingFor000002:
-        def __init__(self, code: str):
+        def __init__(self, code: str | None):
             self._c = code
+        def with_stock(self, code: str) -> "_FailingFor000002":
+            return _FailingFor000002(code)
         def predict_latest(self, daily_df):
             if self._c == "000002":
                 raise RuntimeError("synthetic blow up")

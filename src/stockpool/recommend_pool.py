@@ -215,14 +215,22 @@ def _score_universe(
     t_loop_start = time.perf_counter()
     print(f"[TIME] Pool B scoring start: {total} stocks", flush=True)
 
+    # P2-30: 整个循环只 build 一次 strategy(避免每股重复构造/深拷贝面板),
+    # 池化策略用 with_stock(code) 做轻量绑定;不支持 with_stock 的策略
+    # (composite)无状态,直接复用同一实例。
+    _t = time.perf_counter()
+    base_strategy = build_strategy(
+        cfg, pool_data=pool_data,
+        factor_panel=factor_panel, close_panel=close_panel,
+        shared_cache=shared_cache,
+    )
+    base_build = time.perf_counter() - _t
+    can_bind = hasattr(base_strategy, "with_stock")
+
     for i, (code, daily) in enumerate(survivors.items(), 1):
         try:
             _t = time.perf_counter()
-            strategy = build_strategy(
-                cfg, pool_data=pool_data, current_stock_code=code,
-                factor_panel=factor_panel, close_panel=close_panel,
-                shared_cache=shared_cache,
-            )
+            strategy = base_strategy.with_stock(code) if can_bind else base_strategy
             t_build += time.perf_counter() - _t
             _t = time.perf_counter()
             latest = strategy.predict_latest(daily)
@@ -256,7 +264,8 @@ def _score_universe(
 
     total_loop = time.perf_counter() - t_loop_start
     print(f"[TIME] Pool B scoring done: {total_loop:.1f}s total "
-          f"(build_total={t_build:.1f}s predict_total={t_predict:.1f}s "
+          f"(base_build={base_build:.1f}s bind_total={t_build:.1f}s "
+          f"predict_total={t_predict:.1f}s "
           f"ok={len(rows)} fail={fail_count})", flush=True)
     log.info("Pool B scoring done: ok=%d fail=%d", len(rows), fail_count)
     rows.sort(key=lambda r: r["final_score"], reverse=True)

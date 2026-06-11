@@ -174,63 +174,104 @@ def build_factor_panel(
     )
 
 
+def _load_pit_shares_panel(
+    close_panel: pd.DataFrame,
+    cache_dir: str | Path,
+) -> pd.DataFrame | None:
+    """profit 表逐季 PIT totalShare → 与 close_panel 对齐的 T×N 股本面板。
+
+    复用 ``factors.fundamentals._pit_align``(按 pubDate ffill,PIT 保证 +
+    同日披露取最新 statDate + ffill 上限)。profit parquet 缺失/无字段时
+    返回 None,调用方回退静态快照。**只读缓存,不触发网络**(基本面缓存
+    由 fetch 流程/scripts 维护)。
+    """
+    profit_path = Path(cache_dir) / "fundamentals_profit.parquet"
+    if not profit_path.exists():
+        return None
+    try:
+        raw = pd.read_parquet(profit_path)
+        if raw.empty or "totalShare" not in raw.columns:
+            return None
+        from stockpool.factors.fundamentals import _pit_align
+        raw = raw.copy()
+        raw["totalShare"] = pd.to_numeric(raw["totalShare"], errors="coerce")
+        return _pit_align(raw, "totalShare", close_panel, table="profit")
+    except Exception as e:  # noqa: BLE001
+        log.warning("PIT shares panel build failed (%s); falling back to snapshot", e)
+        return None
+
+
 def build_log_mcap_panel(
     pool_data: Mapping[str, pd.DataFrame],
     cache_dir: str | Path | None,
 ) -> pd.DataFrame | None:
     """Build a T×N ``log(total_market_cap)`` panel for market-cap neutralize.
 
-    ``market_cap_t = close_t × totalShare``, where ``totalShare`` is the latest
-    snapshot per stock from ``data/mcap_shares.parquet`` (written by
-    ``scripts/pull_mcap_profit.py`` from baostock's profit table). The share
-    count is **broadcast statically** across all dates; only ``close`` (the
-    dominant daily mcap driver) varies day to day. ``log`` is applied so the
-    neutralize OLS regresses on a roughly-normal size variable.
+    ``market_cap_t = close_t × totalShare_t``(P2-22):股本优先用 profit 表
+    **逐季 PIT** 序列(按公告日 ffill,增发/回购在公告日生效,无前视);
+    PIT 覆盖不到的格子(早于基本面覆盖窗口 / 缺数据的票)回退
+    ``data/mcap_shares.parquet`` 的最新快照静态广播(此时是文档化近似)。
+    ``log`` is applied so the neutralize OLS regresses on a roughly-normal
+    size variable.
 
-    Two documented approximations (acceptable for a size-neutralization
-    regressor + a directional A/B verdict):
+    Remaining documented approximation: cached ``close`` 为 hfq 复权价,
+    绝对 mcap 被各股复权因子缩放,截面 size 排序是近似(修复需 raw close
+    或复权因子列,见 review P2-22 长期项)。
 
-      1. **Static shares.** Using the latest totalShare at historical dates is
-         a mild forward leak, but share counts move slowly and only shift a
-         stock's size bucket — not a tradable signal. Pulling the full PIT
-         quarterly history is a Phase-2.x refinement (~13h baostock pull).
-      2. **Adjusted close.** Cached ``close`` is 前复权, so absolute mcap is
-         scaled by each stock's cumulative adjustment factor; cross-sectional
-         size ranking is therefore approximate.
-
-    Returns ``None`` when the shares snapshot is missing/empty (caller then
-    skips the market_cap_neutralize step with a warning).
+    Returns ``None`` when both PIT profit data and the snapshot are missing
+    (caller then skips the market_cap_neutralize step with a warning).
     """
     if not pool_data or cache_dir is None:
-        return None
-    shares_path = Path(cache_dir) / "mcap_shares.parquet"
-    if not shares_path.exists():
-        log.warning(
-            "build_log_mcap_panel: %s missing (run scripts/pull_mcap_profit.py); "
-            "market_cap_neutralize will skip", shares_path,
-        )
         return None
 
     import numpy as np
 
-    snap = pd.read_parquet(shares_path)
-    if snap.empty or "totalShare" not in snap.columns:
-        log.warning("build_log_mcap_panel: %s empty/malformed", shares_path)
-        return None
-    shares = (
-        snap.assign(code=snap["code"].astype(str).str.zfill(6))
-        .dropna(subset=["totalShare"])
-        .drop_duplicates("code", keep="last")
-        .set_index("code")["totalShare"]
-    )
-
     close_panel = build_close_panel(pool_data)
     if close_panel.empty:
         return None
-    # Broadcast static shares across dates; codes without a snapshot → NaN
-    # (those stocks pass through un-neutralized in market_cap_neutralize_panel).
-    shares_row = shares.reindex(close_panel.columns)
-    mcap = close_panel.mul(shares_row, axis=1)
+
+    # 1) PIT 逐季股本(优先)
+    shares_panel = _load_pit_shares_panel(close_panel, cache_dir)
+
+    # 2) 静态快照(回退 / 填洞)
+    shares: pd.Series | None = None
+    shares_path = Path(cache_dir) / "mcap_shares.parquet"
+    if shares_path.exists():
+        snap = pd.read_parquet(shares_path)
+        if not snap.empty and "totalShare" in snap.columns:
+            shares = (
+                snap.assign(code=snap["code"].astype(str).str.zfill(6))
+                .dropna(subset=["totalShare"])
+                .drop_duplicates("code", keep="last")
+                .set_index("code")["totalShare"]
+            )
+
+    if shares_panel is None and shares is None:
+        log.warning(
+            "build_log_mcap_panel: 无 PIT profit 数据也无 %s 快照;"
+            "market_cap_neutralize will skip", shares_path,
+        )
+        return None
+
+    if shares_panel is not None and shares is not None:
+        static_panel = pd.DataFrame(
+            np.broadcast_to(
+                shares.reindex(close_panel.columns).to_numpy(dtype=float),
+                close_panel.shape,
+            ),
+            index=close_panel.index, columns=close_panel.columns,
+        )
+        shares_panel = shares_panel.fillna(static_panel)
+    elif shares_panel is None:
+        shares_panel = pd.DataFrame(
+            np.broadcast_to(
+                shares.reindex(close_panel.columns).to_numpy(dtype=float),
+                close_panel.shape,
+            ),
+            index=close_panel.index, columns=close_panel.columns,
+        )
+
+    mcap = close_panel * shares_panel
     mcap = mcap.where(mcap > 0)  # guard non-positive / NaN before log
     log_mcap = np.log(mcap)
     # Report MEDIAN coverage, not last-bar: the trailing edge is sparse when

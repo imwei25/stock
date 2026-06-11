@@ -344,9 +344,9 @@ class MLFactorStrategy(Strategy):
         # 可选: 预算好的 close 宽表 (T×N)。提供时,pooled mode 的 _try_fit
         # 直接切 factor_panel + close_panel 拼训练集,跳过每个 refit_bar 的
         # build_panel(pool, factors, horizon) 全量因子重算 (PR-1 速度优化)。
-        self._close_panel: pd.DataFrame | None = (
-            close_panel.copy() if close_panel is not None else None
-        )
+        # 只读引用,不 copy(P2-30):面板从不被本类修改;Pool B 逐股
+        # with_stock 时深拷贝 500×4350 面板 × 4000 股 ≈ 70GB 分配流量。
+        self._close_panel: pd.DataFrame | None = close_panel
         self.buy_verdicts = set(cfg.buy_verdicts)
         self.sell_verdicts = set(cfg.sell_verdicts)
         self.refresh_verdicts = set(cfg.refresh_verdicts)

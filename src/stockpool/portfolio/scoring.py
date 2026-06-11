@@ -37,10 +37,16 @@ def precompute_scores_from_legacy(
         Codes whose ``generate_signals`` raises or omits ``score_field`` are
         skipped. If *all* codes fail, returns an empty frame.
     """
+    # P0-5: ml_factor 等池化策略必须先 with_stock(code) 绑定当前股票,
+    # 否则 _build_x_full 走单股退化路径 —— cross-sec 因子变常数/NaN、
+    # 预处理(winsorize/zscore/mcap 中性化)全部缺失,训练(预处理面板)
+    # 与预测(原始单股因子)特征不一致,score panel 的截面排序基本失效。
+    can_bind = hasattr(legacy_strategy, "with_stock")
     series_by_code: dict[str, pd.Series] = {}
     for code, daily in panel_data.items():
         try:
-            sig = legacy_strategy.generate_signals(daily)
+            strat = legacy_strategy.with_stock(code) if can_bind else legacy_strategy
+            sig = strat.generate_signals(daily)
         except Exception as e:  # noqa: BLE001 — failure-isolation contract
             log.warning("score panel: %s generate_signals failed (%s); skip", code, e)
             continue

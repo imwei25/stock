@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Literal
 
+import os
+
 import akshare as ak
 import pandas as pd
 
@@ -30,22 +32,20 @@ _AKSHARE_COLUMN_MAP = {
 _RETRY_DELAYS = [2, 4, 8]
 
 
+# P3-2: 强制 AKShare(requests)直连不走代理。旧实现是对 requests.get 的
+# 全局 monkeypatch contextmanager —— 多线程嵌套 patch/restore 顺序错乱时会把
+# patched 版本永久留在 requests 上。改为进程级 NO_PROXY="*" 环境变量
+# (requests/urllib 原生支持,优先级高于 HTTP(S)_PROXY,线程安全)。
+# 强制设置(非 setdefault):旧实现就是无条件直连,系统残留的代理变量
+# (HTTP_PROXY 等)正是要绕开的对象。
+os.environ["NO_PROXY"] = "*"
+os.environ["no_proxy"] = "*"
+
+
 @contextlib.contextmanager
 def _no_proxy():
-    """强制 AKShare 的 requests.get 直连，不走任何代理，退出后还原。"""
-    import requests as _req
-    _orig = _req.get
-
-    def _direct_get(url, **kwargs):
-        # proxies={} 会被 setdefault 覆盖；显式设 None 才能真正禁用
-        kwargs["proxies"] = {"http": None, "https": None}
-        return _orig(url, **kwargs)
-
-    _req.get = _direct_get
-    try:
-        yield
-    finally:
-        _req.get = _orig
+    """向后兼容的 no-op(直连由模块导入时的 NO_PROXY=* 环境变量保证)。"""
+    yield
 
 
 _ADJUST_MODE = "hfq"  # 全链路统一后复权;改动此值会使全部价格缓存失效重拉
@@ -91,8 +91,47 @@ def _drop_in_progress_bar(df: pd.DataFrame) -> pd.DataFrame:
     return df[~mask].reset_index(drop=True)
 
 
+# P3-1 交易日历:akshare tool_trade_date_hist_sina,进程内 memo 1 天;
+# 失败 memo 1 小时(避免反复打网络),期间回退 BDay 近似。
+_TRADE_CAL_TTL = 86400.0
+_TRADE_CAL_FAIL_TTL = 3600.0
+_trade_cal_memo: tuple[float, frozenset | None] | None = None
+
+
+def _reset_trade_calendar_memo() -> None:
+    global _trade_cal_memo
+    _trade_cal_memo = None
+
+
+def _trade_calendar() -> frozenset | None:
+    """A 股交易日集合(Timestamp,normalize 过);拉取失败返回 None。"""
+    global _trade_cal_memo
+    now = time.time()
+    if _trade_cal_memo is not None:
+        ts, cal = _trade_cal_memo
+        ttl = _TRADE_CAL_TTL if cal is not None else _TRADE_CAL_FAIL_TTL
+        if now - ts < ttl:
+            return cal
+    try:
+        raw = ak.tool_trade_date_hist_sina()
+        cal = frozenset(pd.to_datetime(raw["trade_date"]).dt.normalize())
+        _trade_cal_memo = (now, cal)
+        return cal
+    except Exception as e:  # noqa: BLE001
+        log.warning("trade calendar fetch failed (%s); falling back to BDay", e)
+        _trade_cal_memo = (now, None)
+        return None
+
+
 def _last_business_day(today: pd.Timestamp) -> pd.Timestamp:
-    """今天本身若是工作日则返回今天,否则回退到上一个工作日(周末近似,不查节假日)。"""
+    """最近一个交易日(≤今天)。优先真实交易日历(识别春节/国庆等长假,
+    避免假期里把全市场缓存误判 stale 而空拉);日历不可用时退回
+    周末近似(工作日=交易日)。"""
+    cal = _trade_calendar()
+    if cal:
+        past = [d for d in cal if d <= today]
+        if past:
+            return max(past)
     if today.weekday() < 5:
         return today
     return (today - pd.offsets.BDay(1)).normalize()
