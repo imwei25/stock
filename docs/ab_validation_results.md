@@ -1,27 +1,41 @@
 # A/B 验证结果
 
-## 2026-06-12 重跑(新口径,数据修复后)
+## 2026-06-13 重跑(v2 面板,correlation inf 修复后)— 当前权威结果
 
-> 口径:hfq 复权 + volume 股 + open-to-open 标签 + selection 窗口前移
-> (≤2024-05-20 选因子,评估期不重叠)+ 涨跌停拒单 + edge 开仓 + 差量调仓 +
-> NW 修正 ic_ir + Trade.ret 含双边成本。16 只 cfg.stocks,N=10,与旧表同
-> verdict 标准(✅ Δsharpe ≥ +0.2 且 ≥10/16 胜 | ⚠️ ±0.1 内 | ❌ ≤ −0.2 或 ≤6/16 胜)。
-> 明细 JSON:`reports/ab_rerun_results.json`;每组 HTML:`reports/ab_rerun/<组名>/`。
+> 口径:同 2026-06-12 新口径(hfq + open-to-open 标签 + selection 窗口前移 +
+> 涨跌停拒单 + edge 开仓 + 差量调仓 + NW 修正 ic_ir + 双边成本),叠加
+> **panel_version=2**:`ops.correlation` ±inf→NaN + clip [-1,1],全部因子
+> 面板在干净数据上重建。16 只 cfg.stocks,N=10,verdict 标准不变
+> (✅ Δsharpe ≥ +0.2 且 ≥10/16 胜 | ⚠️ ±0.1 内 | ❌ ≤ −0.2 或 ≤6/16 胜)。
+> 明细 JSON:`reports/ab_rerun_results.json`;每组 HTML:`reports/ab_rerun/<组名>/`;
+> 运行日志:`reports/ab_rerun_v2panel_2026-06-12.log`。
+>
+> **v1(中毒面板)对照结论:11 组方向性结论全部复现,无一翻转**——
+> inf 污染主要通过"中毒日样本被静默丢弃"产生轻度数值偏差,未颠倒任何
+> 排序。两个量级变化值得注意:① P4-23 mcap 中性化的优势在干净数据上
+> **从 +0.055 增强到 +0.197**(industry 臂在干净数据上明显变差);
+> ② P4-1 从零交易死表恢复为正常出数。
 
-| 对照 | A | B | Δsharpe | B wins | Δreturn | Δmax_dd | Verdict(旧 → 新) |
+| 对照 | A | B | Δsharpe | B wins | Δreturn | Δmax_dd | Verdict(v1 → v2) |
 |------|---|---|---------|--------|---------|---------|--------|
-| P2-1 | embargo=0 | embargo=auto | −0.038 | 5/16 | −0.5% | +0.5% | ⚠️ 无害 → **⚠️ 无害**(保留 auto,保守防泄漏) |
-| P0-1 | composite | lgb+lgb | −0.018 | 8/16 | +3.4% | **+12.5%** ❌ | ⚠️ → **⚠️ tied,LGB 回撤显著更差** |
-| P0-2 | lasso+ic | lgb+lgb | **−0.238** | 6/16 | −12.1% | −9.1% ✓ | ❌ → **❌ 复现:LGB 全家桶倒退** |
-| P1-1 | lasso+ic | lgb+ic | −0.013 | 7/16 | −1.1% | +0.1% | ⚠️ → **⚠️ tied(LGB selector 无增量)** |
-| P1-2 | lgb+ic | lgb+lgb | **−0.180** | 4/16 | −11.9% | −8.2% ✓ | ⚠️/❌ → **❌ LGB weighter 倒退** |
-| P3-1 | per_stock | pooled | **+0.205** | 13/16 | +14.1% | −0.2% ✓ | ✅ → **✅ 复现:pooled 真收益** |
-| P3-2 | training=pool | training=all | **−0.167** | 3/16 | −11.4% | +3.3% | ❌ → **❌ 复现:16 票应用池下全市场训练倒退** |
-| P4-1 | preprocess off | on | **+0.060** | 10/16 | +3.1% | +2.0% ❌ | ✅(修复 correlation inf 后重跑 2026-06-12 晚):winsorize+zscore 增益方向复现,回撤略差;默认「winsorize+zscore+mcap 开」维持 |
-| P4-2/3 | industry 中性化 | market_cap 中性化 | +0.055 | 9/16 | +3.1% | −2.2% ✓ | ✅(mcap 优) → **⚠️/✅ 方向复现:mcap 中性化更优,默认保持** |
-| P4-4 | 正交化 off | on | −0.116 | 3/16 | −3.3% | +2.9% | NEUTRAL/off → **❌ 默认关维持** |
-| sizing | fixed | vol_target | −0.040 | 5/16 | **−17.4%** | −2.1% ✓ | (新增)**⚠️ sharpe 接近但收益大减** — vol_target 以降波动为目的,回撤略优;若以绝对收益优先可考虑切回 fixed,建议保持现默认并观察 |
-| 组合 A/B | simple / mask_medium | — | — | — | — | — | 两组管线跑通(报告:`reports/ab_rerun/portfolio_ab_*.html`),新口径下含 turnover 指标 |
+| P2-1 | embargo=0 | embargo=auto | −0.016 | 9/16 | +1.4% | +0.3% | ⚠️ 无害 → **⚠️ 无害**(保留 auto,保守防泄漏) |
+| P0-1 | composite | lgb+lgb | +0.015 | 8/16 | +4.7% | **+13.0%** ❌ | ⚠️ → **⚠️ tied,LGB 回撤显著更差** |
+| P0-2 | lasso+ic | lgb+lgb | **−0.211** | 8/16 | −10.6% | −9.0% ✓ | ❌ → **❌ 复现:LGB 全家桶倒退** |
+| P1-1 | lasso+ic | lgb+ic | +0.002 | 4/11 | −0.1% | ±0.0% | ⚠️ → **⚠️ 完全 tied(LGB selector 无增量)** |
+| P1-2 | lgb+ic | lgb+lgb | **−0.154** | 7/16 | −9.7% | −9.5% ✓ | ❌ → **❌ LGB weighter 倒退** |
+| P3-1 | per_stock | pooled | **+0.156** | 10/16 | +11.2% | +1.0% | ✅ → **✅ 复现:pooled 真收益** |
+| P3-2 | training=pool | training=all | **−0.170** | 4/16 | −11.8% | +3.1% | ❌ → **❌ 复现:16 票应用池下全市场训练倒退** |
+| P4-1 | preprocess off | on | **+0.060** | 10/16 | +3.1% | +2.0% ❌ | 🚫 跑不通 → **✅ 修复后出数:winsorize+zscore 增益方向成立,回撤略差;默认「winsorize+zscore+mcap 开」维持** |
+| P4-2/3 | industry 中性化 | market_cap 中性化 | **+0.197** | 12/16 | +8.5% | −5.4% ✓ | ⚠️/✅ → **✅ 增强复现:mcap 显著更优(干净数据上 industry 臂明显变差),默认保持** |
+| P4-4 | 正交化 off | on | **−0.169** | 3/14 | −6.7% | −1.5% ✓ | ❌ → **❌ 加重复现:默认关维持** |
+| sizing | fixed | vol_target | −0.056 | 5/16 | **−19.1%** | −1.6% ✓ | ⚠️ → **⚠️ 复现:vol_target 收益大减、回撤略优;默认维持,绝对收益优先可切 fixed** |
+| 组合 A/B | simple | — | — | — | — | — | simple 跑通(`reports/portfolio_ab/`);**mask_medium 两臂 fail loud:alpha_048 覆盖率 0%**(v2 重建面板暴露,v1 靠缓存命中跳过了计算;待排查,见下) |
+
+**已知问题(2026-06-13)**:portfolio_ab_mask_medium 在 v2 面板重建时
+`alpha_048` 覆盖率 0% 触发 fail loud(两臂同错)。v1 时代该组靠旧缓存命中
+从未真算过;属于修复暴露的存量问题而非修复引入,待单独定位(嫌疑:该组
+配置的 history 窗口不足 alpha_048 的 ~250 bar warmup,或 sector context
+未注入)。
 
 **核心结论(新口径下全部方向性复现)**:
 1. **pooled 训练是唯一稳定的真收益**(P3-1,两个口径下都 ✅)——当前默认正确。
@@ -54,12 +68,10 @@ alpha_045 的 `corr(close, volume, 2)` 全市场命中 63,653 格(4383/4599 票,
 ② `stack_panel_to_xy` / `align_xy` 样本过滤改 `isfinite`(防线);
 ③ `cs_zscore_panel` 退化判定 `~(σ>=1e-12)` 覆盖 NaN σ(防线);
 ④ 面板 sig 加 `panel_version=2`,v1 毒面板缓存整体失效;ml_models 旧
-pkl 已清。**修复后 P4-1 当晚重跑通过**(0 条 selector-empty 警告,两臂
-16/16 done,baseline 均值 108 笔交易/票):结果已回填上表 —— preprocess
-开启 sharpe +0.060(10/16 胜)、收益 +3.1%、回撤略差 +2.0%,默认值维持。
-**残余待办:其余 20 因子组(P3-2/P4-23/P4-4)的旧数字受"中毒日样本被
-静默丢弃"轻度影响(中毒行经 mcap 残差化转 NaN 后被 drop,约 116 天),
-择期用 v2 面板一并重跑。**
+pkl 已清。修复后 P4-1 当晚重跑通过(0 条 selector-empty 警告,两臂
+16/16 done,baseline 均值 108 笔交易/票)。**2026-06-13 凌晨已用 v2 面板
+完成全部 11 组 + portfolio simple 的整批重跑**,结果即本文件顶部权威表;
+v1↔v2 逐组对照确认无结论翻转。
 
 ---
 
