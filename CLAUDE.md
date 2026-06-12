@@ -106,6 +106,7 @@ python -m pytest tests/ -q
 | [docs/reference/testing.md](docs/reference/testing.md) | 615 测试的按域覆盖表 |
 | [docs/backtesting_framework.md](docs/backtesting_framework.md) | 回测框架完整 API |
 | `docs/ab_validation_results.md` | 所有 A/B 验证结论(P1..P4) |
+| `docs/improvement_log_2026-06.md` | v2 面板时代的逐轮策略改进日志(48 股评估池 `config_eval48.yaml`) |
 | `docs/superpowers/specs/` | 各功能的设计 spec(按日期命名) |
 | [docs/project_review_2026-06.md](docs/project_review_2026-06.md) | 全面审查报告:P0~P3 问题清单(复权/幸存者偏差/选因子泄漏等)+ 分阶段改进路线图 |
 

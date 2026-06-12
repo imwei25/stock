@@ -1,0 +1,245 @@
+# A/B 评估专用 base config(2026-06-13):与 config.yaml 唯一差异是
+# stocks 扩到 48 只(原 16 + 流动性 top32,行业 cap=3)。
+# 用于改进轮 A/B 的统计功效;生产日报仍用 config.yaml(16 只)。
+stocks:
+  # ── 原 16 只(与历史 A/B 表可比) ──
+  - {code: "605589", name: "圣泉集团",  sector: "化工"}
+  - {code: "603986", name: "兆易创新",  sector: "半导体"}
+  - {code: "000528", name: "柳工",      sector: "工程机械"}
+  - {code: "603026", name: "石大胜华",  sector: "化工"}
+  - {code: "603757", name: "大元泵业",  sector: "通用机械"}
+  - {code: "603667", name: "五洲新春",  sector: "通用机械"}
+  - {code: "002081", name: "金螳螂",    sector: "装修装饰"}
+  - {code: "000922", name: "华电辽能",  sector: "电力"}
+  - {code: "001309", name: "德明利",    sector: "半导体"}
+  - {code: "300302", name: "同有科技",  sector: "半导体"}
+  - {code: "002409", name: "雅克科技",  sector: "半导体"}
+  - {code: "301308", name: "江波龙",    sector: "半导体"}
+  - {code: "600584", name: "长电科技",  sector: "半导体"}
+  - {code: "688008", name: "澜起科技",  sector: "半导体"}
+  - {code: "688766", name: "普冉股份",  sector: "半导体"}
+  - {code: "300475", name: "香农芯创",  sector: "半导体"}
+  # ── 2026-06-13 扩充 32 只:全市场流动性 top + 行业 cap=3(评估统计功效)──
+  - {code: "300502", name: "新易盛",    sector: "通信设备"}
+  - {code: "300394", name: "天孚通信",  sector: "通信设备"}
+  - {code: "300308", name: "中际旭创",  sector: "通信设备"}
+  - {code: "300750", name: "宁德时代",  sector: "电池"}
+  - {code: "002837", name: "英维克",    sector: "专用设备"}
+  - {code: "300059", name: "东方财富",  sector: "证券"}
+  - {code: "300274", name: "阳光电源",  sector: "电气机械"}
+  - {code: "002594", name: "比亚迪",    sector: "汽车"}
+  - {code: "300738", name: "奥飞数据",  sector: "数据中心"}
+  - {code: "002050", name: "三花智控",  sector: "通用设备"}
+  - {code: "300751", name: "迈为股份",  sector: "专用设备"}
+  - {code: "601899", name: "紫金矿业",  sector: "有色采选"}
+  - {code: "605117", name: "德业股份",  sector: "电气机械"}
+  - {code: "603259", name: "药明康德",  sector: "医药研发"}
+  - {code: "300058", name: "蓝色光标",  sector: "商务服务"}
+  - {code: "600111", name: "北方稀土",  sector: "有色冶炼"}
+  - {code: "300450", name: "先导智能",  sector: "专用设备"}
+  - {code: "600519", name: "贵州茅台",  sector: "白酒"}
+  - {code: "002460", name: "赣锋锂业",  sector: "有色冶炼"}
+  - {code: "300655", name: "晶瑞电材",  sector: "化学制品"}
+  - {code: "300442", name: "润泽科技",  sector: "数据中心"}
+  - {code: "000981", name: "山子高科",  sector: "汽车"}
+  - {code: "601318", name: "中国平安",  sector: "保险"}
+  - {code: "603881", name: "数据港",    sector: "数据中心"}
+  - {code: "300568", name: "星源材质",  sector: "化学制品"}
+  - {code: "603799", name: "华友钴业",  sector: "有色冶炼"}
+  - {code: "300803", name: "指南针",    sector: "金融信息"}
+  - {code: "300748", name: "金力永磁",  sector: "磁材"}
+  - {code: "002714", name: "牧原股份",  sector: "畜牧"}
+  - {code: "600276", name: "恒瑞医药",  sector: "医药制造"}
+  - {code: "600030", name: "中信证券",  sector: "证券"}
+  - {code: "300432", name: "富临精工",  sector: "汽车零部件"}
+
+data:
+  history_days: 800   # 800 = 评估 500 + 因子选择前置窗口 ~300 (P0-6 selection 前移)
+  cache_dir: "data"
+  force_refresh: false
+  # 数据源: mootdx(默认, 通达信 TCP, 含当日盘中) | baostock(无 token, 收盘后更新)
+  #        | akshare(东财爬虫, 兜底, 不稳定)
+  # 板块(行业)K 线始终走 akshare,因为另两家不直接提供。
+  source: mootdx
+
+context:
+  indices:
+    - {code: "sh000001", name: "上证指数"}
+    - {code: "sz399001", name: "深证成指"}
+
+indicators:
+  ma_periods: [5, 10, 20, 60]
+  macd: {fast: 12, slow: 26, signal: 9}
+  kdj: {n: 9, m1: 3, m2: 3}
+  rsi_periods: [6, 12, 24]
+  boll: {n: 20, k: 2}
+  volume_ratio_window: 5
+  breakout_window: 20
+
+weights:
+  ma_cross_strong: 2
+  ma_alignment: 1
+  macd_cross_above_zero: 2
+  macd_cross_below_zero: 1
+  macd_histogram_expand: 1
+  kdj_oversold_cross: 2
+  kdj_overbought_cross: 2
+  kdj_normal_cross: 1
+  rsi_oversold: 1
+  rsi_overbought: 1
+  boll_band_touch: 2
+  boll_mid_cross: 1
+  volume_surge_bullish: 1
+  volume_surge_bearish: 1
+  breakout_new_high: 2
+  breakout_new_low: 2
+
+scoring:
+  daily_weight: 0.7
+  weekly_weight: 0.3
+  resonance_bonus: 2
+  resonance_daily_threshold: 3
+  resonance_weekly_threshold: 1
+
+verdicts:
+  strong_buy: 6
+  buy: 3
+  sell: -3
+  strong_sell: -6
+
+backtest:
+  forward_days: [1, 3, 5]
+  equity_curve_holding_days: [1, 3, 5]
+  risk_free_rate: 0.02
+  costs:
+    commission_rate: 0.0003
+    stamp_duty_rate: 0.0005
+    slippage_rate: 0.0005
+  # engine: "multi_lot" (default) or "single"
+  #   multi_lot — 每次 buy 开独立的 position_size 小单,各自 N 天平仓
+  #   single    — 同时只持一只票,sell 或 N 满才平仓
+  engine: multi_lot
+  # sizing 默认 vol_target (波动大的票仓位小, 波动小的票仓位大),
+  # 想回到老的"每只票都 10% 仓"行为, 把 type 切回 fixed 即可。
+  sizing:
+    type: vol_target            # fixed | vol_target
+    fixed:
+      size: 0.1                 # fixed 模式下每单资本占比, 也是 vol_target 公式的锚点
+    vol_target:
+      reference_vol_annual: 0.30   # "标准 A 股个股年化 vol", recent_vol = ref 时仓位 = fixed.size
+      vol_window: 20               # 滚动 std 用的 bar 数
+      min_size: 0.03               # 最小仓位下限
+      max_size: 0.20               # 最大仓位上限
+      fallback_to: fixed           # 冷启动 / vol 算不出时: fixed 用 baseline, skip 不开仓
+  max_concurrent_lots: null     # null = 由现金自然封顶
+
+report:
+  output_dir: "reports"
+  keep_history: true
+  klines_to_show: 90
+
+# === Pool B — 全市场量化推荐池 ===
+# 在保留 cfg.stocks (Pool A, 手填 watchlist) 的前提下,对全市场 A 股调用
+# 当前 strategy 的 predict_latest 打分, 经 "流动性 + ST + 行业上限" 漏斗后
+# 取 top-N, 作为日报底部的推荐池。两池独立, 允许重叠 (重叠股标 ⭐)。
+#
+# 周缓存: 跨过 ISO 周边界才重算 (refresh=weekly); 缓存键含 cfg.content_hash,
+# 改 yaml 任何字段都自动失效, 下次运行用新策略重算。
+#
+# 前置条件: 必须先跑过 `python -m stockpool fetch-universe` 准备全市场缓存。
+# 首次运行会额外调 akshare 拉一次行业映射 (1-2 分钟, 缓存到
+# data/stock_industry_map.parquet, 30 天有效期)。
+#
+# Pool B 不做回测 (MVP) — 周频再平衡的组合曲线留作 follow-up。
+recommend_pool:
+  enabled: true
+  top_n: 30
+  min_avg_amount_20d: 50000000   # 5000 万元 (mootdx vol*close*100)
+  max_per_industry: 5            # 每个行业最多入选数, "未知" 行业也按此 cap
+  refresh: weekly                # weekly (默认) | always | never
+  cache_dir: "data/recommend_pool"
+  industry_map_max_age_days: 30
+  # 行业映射数据源:
+  #   auto     — 先 baostock 后 akshare (默认, 网络/代理坏一个仍能拿到)
+  #   baostock — 一次性 5500+ 行,证监会分类,~5-10 秒,无 token
+  #   akshare  — 逐板块拉东财,~1-2 分钟,行业名更口语化但受代理影响大
+  # 注:mootdx 的 block_hy.dat 在 TDX 服务器返回 0 字节,无法用于行业映射
+  industry_source: auto
+
+# === 策略选择 ===
+# name: composite_verdict (默认, 原综合评级) | ml_factor (Lasso + IC 两步法)
+strategy:
+  name: ml_factor
+
+  # 只有 name == ml_factor 时生效。
+  # 该策略走流程: Lasso 筛因子 -> IC/IR/equal 加权 -> 训练集分位数映射到 verdict。
+  ml_factor:
+    # 要参与组合的因子(注册名见 stockpool.factors 内置列表)。
+    # 加新因子: 在 factors/technical.py 写一个 Factor 子类 + @register("xxx"),
+    # 然后把名字加到这个列表即可。
+    # 用 `factors analyze` + `pick-by-ic` 选出的因子(top-20, max-corr=0.6, min-ir=0.05)
+    # 与 factors: [...] 二选一,factors_file 优先
+    factors_file: reports/selection.json
+
+    horizon: 3                # 预测未来 N 日收益
+    # train_window 是 "每只票最近多少 bars" 的语义:
+    #   per_stock 模式 -> 训练样本数 = train_window
+    #   pooled    模式 -> 训练样本数 ≈ train_window × 活跃股票数
+    # 经验值: 日线 250-500 (约 1-2 年); 不要超过 2 年以避免跨越市场状态
+    train_window: 250
+    min_train_samples: 60     # 第一次拟合所需最小样本数
+    refit_every: 20           # 每多少根 bar 重训一次
+
+    # per_stock: 每只票独立训练; pooled: 池化所有票样本训一个共用模型
+    panel_mode: pooled
+
+    # 训练用股池:
+    #   pool — 仅 cfg.stocks(~10 只,默认,向后兼容)
+    #   all  — 全市场 A 股(剔除 ST/科创/北交,~4350 只)
+    # 切到 all 前必须先跑: `python -m stockpool fetch-universe`
+    # 仅在 panel_mode=pooled 时生效;per_stock 永远单股训练。
+    training_universe: all
+
+    selector:
+      type: lasso             # 目前唯一支持的 selector (PR-B 后增加 lightgbm)
+      lasso:
+        alpha: 0.001          # L1 强度; 越大越稀疏 (1e-4 ~ 1e-1 合理)
+        max_iter: 1000
+        tol: 1.0e-6
+
+    weighter:
+      type: ic                # ic | ir | equal | lightgbm (PR-B2 Task 4 改默认)
+      ic:
+        use_rank: true        # rank IC (Spearman) 更稳健
+        min_abs_ic: 0.0
+      ir:
+        n_chunks: 6
+        use_rank: true
+        min_abs_ir: 0.0
+      # equal 子段无超参,不写就用 EqualWeighterConfig() 默认空块
+      # lightgbm:             # PR-B2 Task 4 启用时可调超参,默认见 LightGBMWeighterConfig
+      #   num_leaves: 15
+      #   min_data_in_leaf: 20
+      #   learning_rate: 0.05
+      #   num_iterations: 200
+      #   max_depth: 4
+      #   random_state: 42
+
+    # 训练集分位数 -> verdict; 必须 strong_sell < sell < buy < strong_buy
+    thresholds:
+      strong_buy: 0.90
+      buy: 0.70
+      sell: 0.30
+      strong_sell: 0.10
+
+    buy_verdicts:     ["buy", "strong_buy"]
+    sell_verdicts:    ["sell", "strong_sell"]
+    refresh_verdicts: ["strong_buy"]
+
+    # 截面预处理(P4-1b ✅ PASS: winsorize + zscore → +0.245 sharpe / +2.64% return on 4358-票训练池)
+    preprocess:
+      winsorize: [0.01, 0.99]
+      zscore: true
+      industry_neutralize: false   # P4-2: harmful here (conflicts w/ industry_relative_strength factor)
+      market_cap_neutralize: true  # P4-3 PASS: +0.156 sharpe over base; needs data/mcap_shares.parquet
+      # min_pool_size: 200  # default; cs preprocessing skipped when n_codes < this

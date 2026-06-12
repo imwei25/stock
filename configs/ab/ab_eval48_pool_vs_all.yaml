@@ -1,0 +1,83 @@
+# 改进轮 2(2026-06-13):training_universe pool vs all,48 股评估池,生产配置。
+# 动机:旧 P3-2 的「pool 显著优于 all(+0.17 sharpe)」是在 old8 技术因子 +
+# 无 preprocess + embargo=0 的 runbook 配置下得出的,与生产(top-20 +
+# winsorize/zscore/mcap + embargo auto)口径不同,且 16 股池行业高度集中。
+# 本组在 48 股分散池 + 生产配置下正面回答:生产该不该把 per-stock 路径的
+# training_universe 切回 pool。
+# 注意:pool 臂面板 codes=48 < min_pool_size=200 → 截面预处理被 size guard
+# 跳过(含 mcap),这是小池训练的固有约束,诚实呈现而非配置错误。
+base_config: ../../config_eval48.yaml
+arms:
+  train_pool:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: pool
+        selector: &id001
+          type: lasso
+          lasso:
+            alpha: 0.001
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter: &id002
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+          ir:
+            n_chunks: 6
+            use_rank: true
+            min_abs_ir: 0.0
+        thresholds: &id003
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        buy_verdicts: &id004
+        - buy
+        - strong_buy
+        sell_verdicts: &id005
+        - sell
+        - strong_sell
+        refresh_verdicts: &id006
+        - strong_buy
+        mask:
+          enabled: false
+        preprocess: &id007
+          winsorize: [0.01, 0.99]
+          zscore: true
+          industry_neutralize: false
+          market_cap_neutralize: true
+    backtest:
+      equity_curve_holding_days:
+      - 10
+
+  train_all:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector: *id001
+        weighter: *id002
+        thresholds: *id003
+        buy_verdicts: *id004
+        sell_verdicts: *id005
+        refresh_verdicts: *id006
+        mask:
+          enabled: false
+        preprocess: *id007
+    backtest:
+      equity_curve_holding_days:
+      - 10
