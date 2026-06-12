@@ -88,6 +88,20 @@ def test_cs_zscore_handles_nan():
     assert abs(valid.std(ddof=0) - 1.0) < 1e-9
 
 
+def test_cs_zscore_inf_poisoned_row_never_emits_inf():
+    """行内混入 ±inf 时(上游因子数值事故),σ=NaN —— 旧实现把 σ 误判替换
+    为 1、μ=inf,整行被推成 ∓inf 并扩散污染。修复后该行按退化日处理
+    (非 NaN 格子置 0),输出绝不含 ±inf。"""
+    from stockpool.ml.preprocess import cs_zscore_panel
+    df = _make_panel(n_days=3, n_stocks=10, seed=11)
+    df.iloc[1, 0] = np.inf
+    out = cs_zscore_panel(df)
+    assert not np.isinf(out.to_numpy()).any()
+    # 未受污染的行照常 zscore
+    row0 = out.iloc[0].dropna()
+    assert abs(row0.mean()) < 1e-9
+
+
 def test_cs_zscore_preserves_index_columns():
     from stockpool.ml.preprocess import cs_zscore_panel
     df = _make_panel()

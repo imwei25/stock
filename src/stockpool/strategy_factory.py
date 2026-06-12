@@ -437,6 +437,10 @@ def _factor_panel_sig(
         # P2-15: history 起点入 key —— history_days 改长/改短而 last_date
         # 不变时,250 日窗因子的 warmup 段值不同,旧 panel 不能复用。
         "first_date": first_iso,
+        # 因子计算语义版本:算子实现变更(产出值不同)时 +1,使旧缓存
+        # 整体失效。v2 (2026-06-12): ops.correlation 出口 ±inf→NaN +
+        # clip [-1,1],v1 缓存的 alpha_045 等含 inf 毒值。
+        "panel_version": 2,
     }
     if preprocess_cfg is not None and not _is_all_off(preprocess_cfg):
         blob_dict["preprocess"] = preprocess_cfg.model_dump()

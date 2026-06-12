@@ -44,7 +44,8 @@
 | `test_ml_selector_lightgbm.py` | LightGBMSelector:非线性选 / top_k / min_importance_ratio / 确定性 / 退化 / 集成 |
 | `test_ml_weighter_lightgbm.py` | LightGBMWeighter:fit→predict / SHAP weights / 行和接近 predict / 确定性 / 退化 / 集成 |
 | `test_ml_strategy.py` | MLFactorStrategy walk-forward、per_stock/pooled、引擎集成 |
-| `test_ops.py` | WQ 算子库:时间序列/横截面/indneutralize/look-ahead |
+| `test_ops.py` | WQ 算子库:时间序列/横截面/indneutralize/look-ahead + `correlation` 平盘日 ±inf→NaN / clip [-1,1] |
+| `test_ml_dataset_finite.py` | 训练矩阵非有限值防线:`stack_panel_to_xy` / `align_xy` 对 ±inf 样本行(因子侧与标签侧)整行剔除 |
 | `test_wq101.py` | 101 alpha 注册 + 元数据 + 计算无异常 + look-ahead 截断不变 |
 | `test_panel.py` | Panel 构造 + 截尾 + 缺失/错位对齐 |
 | `test_ml_strategy_panel.py` | factor_panel 注入 + with_stock 传播 + cross-sec 不退化 |
@@ -76,7 +77,7 @@
 | `test_panel_mask.py` | `_limit_threshold` 板块映射 + `_listing_mask` + `compute_tradability_mask` + `apply_mask` + IPO 日期路径 |
 | `test_ops_mask_nan_safe.py` | `ts_mean/sum/std/product` min_periods + `decay_linear` NaN-safe 重归一化 |
 | `test_ml_strategy_mask.py` | 各层 mask 参数语义 + sig 变化 + pooled/per_stock spy |
-| `test_ml_preprocess.py` | 4 函数 + `apply_preprocess_pipeline`(mcap 残差化 + fundamental 跳过 + missing-panel warning + orthogonalize-last + size-guard)+ `_is_all_off` short-circuit |
+| `test_ml_preprocess.py` | 4 函数 + `apply_preprocess_pipeline`(mcap 残差化 + fundamental 跳过 + missing-panel warning + orthogonalize-last + size-guard)+ `_is_all_off` short-circuit + cs_zscore 含 ±inf 行按退化日归零 |
 | `test_ml_preprocess_orthogonalize.py` | 对称(Löwdin)正交化 9 case:Gram 正交 / order-independent / 接近原因子 / 退化 passthrough / NaN 传播 / fundamental 跳过 / 单因子 / 近奇异 floor / 不 mutate |
 | `test_factors_original_stats.py` | rolling 直接统计因子注册 + 数值 + look-ahead |
 | `test_factors_ewma.py` | EWMA halflife 解析 + 公式对照 |

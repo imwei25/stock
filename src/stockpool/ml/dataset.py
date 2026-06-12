@@ -199,7 +199,9 @@ def stack_panel_to_xy(
     y_arr = fwd_ret.reindex(index=dates, columns=stocks).to_numpy(dtype=float).ravel(order="F")
 
     if dropna:
-        mask = ~np.isnan(X_arr).any(axis=1) & ~np.isnan(y_arr)
+        # isfinite 而非 isnan:±inf(上游因子数值事故)与 NaN 同等待遇,
+        # 整行剔除 —— inf 进了 Lasso/IC 的标准化会把整个模型毒成 NaN。
+        mask = np.isfinite(X_arr).all(axis=1) & np.isfinite(y_arr)
         if not mask.all():
             X_arr = X_arr[mask]
             y_arr = y_arr[mask]
@@ -326,10 +328,13 @@ def forward_return(
 def align_xy(
     X: pd.DataFrame, y: pd.Series,
 ) -> tuple[pd.DataFrame, pd.Series]:
-    """Drop rows with any NaN in either side. Return aligned (X, y)."""
+    """Drop rows with any NaN/±inf in either side. Return aligned (X, y)."""
     if not X.index.equals(y.index):
         raise ValueError("X and y must share the same index")
-    mask = X.notna().all(axis=1) & y.notna()
+    mask = (
+        np.isfinite(X.to_numpy(dtype=float)).all(axis=1)
+        & np.isfinite(y.to_numpy(dtype=float))
+    )
     return X.loc[mask], y.loc[mask]
 
 

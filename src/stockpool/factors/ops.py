@@ -132,8 +132,16 @@ def decay_linear(x: pd.DataFrame, d: int) -> pd.DataFrame:
 
 
 def correlation(x: pd.DataFrame, y: pd.DataFrame, d: int) -> pd.DataFrame:
-    """每列分别滚动 d 期相关系数。"""
-    return x.rolling(d, min_periods=d).corr(y)
+    """每列分别滚动 d 期相关系数。
+
+    出口数值卫生:近常数窗口(如平盘日 close 两天位级相等)下 pandas
+    矩量公式的浮点抵消会产出 ±inf(数学真值是 0/0 未定义)或轻微越界的
+    |ρ|>1。±inf → NaN(未定义,与缺失同等待遇),有限值 clip 回 [-1, 1]。
+    inf 一旦流出会绕过下游所有 isnan 防线毒化训练矩阵(2026-06 alpha_045
+    全市场事故)。
+    """
+    out = x.rolling(d, min_periods=d).corr(y)
+    return out.replace([np.inf, -np.inf], np.nan).clip(-1.0, 1.0)
 
 
 def covariance(x: pd.DataFrame, y: pd.DataFrame, d: int) -> pd.DataFrame:

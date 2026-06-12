@@ -62,8 +62,9 @@ def cs_zscore_panel(df: pd.DataFrame) -> pd.DataFrame:
         df: T × N factor wide-frame.
 
     Returns:
-        Same-shape DataFrame. Rows where ``σ_t < 1e-12`` (constant
-        cross-section, all-NaN, or single non-NaN cell) return 0 — this
+        Same-shape DataFrame. Rows where ``σ_t < 1e-12`` **or σ_t is NaN**
+        (constant cross-section, all-NaN, single non-NaN cell, or a row
+        containing ±inf from an upstream numerical accident) return 0 — this
         deterministically neutralizes a degenerate day rather than producing
         ``±inf``/``NaN``. NaN cells stay NaN.
 
@@ -74,7 +75,9 @@ def cs_zscore_panel(df: pd.DataFrame) -> pd.DataFrame:
     # Avoid div-by-zero: replace tiny σ with 1, then zero those rows out.
     sigma_safe = sigma.where(sigma >= 1e-12, 1.0)
     out = df.sub(mu, axis=0).div(sigma_safe, axis=0)
-    degenerate = sigma < 1e-12
+    # ~(σ >= 1e-12) 而非 σ < 1e-12:σ=NaN(行内混入 ±inf 的上游数值
+    # 事故)也必须按退化日处理,否则 μ=±inf 会把整行推成 ∓inf 扩散污染。
+    degenerate = ~(sigma >= 1e-12)
     if degenerate.any():
         # For degenerate rows, force non-NaN cells to 0 (NaN cells stay NaN).
         for d in df.index[degenerate]:

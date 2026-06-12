@@ -86,6 +86,30 @@ def test_correlation_two_series():
     assert c["x"].iloc[4] == pytest.approx(1.0)
 
 
+def test_correlation_flat_window_yields_nan_not_inf():
+    """平盘窗口(close 两天位级相等)的 corr 是 0/0 未定义 → 必须输出 NaN。
+
+    pandas rolling 的矩量公式在这里会因浮点抵消产出 ±inf(实测 300225
+    2023-01-12 → -inf),inf 会绕过下游所有 isnan 防线毒化训练矩阵。
+    数据取自真实事故现场。
+    """
+    c = pd.DataFrame({"x": [5.3754696968240063,
+                            5.2952388058266333,
+                            5.2952388058266333]})
+    v = pd.DataFrame({"x": [4546600.0, 5313400.0, 3992700.0]})
+    out = ops.correlation(c, v, 2)
+    assert not np.isinf(out.to_numpy()).any()
+    assert np.isnan(out["x"].iloc[2])
+
+
+def test_correlation_clipped_to_unit_range():
+    """近常数窗口的抵消误差会让 |ρ| 轻微越界(实测 1.0057);出口 clip 回 [-1, 1]。"""
+    c = pd.DataFrame({"x": [10.0, 10.0 + 1e-13, 10.0 + 2e-13, 11.0]})
+    v = pd.DataFrame({"x": [100.0, 200.0, 150.0, 300.0]})
+    out = ops.correlation(c, v, 2)["x"].dropna()
+    assert (out.abs() <= 1.0).all()
+
+
 def test_lookahead_safety_via_truncation():
     """同样的 panel,截断到前 k 行算因子,值与全长版本的前 k 行相同。"""
     x = _panel(30, 3, seed=7)

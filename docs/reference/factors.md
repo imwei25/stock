@@ -24,6 +24,7 @@ Panel = `{"open"|"high"|"low"|"close"|"volume": T×N DataFrame}`,行 = date,列 
 ## 算子库 (`factors/ops.py`,WQ101 必需)
 
 - **时间序列**:`ts_sum` `ts_mean` `ts_min/max` `ts_argmin/argmax` `ts_rank` `ts_std` `ts_product` `delta` `delay` `decay_linear` `correlation` `covariance`
+  - `correlation` 出口数值卫生(2026-06):±inf → NaN、有限值 clip [-1, 1]。近常数窗口(平盘日 close 两天位级相等)下 pandas 矩量公式会产出 ±inf(数学真值 0/0 未定义)或 |ρ|>1;短窗口因子(如 alpha_045 的 `corr(close, volume, 2)`)平盘日约占截面 1.7%,inf 流出会绕过下游 isnan 防线毒化训练矩阵。修复后平盘日 → NaN → 训练整行剔除(边际样本损失 ~2.9%)、predict 均值填充(中性)。
 - **横截面**:`rank`(axis=1, pct=True)`scale`(L1 norm)`signedpower`
 - **行业中性**:`indneutralize(x, group_map)` — 按 group 分组 demean
 - **工具**:`safe_div` `vwap`((H+L+C)/3 proxy)`adv(volume, d)`

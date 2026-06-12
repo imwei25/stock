@@ -17,7 +17,7 @@
 | P1-2 | lgb+ic | lgb+lgb | **−0.180** | 4/16 | −11.9% | −8.2% ✓ | ⚠️/❌ → **❌ LGB weighter 倒退** |
 | P3-1 | per_stock | pooled | **+0.205** | 13/16 | +14.1% | −0.2% ✓ | ✅ → **✅ 复现:pooled 真收益** |
 | P3-2 | training=pool | training=all | **−0.167** | 3/16 | −11.4% | +3.3% | ❌ → **❌ 复现:16 票应用池下全市场训练倒退** |
-| P4-1 | preprocess off | on | — | — | — | — | 🚫 跑不通(见下注);默认值维持「winsorize+zscore+mcap 开」(由 P4-2/3 健康数字与历史结论支撑) |
+| P4-1 | preprocess off | on | **+0.060** | 10/16 | +3.1% | +2.0% ❌ | ✅(修复 correlation inf 后重跑 2026-06-12 晚):winsorize+zscore 增益方向复现,回撤略差;默认「winsorize+zscore+mcap 开」维持 |
 | P4-2/3 | industry 中性化 | market_cap 中性化 | +0.055 | 9/16 | +3.1% | −2.2% ✓ | ✅(mcap 优) → **⚠️/✅ 方向复现:mcap 中性化更优,默认保持** |
 | P4-4 | 正交化 off | on | −0.116 | 3/16 | −3.3% | +2.9% | NEUTRAL/off → **❌ 默认关维持** |
 | sizing | fixed | vol_target | −0.040 | 5/16 | **−17.4%** | −2.1% ✓ | (新增)**⚠️ sharpe 接近但收益大减** — vol_target 以降波动为目的,回撤略优;若以绝对收益优先可考虑切回 fixed,建议保持现默认并观察 |
@@ -34,14 +34,32 @@
 5. **绝对数字首次可采信**:数据层(复权/单位/盘中 bar)与方法论(标签/选因子
    窗口/执行约束)的已知偏差均已消除;本表数字可作为后续优化的基线。
 
-**P4-1 跑不通的诊断(2026-06-12)**:baseline(preprocess 全关)arm 的**原始
-因子面板**在新 20 因子集 × 全市场 hfq 数据上含 inf/NaN(若干 WQ alpha 的
-除法/相关 op 在极端原始值上溢出)→ Lasso 一个不选 → 等权回退后预测仍 NaN →
-分位阈值 NaN → 全 neutral 零交易;with_preprocess arm 同样全零,原因待单独
-复查(面板未跨 arm 共享,sharing 有 preprocess 屏障)。待办:
-① weighter/standardiser 对非有限值做防御(inf→NaN→impute);
-② raw 路径补 winsorize 之外的 inf 清洗;③ 修复后单独重跑 P4-1。
-该组的结论不影响默认值(预处理开着才是生产路径)。
+**P4-1 跑不通的根因(2026-06-12 已定位并修复)**:`ops.correlation`
+(pandas `rolling(d).corr`)在**平盘日**(close 两天位级相等,2 日窗口
+方差≈0)因矩量公式浮点抵消产出 **±inf**(数学真值 0/0 应为 NaN)。
+alpha_045 的 `corr(close, volume, 2)` 全市场命中 63,653 格(4383/4599 票,
+日均占有效截面 ~1.7%)。中毒链:
+- baseline(全关):inf 绕过 `stack_panel_to_xy` 的 isnan 过滤直进训练
+  → Lasso 标准化整列 NaN → 残差污染全部系数 → selected=[] → 等权回退后
+  ICWeighter 的 predict 标准化仍整列 NaN(NaN×0=NaN)→ 全部 score NaN
+  → 零交易。
+- with_preprocess:inf 日均 1.7% > winsorize 1% 上尾 → 当日 0.99 分位 =
+  inf,clip 失效;cs_zscore 的 σ=NaN 被误判替换为 1、μ=±inf → **整行**
+  推成 ∓inf(实测 116 天整行中毒)→ 同样零交易。
+- 其它 20 因子组的 arm 因带 market_cap_neutralize 侥幸存活:`inf−inf=NaN`
+  把中毒行转 NaN 后被 drop(代价是悄悄丢了这些天的样本)。
+
+**修复(同日落地,tests: test_ops / test_ml_dataset_finite / test_ml_preprocess)**:
+① `ops.correlation` 出口 ±inf→NaN + 有限值 clip [-1,1](治本);
+② `stack_panel_to_xy` / `align_xy` 样本过滤改 `isfinite`(防线);
+③ `cs_zscore_panel` 退化判定 `~(σ>=1e-12)` 覆盖 NaN σ(防线);
+④ 面板 sig 加 `panel_version=2`,v1 毒面板缓存整体失效;ml_models 旧
+pkl 已清。**修复后 P4-1 当晚重跑通过**(0 条 selector-empty 警告,两臂
+16/16 done,baseline 均值 108 笔交易/票):结果已回填上表 —— preprocess
+开启 sharpe +0.060(10/16 胜)、收益 +3.1%、回撤略差 +2.0%,默认值维持。
+**残余待办:其余 20 因子组(P3-2/P4-23/P4-4)的旧数字受"中毒日样本被
+静默丢弃"轻度影响(中毒行经 mcap 残差化转 NaN 后被 drop,约 116 天),
+择期用 v2 面板一并重跑。**
 
 ---
 
