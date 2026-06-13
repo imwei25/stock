@@ -1,0 +1,105 @@
+# 改进轮 8(horizon2,收敛确认):base = 生产默认(fixed + top30).48 股,N=10.
+base_config: ../../config_eval48.yaml
+arms:
+  h3_base:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso:
+            alpha: 0.001
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter:
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+          ir:
+            n_chunks: 6
+            use_rank: true
+            min_abs_ir: 0.0
+        thresholds:
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        buy_verdicts:
+        - buy
+        - strong_buy
+        sell_verdicts:
+        - sell
+        - strong_sell
+        refresh_verdicts:
+        - strong_buy
+        mask:
+          enabled: false
+        preprocess:
+          winsorize:
+          - 0.01
+          - 0.99
+          zscore: true
+          industry_neutralize: false
+          market_cap_neutralize: true
+    backtest:
+      equity_curve_holding_days:
+      - 10
+  h2:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 2
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso:
+            alpha: 0.001
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter:
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+          ir:
+            n_chunks: 6
+            use_rank: true
+            min_abs_ir: 0.0
+        thresholds:
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        buy_verdicts:
+        - buy
+        - strong_buy
+        sell_verdicts:
+        - sell
+        - strong_sell
+        refresh_verdicts:
+        - strong_buy
+        mask:
+          enabled: false
+        preprocess:
+          winsorize:
+          - 0.01
+          - 0.99
+          zscore: true
+          industry_neutralize: false
+          market_cap_neutralize: true
+    backtest:
+      equity_curve_holding_days:
+      - 10
