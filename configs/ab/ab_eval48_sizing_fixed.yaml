@@ -1,9 +1,11 @@
-# 改进轮 4(2026-06-13):weighter ic(生产)vs ir。48 股池,N=10,其余生产默认。
-# 注:arm 级 equity_curve_holding_days 仅支持单 N;持有期(N=5 vs 10)问题
-# 由 config_eval48 的普通 backtest 多 N 扫描单独回答。
+# 改进轮 5(2026-06-13):sizing vol_target(生产默认)vs fixed。48 股池,
+# 策略 = 生产默认(两臂相同),仅 backtest.sizing 不同。
+# 动机:v2 重跑的 sizing 组(16 股/旧因子)fixed 同时赢 sharpe(0.623 vs
+# 0.567,11:5)和 return(66.9% vs 47.8%,12:4),旧结论"保持 vol_target"
+# 与"return+sharpe 优先"的目标不符 —— 在生产口径 48 股池上正面复测。
 base_config: ../../config_eval48.yaml
 arms:
-  ic_base:
+  voltarget_base:
     strategy:
       name: ml_factor
       ml_factor:
@@ -20,7 +22,7 @@ arms:
             alpha: 0.001
             max_iter: 1000
             tol: 1.0e-06
-        weighter:
+        weighter: &id002
           type: ic
           ic:
             use_rank: true
@@ -52,8 +54,15 @@ arms:
     backtest:
       equity_curve_holding_days:
       - 10
+      sizing:
+        type: vol_target
+        fixed:
+          size: 0.1
+        vol_target:
+          reference_vol_annual: 0.30
+          vol_window: 20
 
-  ir:
+  fixed:
     strategy:
       name: ml_factor
       ml_factor:
@@ -65,15 +74,7 @@ arms:
         panel_mode: pooled
         training_universe: all
         selector: *id001
-        weighter:
-          type: ir
-          ic:
-            use_rank: true
-            min_abs_ic: 0.0
-          ir:
-            n_chunks: 6
-            use_rank: true
-            min_abs_ir: 0.0
+        weighter: *id002
         thresholds: *id003
         buy_verdicts: *id004
         sell_verdicts: *id005
@@ -84,3 +85,10 @@ arms:
     backtest:
       equity_curve_holding_days:
       - 10
+      sizing:
+        type: fixed
+        fixed:
+          size: 0.1
+        vol_target:
+          reference_vol_annual: 0.30
+          vol_window: 20
