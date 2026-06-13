@@ -1,0 +1,78 @@
+# 改进轮 3-G1(2026-06-13):horizon 3(生产)vs 5。48 股池,其余生产默认。
+# 动机:评估持有期 N=10,horizon=3 的标签只看 3 日 —— 拉长预测窗与持有期
+# 对齐可能提升;代价是标签重叠更多、有效样本独立性下降(embargo=auto 同步加大)。
+base_config: ../../config_eval48.yaml
+arms:
+  h3_base:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector: &id001
+          type: lasso
+          lasso:
+            alpha: 0.001
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter: &id002
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+          ir:
+            n_chunks: 6
+            use_rank: true
+            min_abs_ir: 0.0
+        thresholds: &id003
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        buy_verdicts: &id004
+        - buy
+        - strong_buy
+        sell_verdicts: &id005
+        - sell
+        - strong_sell
+        refresh_verdicts: &id006
+        - strong_buy
+        mask:
+          enabled: false
+        preprocess: &id007
+          winsorize: [0.01, 0.99]
+          zscore: true
+          industry_neutralize: false
+          market_cap_neutralize: true
+    backtest:
+      equity_curve_holding_days:
+      - 10
+
+  h5:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 5
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector: *id001
+        weighter: *id002
+        thresholds: *id003
+        buy_verdicts: *id004
+        sell_verdicts: *id005
+        refresh_verdicts: *id006
+        mask:
+          enabled: false
+        preprocess: *id007
+    backtest:
+      equity_curve_holding_days:
+      - 10

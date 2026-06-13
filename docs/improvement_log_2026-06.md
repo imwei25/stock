@@ -35,6 +35,36 @@ alpha_063/067 等相邻名次微调)。逐因子 IC 对照:除 alpha_045 本身
 
 ---
 
+## 轮 2(2026-06-13):training_universe pool vs all,生产配置 48 股复测 — ⚠️ tied,维持 all,旧 P3-2 结论不可外推
+
+**假设**:master 表最大表观缺口是 P3-2(pool 比 all 好 +0.17 sharpe,
+16 股池)——若在生产口径下复现,切回 pool 是免费大增益。
+
+**做法**:`configs/ab/ab_eval48_pool_vs_all.yaml`,两臂仅 training_universe
+不同,其余 = 生产默认(selection top-20 + winsorize/zscore/mcap + lasso+ic
++ embargo auto)。48 股池。注意 pool 臂 48 码 < min_pool_size=200 → 截面
+预处理被 size guard 跳过(小池训练固有约束)。
+
+**结果**(N=10,48 只):
+
+| 指标 | train_pool | train_all | Δ(all−pool) | wins(pool:all) |
+|---|---|---|---|---|
+| Total return | **17.92%** | 14.10% | −3.82% | 25:23 |
+| Sharpe | 0.224 | **0.241** | +0.017 | 22:26 |
+| Max drawdown | 17.08% | **15.02%** | −2.05% | 18:30 |
+| Win rate | 54.0% | **64.1%** | +10.1% | 10:36 |
+| Avg trade ret | 1.70% | **2.35%** | +0.65% | 14:32 |
+| Trade count/股 | 150 | 100 | −50 | — |
+
+**结论**:生产口径 + 行业分散池下 pool 的优势**消失**(sharpe/return
+互有胜负;质量指标——胜率/单笔/回撤——一致且明显偏 all)。旧 P3-2 的
+"pool 显著优于 all"是 **old8 因子 + 无 preprocess + embargo=0 + 16 股
+半导体集中池**的产物(pool 训练≈直接在评估板块上学板块内动量),不可
+外推到生产。**training_universe=all 维持**(且它是 Pool B 全市场推荐的
+前提)。本轮无默认值变更 —— 计为"无增益轮" #1(连续 2 轮无增益则停)。
+
+---
+
 ## 评估池扩充(2026-06-13,基础设施)
 
 `config_eval48.yaml`:48 只评估池。原 16 只原样保留(与历史 A/B 表可比),
