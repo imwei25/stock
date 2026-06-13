@@ -28,7 +28,7 @@
 | P4-1 | preprocess off | on | **+0.060** | 10/16 | +3.1% | +2.0% ❌ | 🚫 跑不通 → **✅ 修复后出数:winsorize+zscore 增益方向成立,回撤略差;默认「winsorize+zscore+mcap 开」维持** |
 | P4-2/3 | industry 中性化 | market_cap 中性化 | **+0.197** | 12/16 | +8.5% | −5.4% ✓ | ⚠️/✅ → **✅ 增强复现:mcap 显著更优(干净数据上 industry 臂明显变差),默认保持** |
 | P4-4 | 正交化 off | on | **−0.169** | 3/14 | −6.7% | −1.5% ✓ | ❌ → **❌ 加重复现:默认关维持** |
-| sizing | fixed | vol_target | −0.056 | 5/16 | **−19.1%** | −1.6% ✓ | ⚠️ → **⚠️ 复现:vol_target 收益大减、回撤略优;默认维持,绝对收益优先可切 fixed** |
+| sizing | fixed | vol_target | −0.056 | 5/16 | **−19.1%** | −1.6% ✓ | ⚠️ → **✅ 已改判(2026-06-13 改进轮5):48 股生产口径复测 fixed 同时赢 return +5.4pp(32/48)与 sharpe +0.051(30/48),生产默认已切 fixed**(见 `docs/improvement_log_2026-06.md` 轮5) |
 | 组合 A/B | simple | — | — | — | — | — | simple 跑通(`reports/portfolio_ab/`);**mask_medium 两臂 fail loud:alpha_048 覆盖率 0%**(v2 重建面板暴露,v1 靠缓存命中跳过了计算;待排查,见下) |
 
 **已知问题(2026-06-13)**:portfolio_ab_mask_medium 在 v2 面板重建时

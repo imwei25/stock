@@ -23,7 +23,7 @@
 | `sell_verdicts` | `("sell","strong_sell")` | 触发 `should_exit` |
 | `refresh_verdicts` | `("strong_buy",)` | 持仓时触发 `should_reset_timer`(刷新 N 天计时);传 `()` 关闭 |
 
-**CLI 默认引擎 `multi_lot`**,`sizing.type` 默认 `vol_target`。切回老固定仓位:`sizing.type: fixed`,`sizing.fixed.size: 0.1`。切回单仓位:`engine: single`。
+**CLI 默认引擎 `multi_lot`**,`sizing.type` 默认 `fixed`(2026-06-13 改进轮5 翻转:48 股生产口径 fixed 同时赢 return +5.4pp 与 sharpe +0.051;vol_target 对高波动股缩仓,恰好低配策略最赚钱的名字。求更低回撤可切回 `vol_target`)。切回单仓位:`engine: single`。
 
 ## T+1 撮合约定
 

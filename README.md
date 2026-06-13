@@ -71,7 +71,7 @@
 |---|---|---|
 | 进出场判定 | `*_verdicts`(两策略各有) | `buy_verdicts` / `sell_verdicts` / `refresh_verdicts`(持仓刷新计时的判定集) |
 | 撮合引擎 | `backtest.engine` | `multi_lot`(默认,每信号开独立 lot)/ `single`(单仓位)。统一 T+1 次日 `open[t]` 成交 |
-| 仓位 sizing | `backtest.sizing.type` | `vol_target`(默认,按波动反比调仓,`reference_vol_annual`/`vol_window`/`min_size`/`max_size`/`fallback_to`)/ `fixed`(固定 `fixed.size`)|
+| 仓位 sizing | `backtest.sizing.type` | `fixed`(默认,固定 `fixed.size`;2026-06-13 A/B 翻转)/ `vol_target`(按波动反比调仓,降回撤用,`reference_vol_annual`/`vol_window`/`min_size`/`max_size`/`fallback_to`)|
 | 交易成本 | `backtest.costs` | `commission_rate` / `stamp_duty_rate` / `slippage_rate` |
 
 > 日报路径(`run`)只取每股最后一根 bar 的判定(`predict_latest`),不涉及进出场/仓位 —— 那部分仅回测生效。
@@ -171,7 +171,7 @@ strategy:
 - **综合评级回测**:前向重建历史每日判定,按评级分桶统计收益
 - **权益曲线**:模拟持有 N 日资金曲线,对比买入持有基准
 - **T+1 撮合**:信号在 `t-1` 收盘后生成,用 `open[t]`(集合竞价价)作买卖成本;B&H 基准锚定 `open[0]`
-- **仓位 sizing**:默认 `vol_target`(按个股波动反比调仓,降组合回撤);`sizing.type: fixed` 切回固定仓位
+- **仓位 sizing**:默认 `fixed`(固定每单仓位;2026-06-13 A/B:return/sharpe 双赢);`sizing.type: vol_target` 切按波动反比调仓(降回撤)
 
 ### Pool B — 全市场量化推荐池
 

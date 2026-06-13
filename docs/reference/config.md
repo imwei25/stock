@@ -38,7 +38,7 @@
 
 - `forward_days` / `equity_curve_holding_days` / `risk_free_rate` / `costs`
 - **`engine`**(`multi_lot` 默认 / `single`)
-- **`sizing`** — `type: fixed | vol_target`(默认 `vol_target`);`fixed.size` 是 vol_target 公式的 baseline 锚点。详见 [conventions.md](conventions.md) Sizing 段
+- **`sizing`** — `type: fixed | vol_target`(默认 `fixed`,2026-06-13 改进轮5 翻转;`vol_target` 降回撤用);`fixed.size` 是 vol_target 公式的 baseline 锚点。详见 [conventions.md](conventions.md) Sizing 段
 - **~~`position_size`~~** — deprecated alias of `sizing.fixed.size`(自动迁移 + DeprecationWarning)
 - **`max_concurrent_lots`**
 

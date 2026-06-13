@@ -119,10 +119,10 @@ backtest:
   #   multi_lot — 每次 buy 开独立的 position_size 小单,各自 N 天平仓
   #   single    — 同时只持一只票,sell 或 N 满才平仓
   engine: multi_lot
-  # sizing 默认 vol_target (波动大的票仓位小, 波动小的票仓位大),
-  # 想回到老的"每只票都 10% 仓"行为, 把 type 切回 fixed 即可。
+  # sizing 默认 fixed(2026-06-13 轮5 翻转,与 config.yaml 同步;后续改进轮
+  # 的评估基线即 fixed)。
   sizing:
-    type: vol_target            # fixed | vol_target
+    type: fixed                 # fixed | vol_target
     fixed:
       size: 0.1                 # fixed 模式下每单资本占比, 也是 vol_target 公式的锚点
     vol_target:
