@@ -16,8 +16,12 @@ venv/
 # Project-specific
 # AKShare 缓存(Parquet),每次跑会重建
 data/
-# 每日报告归档,体积会涨
-reports/
+# 每日报告归档,体积会涨。用 reports/* 而非 reports/ 以便对单个文件开例外
+# (父目录整体排除时无法重新包含子文件,是 .gitignore 的已知陷阱)。
+reports/*
+# 例外:selection.json 是生产策略的因子清单(config.yaml 的 factors_file
+# 依赖它),属配置输入而非报告产物,必须入库保证可复现。
+!reports/selection.json
 *.log
 
 # IDE / OS

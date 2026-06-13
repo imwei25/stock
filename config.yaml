@@ -142,7 +142,9 @@ strategy:
     # 要参与组合的因子(注册名见 stockpool.factors 内置列表)。
     # 加新因子: 在 factors/technical.py 写一个 Factor 子类 + @register("xxx"),
     # 然后把名字加到这个列表即可。
-    # 用 `factors analyze` + `pick-by-ic` 选出的因子(top-20, max-corr=0.6, min-ir=0.05)
+    # 用 `factors analyze`(v2 干净面板, ≤2024-05-20) + `pick-by-ic` 选出的因子
+    # (top-30, max-corr=0.6, min-ir=0.05;2026-06-13 改进轮6 从 top-20 扩到
+    #  top-30: sharpe +0.062 / 回撤 −0.55pp,Lasso 在更宽候选上自行稀疏)
     # 与 factors: [...] 二选一,factors_file 优先
     factors_file: reports/selection.json
 

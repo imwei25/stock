@@ -139,6 +139,45 @@ vol_target。无增益轮计数清零。
 
 ---
 
+## 轮 6(2026-06-13):refit_every 与因子数 — refit10 ❌ 打平 / **top30 ✅ 采纳**
+
+基线已是轮5 的 fixed sizing(sharpe 0.292 / return 19.54%)。两组单旋钮:
+
+**G1 refit_every 20→10**(`ab_eval48_refit10.yaml`):
+
+| 指标 | refit20(base) | refit10 | Δ |
+|---|---|---|---|
+| Sharpe | 0.292 | 0.288 | −0.003 |
+| Total return | 19.54% | 19.31% | −0.23% |
+
+完全打平(交易数都没动,refit 周期对 pooled 全市场月度缓存几乎无影响)。
+
+**G2 因子 top-20→top-30**(`ab_eval48_top30.yaml`,同口径 pick-by-ic 放宽,
+新增 alpha_018/027/006/072/036/077/032、mom_vol_interact_10、hl_range_20、
+corr_high_low_20):
+
+| 指标 | top20(base) | top30 | Δ | wins(20:30) |
+|---|---|---|---|---|
+| Sharpe | 0.292 | **0.353** | **+0.062** | 21:25 |
+| Sharpe(median) | 0.279 | **0.349** | **+0.070** | — |
+| Total return | 19.54% | **20.01%** | +0.47% | 24:22 |
+| Max drawdown | 17.28% | **16.72%** | −0.55% | 23:23 |
+| Avg trade ret | 2.26% | **2.52%** | +0.26% | 19:27 |
+
+**决策**:**采纳 top30 为生产默认因子清单**。sharpe(mean +0.062 / median
++0.070)、回撤、单笔三维度一致改善;新增 10 因子在 ≤2024-05-20 窗口选取
+(评估期 2024-05-21 起,无 in-sample 泄漏),Lasso 在更宽候选上自行稀疏,
+不是塞满 30 个。胜出计数偏弱(sharpe 25:21、return base 略赢 24:22),
+故标注为**边际增益**,机制上靠新增的量价交互/高低价区间因子补充了
+原 20 因子未覆盖的截面信息。
+
+`reports/selection.json` 已更新为 top30(旧 top20 备份
+`reports/selection_top20_v2.json`);`selection.json` 纳入版本控制
+(.gitignore 加例外,它是配置输入非报告产物)。**新生产基线:
+fixed + top30,sharpe 0.353 / return 20.01% / dd 16.72%。**
+
+---
+
 ## 评估池扩充(2026-06-13,基础设施)
 
 `config_eval48.yaml`:48 只评估池。原 16 只原样保留(与历史 A/B 表可比),
