@@ -12,6 +12,7 @@ use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 
 mod cs;
+mod util;
 
 /// Cross-sectional pct-rank per row.
 ///
