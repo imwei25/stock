@@ -33,6 +33,9 @@ fn rank_row_into(x: ArrayView1<f64>, mut out: ArrayViewMut1<f64>) {
     // Sort by value (NaN already filtered; partial_cmp is total here).
     valid.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("NaN already filtered"));
     // Average-rank tie handling. 1-based ranks.
+    // Exact equality (`==` on f64) matches pandas method="average" tie
+    // semantics — pandas also requires bit-identical values for ties.
+    // Epsilon-tolerant tie detection would DIVERGE from the oracle.
     let mut i = 0;
     while i < valid.len() {
         let mut j = i + 1;
