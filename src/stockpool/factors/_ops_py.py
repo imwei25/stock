@@ -91,8 +91,27 @@ def decay_linear(x: pd.DataFrame, d: int) -> pd.DataFrame:
 
 
 def correlation(x: pd.DataFrame, y: pd.DataFrame, d: int) -> pd.DataFrame:
-    """Per-column trailing-``d`` Pearson correlation."""
-    return x.rolling(d, min_periods=d).corr(y)
+    """Per-column trailing-``d`` Pearson correlation.
+
+    Cleanup of pandas ``Rolling.corr`` FP path:
+      * windows where ``std(x) < 1e-7`` or ``std(y) < 1e-7`` (effectively
+        constant input) → NaN, because correlation is mathematically
+        undefined for constant inputs;
+      * any ``±inf`` or ``|x|>1`` result (FP garbage from ``cov/tiny_denom``)
+        → NaN, since correlation is bounded on ``[-1, 1]``.
+
+    Without this cleanup, factors that compose correlation with rank-style
+    inputs (``alpha_044`` / ``alpha_050`` / ``alpha_088`` / ``corr_pv_20``
+    / ``alpha_026`` …) emit ``±inf`` and FP-noise values that propagate
+    through ``ts_max``/``rank``/``decay_linear`` into 36-87% NaN downstream
+    when computed on small (e.g. 16-stock) cross-sections.
+    """
+    raw = x.rolling(d, min_periods=d).corr(y)
+    sx = x.rolling(d, min_periods=d).std(ddof=0)
+    sy = y.rolling(d, min_periods=d).std(ddof=0)
+    constant = (sx < 1e-7) | (sy < 1e-7)
+    valid = np.isfinite(raw) & (raw.abs() <= 1.0) & ~constant
+    return raw.where(valid, other=np.nan)
 
 
 def rank(x: pd.DataFrame) -> pd.DataFrame:
