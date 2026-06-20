@@ -21,7 +21,6 @@ from typing import Mapping
 import numpy as np
 import pandas as pd
 
-from ._ops_py import _min_periods  # re-used by light rolling ops below
 from ._ops_py import (
     correlation,
     decay_linear,
@@ -61,6 +60,15 @@ __all__ = [
     "ts_sum",
     "vwap",
 ]
+
+
+def _min_periods(d: int) -> int:
+    """Relax min_periods to 60% of the window so that mask-induced NaN
+    runs don't kill a whole factor. ``max(1, ...)`` defends against d<2.
+
+    Duplicated from ``_ops_py.py`` to avoid a cross-module private import;
+    must stay in sync."""
+    return max(1, int(d * 0.6))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
