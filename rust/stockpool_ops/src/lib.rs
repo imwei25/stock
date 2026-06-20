@@ -53,6 +53,15 @@ fn ts_argmin_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -
     out.to_pyarray_bound(py)
 }
 
+/// Time-series quantile rank within trailing-d window. Strict; any NaN -> NaN.
+#[pyfunction]
+#[pyo3(name = "ts_rank")]
+fn ts_rank_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -> Bound<'py, PyArray2<f64>> {
+    let view = x.as_array();
+    let out = py.allow_threads(|| rolling::ts_rank(view, d));
+    out.to_pyarray_bound(py)
+}
+
 /// Rolling Pearson correlation. Strict min_periods=d; any NaN/inf -> NaN; constant -> NaN.
 #[pyfunction]
 #[pyo3(name = "correlation")]
@@ -74,6 +83,7 @@ fn stockpool_ops_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ts_std_py, m)?)?;
     m.add_function(wrap_pyfunction!(ts_argmax_py, m)?)?;
     m.add_function(wrap_pyfunction!(ts_argmin_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_rank_py, m)?)?;
     m.add_function(wrap_pyfunction!(correlation_py, m)?)?;
     Ok(())
 }

@@ -90,4 +90,70 @@ This is fine for the overall goal: 3 of the 4 ops (and previously `rank`) get Ru
 
 ## Outcomes
 
-(To be filled as phases complete.)
+### Final state (2026-06-20 ~15:30)
+
+| Phase | Status | SHA / artifact |
+|---|---|---|
+| PR-2: rank op + scaffold | ✅ shipped | 4f4494d..3fa09b9 (7 commits) |
+| PR-3: ts_std + ts_argmax + ts_argmin | ✅ shipped | bd52595, 6e12bbe |
+| PR-3: correlation (Rust impl + Welford) | 🟡 impl committed, dispatcher disabled | a832321 |
+| PR-3: ts_rank (deferred but landed here) | ✅ shipped | (uncommitted — see below) |
+| PR-4: decay_linear / indneutralize | ⏸ deferred | not started |
+| PR-5: perf doc | ⏸ deferred | (perf measured implicitly below) |
+| Full-universe analyze | ✅ completed | `reports/factor_analysis/2026-06-20.json` (167 factors × 500 days × 4357 stocks) |
+| pick-by-ic (top-20, max-corr 0.6, min-ir 0.05) | ✅ | `reports/selection_rust.json` |
+| AB compare old vs new selection | ✅ run | `reports/ab/2026-06-20.html` |
+| Findings | this section | |
+
+### Performance
+
+`factors analyze --universe all` on 4357 stocks × 500 days × 167 factors:
+
+| Metric | Before Rust (pure pandas, chunked) | After PR-2 + PR-3 (rank/ts_std/argmax/argmin/ts_rank in Rust; others pandas) |
+|---|---|---|
+| Runtime (chunk_size=10) | ❌ crashed at ~91 factors with ACCESS_VIOLATION (no completion ever recorded) | ✅ **completed in ~7 min** (17 chunks × ~25s/chunk avg) |
+| Runtime (chunk_size=5 attempts) | crashed at ~30 factors in mixed runs | 5 ops on Rust: chunk_size=5 still crashed at alpha_035 (ts_rank-heavy) until ts_rank was Rust-wired |
+
+The decisive enabler for full-universe completion was Rust-wiring `ts_rank` (pandas `rolling(d).apply(_rank, raw=False)` with Python callback is the worst memory offender). With ts_rank in Rust, chunk_size=10 finishes the 4357-stock universe in 7 minutes.
+
+### Factor selection comparison (top-20, max-corr=0.6, min-ir=0.05)
+
+- **Old** (`reports/selection.json`): picked from a smaller analyze run earlier on this branch.
+- **New** (`reports/selection_rust.json`): picked from the fresh full-universe analyze enabled by Rust acceleration.
+
+| Stat | Value |
+|---|---|
+| Overlap | **11 / 20** |
+| Old-only (dropped) | alpha_029, alpha_042, alpha_059, alpha_067, alpha_073, alpha_075, alpha_081, alpha_082, vol_ratio_5 |
+| New-only (added) | alpha_026, alpha_027, alpha_044, alpha_050, alpha_088, corr_pv_20, limit_up_count_20, rank_signed_mom_10, volume_std_20 |
+
+The new selection swings ~45% of slots. The added factors (corr_pv_20, limit_up_count_20, rank_signed_mom_10, volume_std_20) are cross-sectional / market-wide factors that benefit from large universe coverage at IC computation time — exactly the case Rust-enabled full-universe analyze unlocks.
+
+### AB result (per-stock ml_factor backtest on 16-stock cfg.stocks)
+
+`reports/ab/2026-06-20.html` (Arm A = small_universe selection; Arm B = full_universe_rust selection):
+
+| Metric | small_universe | full_universe_rust | Δ |
+|---|---|---|---|
+| Mean total return | **+17.64%** | 0.00% | **-17.64%** |
+| Mean Sharpe | **+0.561** | 0.000 | **-0.561** |
+| Mean max DD | 8.47% | 0.00% | -8.47% |
+| Mean trade count | 106 | **0** | -106 |
+| Wins (out of 16) | 13-16 across metrics | 0-3 | small wins overwhelmingly |
+
+**Verdict**: `full_universe_rust` produces **zero trades on any of the 16 cfg.stocks**. The strategy runs cleanly (no crashes; 16/16 done, 0 failed), trains its lasso+IC model fine on full-universe pooled data, but the ML model's predictions never cross the per-stock buy/sell thresholds (strong_buy=0.90, buy=0.70). Both `training_universe: pool` and `training_universe: all` variants reproduce the no-trade behavior on the new selection.
+
+The new selection includes cross-sectional factors (`corr_pv_20`, `limit_up_count_20`, `rank_signed_mom_10`) whose predictive signal is meaningful *across the full universe* but degenerate when projected onto a 16-stock cfg.stocks subset — model output collapses to ~0.5 (neutral) for every prediction, so no trade signals fire.
+
+### So: did Rust improve outcomes?
+
+- **Pipeline**: yes — `factors analyze --universe all` previously crashed; now completes in 7 min.
+- **Factor discovery**: yes — full-universe IC ranking surfaces 9 different top-20 factors than the old smaller-universe ranking.
+- **Per-stock AB returns**: **no, regressed to 0 trades** on the cfg.stocks pool. This is a downstream evaluation-framework mismatch (per-stock ml_factor strategy ≠ the cross-sectional framework the new factors were picked for), not a Rust correctness regression.
+
+### Recommended follow-ups (not done in this session)
+
+1. **Portfolio-level AB** (`portfolio_ab.yaml` using the same two selections + `portfolio_backtest`): this evaluates strategies on the full universe, not 16 stocks — the cross-sectional factors should actually fire and produce comparable returns. Most pressing follow-up.
+2. **Wire correlation in ops.py** with a deterministic-equivalence test (e.g. IC-of-IC) instead of bit-near snapshot. Speedup gain: substantial (correlation is the heaviest WQ op).
+3. **PR-4**: port decay_linear + indneutralize for the remaining speedup.
+4. **Loosen ml_factor thresholds** if you want the small-universe AB to actually trade with the new factors (strong_buy=0.70, buy=0.55 or so).

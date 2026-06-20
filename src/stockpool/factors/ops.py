@@ -27,7 +27,6 @@ from ._ops_py import (
     correlation,
     decay_linear,
     indneutralize,
-    ts_rank,
 )
 from . import _ops_py as _py_ops
 
@@ -91,6 +90,17 @@ def ts_argmin(x, d):
         out_arr = _rust.ts_argmin(arr, int(d))
         return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
     return _py_ops.ts_argmin(x, d)
+
+
+def ts_rank(x, d):
+    """Time-series quantile rank within trailing-d window, ∈ (0, 1]."""
+    if _USE_RUST:
+        import numpy as _np
+        import pandas as _pd
+        arr = _np.ascontiguousarray(x.to_numpy(), dtype=_np.float64)
+        out_arr = _rust.ts_rank(arr, int(d))
+        return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
+    return _py_ops.ts_rank(x, d)
 
 
 __all__ = [

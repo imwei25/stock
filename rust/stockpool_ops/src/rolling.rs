@@ -103,6 +103,19 @@ pub fn ts_argmin(x: ArrayView2<f64>, d: usize) -> Array2<f64> {
     })
 }
 
+/// Time-series quantile rank within the trailing-d window, ∈ (0, 1].
+/// ANY NaN in window -> NaN. rank = (window <= last).sum() / d.
+pub fn ts_rank(x: ArrayView2<f64>, d: usize) -> Array2<f64> {
+    rolling_apply_col(x, d, d, true, |w: &[f64]| -> f64 {
+        if w.iter().any(|v| v.is_nan()) {
+            return f64::NAN;
+        }
+        let last = w[w.len() - 1];
+        let count = w.iter().filter(|&&v| v <= last).count() as f64;
+        count / w.len() as f64
+    })
+}
+
 /// Rolling Pearson correlation between paired columns of x and y.
 /// Pandas `x.rolling(d, min_periods=d).corr(y)` equivalent:
 ///   * strict min_periods=d
