@@ -723,9 +723,30 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
     set_sector_map(sector_map)
 
     # Decouple training pool (= full pool_data) from portfolio universe
-    # (= optional explicit subset). When universe_codes is None, both are
-    # the same (legacy behavior). See PortfolioBacktestConfig.universe_codes.
+    # (= optional explicit subset). Priority:
+    #   1. base_cfg.portfolio_backtest.universe_codes (explicit list)
+    #   2. ab_cfg.use_ab_pool=True -> load codes from data/ab_pool.parquet
+    #   3. None -> portfolio universe = training pool (legacy behavior)
+    # build_effective_cfg also injects ab_pool into per-arm cfgs, but the
+    # CLI separately needs the codes here to filter portfolio_pool_data
+    # (which is shared across arms) — otherwise score panel computation
+    # falls back to the full 4358-stock pool and trips the
+    # precompute_scores_from_legacy C-level segfault.
     portfolio_codes = base_cfg.portfolio_backtest.universe_codes
+    if not portfolio_codes and ab_cfg.use_ab_pool:
+        from stockpool.ab_pool import load_ab_pool
+        try:
+            pool_df = load_ab_pool(base_cfg.ab_pool.cache_path)
+            portfolio_codes = [str(c).zfill(6) for c in pool_df["code"]]
+            log.info("Loaded ab_pool: %d codes from %s",
+                     len(portfolio_codes), base_cfg.ab_pool.cache_path)
+        except FileNotFoundError:
+            log.error(
+                "use_ab_pool=true but %s not found. Run "
+                "`python -m stockpool ab-pool build` first.",
+                base_cfg.ab_pool.cache_path,
+            )
+            return 2
     if portfolio_codes:
         portfolio_pool_data = {c: pool_data[c] for c in portfolio_codes if c in pool_data}
         missing = [c for c in portfolio_codes if c not in pool_data]

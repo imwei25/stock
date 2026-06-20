@@ -44,13 +44,17 @@ def _mk_daily(dates, base=10.0):
 
 
 def test_happy_path_builds_panel():
+    # n_workers=1 forces serial: avoids needing the lambda + _StubLegacy
+    # instance to round-trip through pickle (multiprocessing.Pool path
+    # requires picklable closures; tests use local lambdas and
+    # ``.calls`` instance state that wouldn't survive worker init).
     dates = ["2024-01-02", "2024-01-03", "2024-01-04"]
     panel_data = {
         "A": _mk_daily(dates),
         "B": _mk_daily(dates),
     }
     legacy = _StubLegacy(score_fn=lambda d, df: float(d.day))
-    panel = precompute_scores_from_legacy(legacy, panel_data)
+    panel = precompute_scores_from_legacy(legacy, panel_data, n_workers=1)
     assert list(panel.columns) == ["A", "B"]
     assert len(panel) == 3
     assert panel.loc[pd.Timestamp("2024-01-03"), "A"] == 3.0
@@ -70,7 +74,7 @@ def test_failure_isolated_per_stock(caplog):
     # B will explode, A succeeds
     panel_data = {"A": _mk_daily(dates), "B": _mk_daily(dates, base=99.0)}
     with caplog.at_level(logging.WARNING, logger="stockpool"):
-        panel = precompute_scores_from_legacy(_Mixed(), panel_data)
+        panel = precompute_scores_from_legacy(_Mixed(), panel_data, n_workers=1)
     assert list(panel.columns) == ["A"]
     assert any("generate_signals failed" in r.message for r in caplog.records)
 
@@ -91,10 +95,12 @@ def test_missing_score_field_skipped(caplog):
 
 def test_passes_full_daily_history_to_legacy():
     """Helper itself doesn't truncate; look-ahead lives in legacy.generate_signals."""
+    # n_workers=1: serial mode so ``legacy.calls`` instance state mutates
+    # in this process (parallel pool would pickle a copy per worker).
     dates = ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]
     legacy = _StubLegacy(score_fn=lambda d, df: 1.0)
     panel_data = {"A": _mk_daily(dates)}
-    precompute_scores_from_legacy(legacy, panel_data)
+    precompute_scores_from_legacy(legacy, panel_data, n_workers=1)
     # Helper called legacy once with the whole daily frame (legacy is
     # responsible for walk-forward).
     assert legacy.calls == [4]

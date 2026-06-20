@@ -1,0 +1,62 @@
+# Portfolio-level AB: compare two factor selections in their intended
+# cross-sectional context (top-K equal-weight on ab_pool ~237 stocks).
+#
+# Arms differ only in `factors_file` — strategy hyperparams + portfolio
+# settings (top_k=20, rebalance weekly, max 5 per industry) inherited
+# from config.yaml.base.
+#
+# use_ab_pool=true injects ab_pool codes into each arm's
+# portfolio_backtest.universe_codes — keeps training universe at full
+# 4358 (ml_factor uses cross-sectional richness), restricts portfolio
+# selection / backtest to the curated ~237 ab_pool subset (avoids the
+# precompute_scores_from_legacy segfault on full universe).
+#
+# Run: `.venv/Scripts/python.exe -m stockpool portfolio-ab --config portfolio_ab_rust_selection.yaml`
+
+base_config: config.yaml
+use_ab_pool: true
+
+arms:
+  small_universe_sel:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+
+  full_universe_rust_sel:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection_rust.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
