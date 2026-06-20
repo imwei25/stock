@@ -37,3 +37,8 @@ Thumbs.db
 # Claude Code 工作区
 .claude/
 .playwright-mcp/
+
+# Rust/PyO3 build artefacts
+rust/stockpool_ops/target/
+rust/stockpool_ops/*.so
+rust/stockpool_ops/*.pyd

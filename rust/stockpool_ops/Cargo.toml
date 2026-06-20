@@ -1,0 +1,19 @@
+[package]
+name = "stockpool_ops"
+version = "0.1.0"
+edition = "2021"
+description = "PyO3 Rust acceleration for stockpool factor hot ops"
+
+[lib]
+crate-type = ["cdylib"]
+name = "stockpool_ops_rs"
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+ndarray = { version = "0.16", features = ["rayon"] }
+rayon = "1.10"
+
+[profile.release]
+lto = true
+codegen-units = 1

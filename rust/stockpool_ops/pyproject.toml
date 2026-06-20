@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "stockpool-ops-rs"
+version = "0.1.0"
+description = "PyO3 Rust acceleration for stockpool factor hot ops"
+requires-python = ">=3.10"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "stockpool_ops_rs"
