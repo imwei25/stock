@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from stockpool.factors.registry import make_factor
-from stockpool.ml.dataset import compute_factor_panel, forward_return_panel
+from stockpool.ml.dataset import forward_return_panel
 
 
 def _scrub_float(v):
@@ -265,16 +265,32 @@ def analyze_factors(
         raise ValueError("factor_names must be non-empty")
 
     # Resolve base names (e.g. "momentum", "boll_position") to canonical names
-    # ("momentum_20", "boll_position_20") so downstream lookups against the
-    # compute_factor_panel output align. Pre-resolved names round-trip unchanged.
+    # ("momentum_20", "boll_position_20"). Pre-resolved names round-trip unchanged.
     factor_names = [make_factor(n).name for n in factor_names]
 
-    fp = compute_factor_panel(panel, factor_names)
     fwd = forward_return_panel(panel["close"], horizon)
 
+    # Stream factor compute -> IC -> discard the T×N factor panel. The full
+    # accumulated dict in compute_factor_panel costs ~17 MB * len(factor_names)
+    # at 4357 stocks * 500 days; at 167 factors that is ~3 GB of held panels,
+    # which can OOM C extensions even when raw RAM looks fine (ACCESS_VIOLATION
+    # on Windows). daily_ic alone is a T-length Series per factor (~4 KB).
     daily_ic: dict[str, pd.Series] = {}
-    for name in factor_names:
-        daily_ic[name] = compute_daily_ic(fp[name], fwd, method=method)
+    try:
+        from tqdm import tqdm
+        factor_iter = tqdm(
+            factor_names, desc="analyze_factors",
+            unit="factor", mininterval=1.0,
+        )
+    except ImportError:
+        factor_iter = factor_names
+    for name in factor_iter:
+        if hasattr(factor_iter, "set_postfix_str"):
+            factor_iter.set_postfix_str(name)
+        f = make_factor(name)
+        fp_one = f.compute(panel)
+        daily_ic[name] = compute_daily_ic(fp_one, fwd, method=method)
+        del fp_one
 
     mean_ic = pd.Series(
         {n: daily_ic[n].mean(skipna=True) for n in factor_names}, name="mean_ic",
