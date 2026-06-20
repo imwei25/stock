@@ -11,6 +11,7 @@ docs/superpowers/specs/2026-06-20-rust-ops-acceleration-design.md).
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -41,13 +42,15 @@ def _load_panel() -> dict[str, pd.DataFrame]:
 
 
 @pytest.fixture(scope="module")
-def panel() -> dict[str, pd.DataFrame]:
+def panel() -> Iterator[dict[str, pd.DataFrame]]:
     if not PANEL_PATH.exists():
         pytest.skip(f"{PANEL_PATH} missing — run scripts/gen_ops_snapshot.py")
     # indneutralize-using factors need sector_map; load it once.
     sector_map = load_or_build_industry_map(ROOT / "data", source="auto")
     set_sector_map(sector_map or {})
-    return _load_panel()
+    yield _load_panel()
+    # Reset global sector_map so this test doesn't pollute later tests.
+    set_sector_map({})
 
 
 @pytest.fixture(scope="module")
