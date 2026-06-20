@@ -71,6 +71,7 @@ def panel_to_long(panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Stack OHLCV wide frames into one long DataFrame for parquet storage."""
     parts = []
     for field, wide in panel.items():
+        # TODO(pandas>=2.1): switch to future_stack=True once we pin pandas minor.
         long = wide.stack(dropna=False).rename(field).reset_index()
         long.columns = ["date", "code", field]
         long = long.set_index(["date", "code"])
@@ -86,6 +87,12 @@ def main() -> int:
 
     sector_map = load_or_build_industry_map(CACHE_DIR, source="auto")
     set_sector_map(sector_map or {})
+    if not sector_map:
+        log.warning(
+            "sector_map is EMPTY -- indneutralize-based alphas will demean "
+            "globally instead of per-sector. The snapshot will encode this "
+            "fallback semantics, so REGENERATE later when baostock is up."
+        )
     log.info("sector_map size=%d", len(sector_map or {}))
 
     panel = build_panel_from_cache(codes, history_days=N_DAYS, cache_dir=CACHE_DIR)
@@ -104,6 +111,7 @@ def main() -> int:
     for name in tqdm(factor_names, desc="factors", unit="factor"):
         f = make_factor(name)
         wide = f.compute(panel)
+        # TODO(pandas>=2.1): switch to future_stack=True once we pin pandas minor.
         long = wide.stack(dropna=False).rename("value").reset_index()
         long.columns = ["date", "code", "value"]
         long["factor"] = name
