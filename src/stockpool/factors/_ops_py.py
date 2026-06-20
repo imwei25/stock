@@ -15,6 +15,17 @@ from typing import Mapping
 import numpy as np
 import pandas as pd
 
+__all__ = [
+    "correlation",
+    "decay_linear",
+    "indneutralize",
+    "rank",
+    "ts_argmax",
+    "ts_argmin",
+    "ts_rank",
+    "ts_std",
+]
+
 
 def _min_periods(d: int) -> int:
     """Relax min_periods to 60% of the window so that mask-induced NaN
@@ -74,6 +85,8 @@ def decay_linear(x: pd.DataFrame, d: int) -> pd.DataFrame:
         v = a[valid]
         return float(np.dot(v, w) / w.sum())
 
+    # raw=True: 直接收 ndarray,绕过 pandas 在大宽表上构造 Series 时触发的
+    # closure-cell 路径 bug (TypeError: 'cell' object is not callable)。
     return x.rolling(d, min_periods=_min_periods(d)).apply(_wmean, raw=True)
 
 
