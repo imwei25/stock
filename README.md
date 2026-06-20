@@ -7,19 +7,35 @@
 ## 快速开始
 
 ```bash
-# 1. 安装(需要 Python 3.10+)
-python -m venv .venv
-.venv/Scripts/python -m pip install -e ".[dev]"
+# 一键装好整套环境(Python venv + 项目依赖 + Rust 加速 + maturin)
+# 跨平台:Windows (Git Bash) / macOS / Linux,idempotent
+bash scripts/setup_env.sh
 
-# 2. 编辑股池(可选)
-notepad config.yaml
+# 不想装 Rust?(因子 ops 走 pandas fallback,~5-10× 慢但可用)
+bash scripts/setup_env.sh --skip-rust
 
-# 3. 跑一次
+# 编辑股池(可选)
+notepad config.yaml          # macOS/Linux: $EDITOR config.yaml
+
+# 跑一次(Windows 路径示例;macOS/Linux 用 .venv/bin/python)
 .venv/Scripts/python -m stockpool run
 
-# 4. 看报告
-start reports/latest.html
+# 看报告
+start reports/latest.html    # macOS: open;Linux: xdg-open
 ```
+
+`setup_env.sh` 干的事(手动安装时参考):
+
+| 组件 | 必需 | 怎么装 |
+|---|---|---|
+| Python 3.10+ | 是 | <https://www.python.org/downloads/> |
+| `.venv` + stockpool + dev deps | 是 | `python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"` |
+| Rust stable + cargo | 推荐 | <https://rustup.rs/>(脚本走 winget on Windows / `sh.rustup.rs` on \*nix) |
+| MSVC Build Tools (Windows) | Rust 才需要 | VS 2022 Community + "Desktop development with C++" workload |
+| maturin | Rust 才需要 | `.venv/Scripts/pip install maturin` |
+| `rust/stockpool_ops` crate | Rust 才需要 | `maturin develop --release --manifest-path rust/stockpool_ops/Cargo.toml`(PR-2 起存在) |
+
+无 Rust 时所有 hot factor op 自动走 `_ops_py.py` 的 pandas oracle(`STOCKPOOL_USE_PYTHON_OPS=1` 环境变量可在 Rust 装好时强制走 pandas,用于 diff 比对)。
 
 ## 常用命令
 
