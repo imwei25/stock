@@ -12,6 +12,7 @@ use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 
 mod cs;
+mod rolling;
 mod util;
 
 /// Cross-sectional pct-rank per row.
@@ -25,8 +26,38 @@ fn rank<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>) -> Bound<'py, PyArr
     out.to_pyarray_bound(py)
 }
 
+/// Rolling population stddev (ddof=0). NaN-skip; min_periods = max(1, int(d*0.6)).
+#[pyfunction]
+#[pyo3(name = "ts_std")]
+fn ts_std_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -> Bound<'py, PyArray2<f64>> {
+    let view = x.as_array();
+    let out = py.allow_threads(|| rolling::ts_std(view, d));
+    out.to_pyarray_bound(py)
+}
+
+/// Position of max in trailing-d window (0=today, d-1=oldest). Any NaN -> NaN.
+#[pyfunction]
+#[pyo3(name = "ts_argmax")]
+fn ts_argmax_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -> Bound<'py, PyArray2<f64>> {
+    let view = x.as_array();
+    let out = py.allow_threads(|| rolling::ts_argmax(view, d));
+    out.to_pyarray_bound(py)
+}
+
+/// Position of min in trailing-d window (0=today, d-1=oldest). Any NaN -> NaN.
+#[pyfunction]
+#[pyo3(name = "ts_argmin")]
+fn ts_argmin_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -> Bound<'py, PyArray2<f64>> {
+    let view = x.as_array();
+    let out = py.allow_threads(|| rolling::ts_argmin(view, d));
+    out.to_pyarray_bound(py)
+}
+
 #[pymodule]
 fn stockpool_ops_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rank, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_std_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_argmax_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_argmin_py, m)?)?;
     Ok(())
 }

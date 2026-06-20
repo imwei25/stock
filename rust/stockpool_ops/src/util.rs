@@ -15,14 +15,20 @@ pub fn min_periods(d: usize) -> usize {
     v.max(1)
 }
 
-/// Apply `f` to every trailing-d window in every column. Output[t, j]
-/// is set to `f(window)` only when `window.len() == d` AND
-/// `n_non_nan(window) >= min_periods`; otherwise NaN (matching pandas
-/// rolling.apply with min_periods).
+/// Apply `f` to every trailing-d window in every column.
+///
+/// For each row `t`:
+///   - If `strict_d` is true: only process when `t + 1 >= d` (full window required),
+///     matching `min_periods=d` pandas semantics (used by ts_argmax/ts_argmin/correlation).
+///   - If `strict_d` is false: process from t=0 with window = col[0..=t] when t+1 < d,
+///     or col[t+1-d..=t] when t+1 >= d. This matches pandas rolling with `min_periods < d`.
+///
+/// In both cases, `n_non_nan(window) >= mp` must hold; otherwise output is NaN.
 pub fn rolling_apply_col<F>(
     x: ArrayView2<f64>,
     d: usize,
     mp: usize,
+    strict_d: bool,
     f: F,
 ) -> Array2<f64>
 where
@@ -36,12 +42,18 @@ where
             // Make the column contiguous so windows are zero-copy slices.
             let col: Vec<f64> = in_col.iter().copied().collect();
             for t in 0..nrows {
-                if t + 1 < d {
-                    continue;
-                }
-                let start = t + 1 - d;
+                let start = if t + 1 < d {
+                    if strict_d {
+                        // Not enough rows yet for a full window.
+                        continue;
+                    }
+                    0
+                } else {
+                    t + 1 - d
+                };
                 let window = &col[start..=t];
-                let n_valid = window.iter().filter(|v| !v.is_nan()).count();
+                // Count finite values (pandas treats inf as NaN in rolling stats).
+                let n_valid = window.iter().filter(|v| v.is_finite()).count();
                 if n_valid >= mp {
                     out_col[t] = f(window);
                 }
@@ -79,15 +91,15 @@ where
                 let start = t + 1 - d;
                 let wx = &xc[start..=t];
                 let wy = &yc[start..=t];
-                // Pandas Rolling.corr treats NaN strictly: any NaN at any
-                // window position (in x OR y) zeroes the pairwise-valid
-                // count locally. Caller's f must handle NaN itself; we
+                // Pandas Rolling.corr treats NaN (and inf) strictly: any
+                // non-finite value at any position (in x OR y) counts as
+                // missing. Caller's f must handle non-finite itself; we
                 // only enforce min_periods on positions where BOTH are
-                // non-NaN, matching pandas.
+                // finite, matching pandas.
                 let n_valid = wx
                     .iter()
                     .zip(wy.iter())
-                    .filter(|(a, b)| !a.is_nan() && !b.is_nan())
+                    .filter(|(a, b)| a.is_finite() && b.is_finite())
                     .count();
                 if n_valid >= mp {
                     out_col[t] = f(wx, wy);

@@ -27,10 +27,7 @@ from ._ops_py import (
     correlation,
     decay_linear,
     indneutralize,
-    ts_argmax,
-    ts_argmin,
     ts_rank,
-    ts_std,
 )
 from . import _ops_py as _py_ops
 
@@ -61,6 +58,40 @@ def rank(x):
         out_arr = _rust.rank(arr)
         return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
     return _py_ops.rank(x)
+
+
+def ts_std(x, d):
+    """Rolling population stddev (ddof=0). NaN-skip."""
+    if _USE_RUST:
+        import numpy as _np
+        import pandas as _pd
+        arr = _np.ascontiguousarray(x.to_numpy(), dtype=_np.float64)
+        out_arr = _rust.ts_std(arr, int(d))
+        return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
+    return _py_ops.ts_std(x, d)
+
+
+def ts_argmax(x, d):
+    """Position of max in trailing-d window (0=today, d-1=oldest)."""
+    if _USE_RUST:
+        import numpy as _np
+        import pandas as _pd
+        arr = _np.ascontiguousarray(x.to_numpy(), dtype=_np.float64)
+        out_arr = _rust.ts_argmax(arr, int(d))
+        return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
+    return _py_ops.ts_argmax(x, d)
+
+
+def ts_argmin(x, d):
+    """Position of min in trailing-d window (0=today, d-1=oldest)."""
+    if _USE_RUST:
+        import numpy as _np
+        import pandas as _pd
+        arr = _np.ascontiguousarray(x.to_numpy(), dtype=_np.float64)
+        out_arr = _rust.ts_argmin(arr, int(d))
+        return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
+    return _py_ops.ts_argmin(x, d)
+
 
 __all__ = [
     # hot ops (delegated to _ops_py)

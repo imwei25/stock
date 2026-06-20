@@ -97,3 +97,74 @@ class TestRank:
         rng = np.random.default_rng(4)
         df = _frame(rng.standard_normal((10, ncols)))
         _assert_equiv(ops.rank(df), _ops_py.rank(df))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ts_std
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTsStd:
+    @pytest.mark.parametrize("d", [2, 5, 20, 60])
+    def test_random_no_nan(self, d):
+        rng = np.random.default_rng(100 + d)
+        df = _frame(rng.standard_normal((100, 8)))
+        _assert_equiv(ops.ts_std(df, d), _ops_py.ts_std(df, d))
+
+    @pytest.mark.parametrize("d", [5, 20])
+    def test_scattered_nan(self, d):
+        rng = np.random.default_rng(200 + d)
+        x = rng.standard_normal((80, 8))
+        mask = rng.random(x.shape) < 0.05
+        x[mask] = np.nan
+        df = _frame(x)
+        _assert_equiv(ops.ts_std(df, d), _ops_py.ts_std(df, d))
+
+    def test_full_nan_column(self):
+        rng = np.random.default_rng(300)
+        x = rng.standard_normal((60, 5))
+        x[:, 2] = np.nan
+        df = _frame(x)
+        _assert_equiv(ops.ts_std(df, 10), _ops_py.ts_std(df, 10))
+
+    def test_nan_burst(self):
+        rng = np.random.default_rng(400)
+        x = rng.standard_normal((60, 5))
+        x[10:18, 1] = np.nan
+        df = _frame(x)
+        _assert_equiv(ops.ts_std(df, 10), _ops_py.ts_std(df, 10))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ts_argmax / ts_argmin
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTsArgmaxArgmin:
+    @pytest.mark.parametrize("d", [3, 5, 10, 20])
+    def test_random_no_nan(self, d):
+        rng = np.random.default_rng(500 + d)
+        df = _frame(rng.standard_normal((60, 8)))
+        _assert_equiv(ops.ts_argmax(df, d), _ops_py.ts_argmax(df, d))
+        _assert_equiv(ops.ts_argmin(df, d), _ops_py.ts_argmin(df, d))
+
+    def test_any_nan_in_window_yields_nan(self):
+        rng = np.random.default_rng(600)
+        x = rng.standard_normal((40, 4))
+        x[10, 0] = np.nan
+        df = _frame(x)
+        rs = ops.ts_argmax(df, 5)
+        py = _ops_py.ts_argmax(df, 5)
+        _assert_equiv(rs, py)
+        # Spot check: positions t=10, 11, 12, 13, 14 should ALL be NaN for col 0
+        # (since their windows include the NaN at t=10)
+        for t in range(10, 15):
+            assert np.isnan(rs.iloc[t, 0])
+
+    def test_ties_first_occurrence(self):
+        # All-equal window: numpy argmax returns 0 (first); our op returns d-1.
+        x = np.array([[5.0, 5.0, 5.0, 5.0]]).T  # shape (4, 1)
+        df = _frame(x)
+        out = ops.ts_argmax(df, 3)
+        # Window [t-2, t-1, t] all 5.0. argmax = 0 (first), pos = d-1-0 = 2.
+        assert out.iloc[2, 0] == 2.0
+        assert out.iloc[3, 0] == 2.0
+        _assert_equiv(out, _ops_py.ts_argmax(df, 3))
