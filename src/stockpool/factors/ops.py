@@ -21,16 +21,46 @@ from typing import Mapping
 import numpy as np
 import pandas as pd
 
+import os as _os
+
 from ._ops_py import (
     correlation,
     decay_linear,
     indneutralize,
-    rank,
     ts_argmax,
     ts_argmin,
     ts_rank,
     ts_std,
 )
+from . import _ops_py as _py_ops
+
+# Rust dispatch hook. PR-2 ports `rank` only; later PRs will add more
+# wrappers below. STOCKPOOL_USE_PYTHON_OPS=1 forces the pandas oracle
+# regardless of whether the Rust module is importable.
+_USE_RUST = False
+_rust = None
+if _os.environ.get("STOCKPOOL_USE_PYTHON_OPS") != "1":
+    try:
+        import stockpool_ops_rs as _rust  # type: ignore
+        _USE_RUST = True
+    except ImportError:
+        _USE_RUST = False
+
+
+def rank(x):
+    """Cross-sectional pct-rank per row.
+
+    Dispatches to the Rust ``stockpool_ops_rs.rank`` when available, else
+    falls back to the pandas oracle (``_ops_py.rank``).
+    """
+    if _USE_RUST:
+        import numpy as _np
+        import pandas as _pd
+        # Rust path: enforce float64 C-contiguous numpy view; rewrap to DataFrame.
+        arr = _np.ascontiguousarray(x.to_numpy(), dtype=_np.float64)
+        out_arr = _rust.rank(arr)
+        return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
+    return _py_ops.rank(x)
 
 __all__ = [
     # hot ops (delegated to _ops_py)
