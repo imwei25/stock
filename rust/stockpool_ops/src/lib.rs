@@ -53,11 +53,27 @@ fn ts_argmin_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -
     out.to_pyarray_bound(py)
 }
 
+/// Rolling Pearson correlation. Strict min_periods=d; any NaN/inf -> NaN; constant -> NaN.
+#[pyfunction]
+#[pyo3(name = "correlation")]
+fn correlation_py<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<'py, f64>,
+    y: PyReadonlyArray2<'py, f64>,
+    d: usize,
+) -> Bound<'py, PyArray2<f64>> {
+    let x_view = x.as_array();
+    let y_view = y.as_array();
+    let out = py.allow_threads(|| rolling::correlation(x_view, y_view, d));
+    out.to_pyarray_bound(py)
+}
+
 #[pymodule]
 fn stockpool_ops_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rank, m)?)?;
     m.add_function(wrap_pyfunction!(ts_std_py, m)?)?;
     m.add_function(wrap_pyfunction!(ts_argmax_py, m)?)?;
     m.add_function(wrap_pyfunction!(ts_argmin_py, m)?)?;
+    m.add_function(wrap_pyfunction!(correlation_py, m)?)?;
     Ok(())
 }

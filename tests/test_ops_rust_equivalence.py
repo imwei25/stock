@@ -168,3 +168,17 @@ class TestTsArgmaxArgmin:
         assert out.iloc[2, 0] == 2.0
         assert out.iloc[3, 0] == 2.0
         _assert_equiv(out, _ops_py.ts_argmax(df, 3))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# correlation — NOT yet wired through Rust dispatcher (see execution log
+# 2026-06-20-rust-ops-execution-log.md "PR-3 correlation deferral"). The
+# Rust impl exists in rust/stockpool_ops/src/rolling.rs (Welford form) but
+# the ops.py wrapper still goes straight to _ops_py.correlation. Reason:
+# pandas Rolling.corr is FP-unstable at near-zero-variance windows, which
+# cascades through downstream rank/ts_sum into O(1) factor-output
+# divergence for ~20 WQ alphas. Achieving bit-near equivalence requires
+# replicating pandas' exact Welford / NaN-propagation FP path, which is
+# scoped for a follow-up. Until then, correlation stays on pandas in the
+# dispatcher, so no Layer A test belongs here.
+# ─────────────────────────────────────────────────────────────────────────────

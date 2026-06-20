@@ -2,7 +2,7 @@
 
 use ndarray::{Array2, ArrayView2, Axis, Zip};
 
-use crate::util::{min_periods, rolling_apply_col};
+use crate::util::{min_periods, rolling_apply_col, rolling_apply_col_pair};
 
 /// Rolling population stddev (ddof=0), pandas-equivalent
 /// `x.rolling(d, min_periods=_min_periods(d)).std(ddof=0)`. NaN/inf-skip.
@@ -100,5 +100,55 @@ pub fn ts_argmin(x: ArrayView2<f64>, d: usize) -> Array2<f64> {
             }
         }
         (w.len() - 1 - min_i) as f64
+    })
+}
+
+/// Rolling Pearson correlation between paired columns of x and y.
+/// Pandas `x.rolling(d, min_periods=d).corr(y)` equivalent:
+///   * strict min_periods=d
+///   * ANY NaN/inf at any position in EITHER window -> NaN
+///   * constant series (variance effectively 0 by std<1e-7) -> NaN
+///   * |corr| > 1 (FP garbage) -> NaN
+///
+/// Uses Welford's online algorithm to match pandas exactly: for
+/// bit-identical constant windows pandas returns std=0 and our
+/// Welford accumulator also stays at 0 (deltas are 0 each step).
+/// A naive two-pass `sum((x - mean)^2)` would leak FP noise from the
+/// sum-then-mean path and produce std~1e-17 on constants -- enough
+/// to skip the guard and emit garbage downstream.
+pub fn correlation(x: ArrayView2<f64>, y: ArrayView2<f64>, d: usize) -> Array2<f64> {
+    rolling_apply_col_pair(x, y, d, d, |wx, wy| {
+        if wx.iter().any(|v| !v.is_finite()) || wy.iter().any(|v| !v.is_finite()) {
+            return f64::NAN;
+        }
+        // Welford-style online mean + Co-moment accumulators.
+        let mut mean_x = 0.0_f64;
+        let mut mean_y = 0.0_f64;
+        let mut m2x = 0.0_f64;
+        let mut m2y = 0.0_f64;
+        let mut cxy = 0.0_f64;
+        let mut n = 0.0_f64;
+        for (&xv, &yv) in wx.iter().zip(wy.iter()) {
+            n += 1.0;
+            let dx = xv - mean_x;
+            mean_x += dx / n;
+            let dy_raw = yv - mean_y;
+            mean_y += dy_raw / n;
+            m2x += dx * (xv - mean_x);
+            m2y += dy_raw * (yv - mean_y);
+            // Co-moment Welford: Cxy += dx * (yv - mean_y_new)
+            cxy += dx * (yv - mean_y);
+        }
+        let std_x = (m2x / n).sqrt();
+        let std_y = (m2y / n).sqrt();
+        if std_x < 1e-7 || std_y < 1e-7 {
+            return f64::NAN;
+        }
+        let denom = (m2x * m2y).sqrt();
+        let result = cxy / denom;
+        if !result.is_finite() || result.abs() > 1.0 {
+            return f64::NAN;
+        }
+        result
     })
 }
