@@ -1,0 +1,74 @@
+# Portfolio AB on data_small (~46 票) — 比 cfg.stocks 16 票大,可验证 mask
+# 在 cross-section top-K 选股上的效果。全 4358 票 portfolio AB 在当前环境
+# segfault(precompute 阶段),所以缩规模到 46 票池子。
+#
+# 两 arm 只差 mask.enabled,training_universe=all 让模型见到 46 票全训练池
+# (虽然 base 配 cache_dir=data_small,但 ml_factor training_universe=all
+# 仍读 load_universe_cache 它就是 46 票)。
+#
+# 跑法:python -m stockpool portfolio-ab --config portfolio_ab_mask_medium.yaml
+
+base_config: portfolio_ab_mask_medium_base.yaml
+
+arms:
+  baseline:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        share_pool_fit: true
+        selector:
+          type: lasso
+          lasso:
+            alpha: 0.001
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter:
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+        thresholds:
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        mask:
+          enabled: false
+
+  with_mask:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        share_pool_fit: true
+        selector:
+          type: lasso
+          lasso:
+            alpha: 0.001
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter:
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+        thresholds:
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        mask:
+          enabled: true

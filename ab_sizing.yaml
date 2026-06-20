@@ -1,0 +1,49 @@
+# ab_sizing.yaml — A/B validation config for F3 PR-C (vol-target sizing).
+#
+# A/B validation for F3 PR-C — vol-target sizing.
+#
+# Spec:  docs/superpowers/specs/2026-05-24-f3-pr-c-vol-target-sizing-design.md
+# Run:   python -m stockpool ab --config ab_sizing.yaml
+# Gate:  Δmax_dd / fixed.max_dd ≤ -0.20   AND   Δsharpe ≥ -0.05
+#
+# Note: vol-target's main payoff is DD reduction, NOT Sharpe lift.
+# Sharpe persisting (±0.05) + DD shrinking ≥ 20% counts as success.
+
+base_config: config.yaml
+
+arms:
+  fixed_baseline:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        panel_mode: pooled
+        training_universe: pool
+        share_pool_fit: true
+        selector: {type: lasso}
+        weighter: {type: ic}
+    backtest:
+      sizing:
+        type: fixed
+        fixed: {size: 0.10}
+      equity_curve_holding_days: [10]
+
+  vol_target:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        panel_mode: pooled
+        training_universe: pool
+        share_pool_fit: true
+        selector: {type: lasso}
+        weighter: {type: ic}
+    backtest:
+      sizing:
+        type: vol_target
+        fixed: {size: 0.10}       # anchor: lot = 0.10 when stock vol == reference_vol
+        vol_target:
+          reference_vol_annual: 0.30
+          vol_window: 20
+          min_size: 0.03
+          max_size: 0.20
+          fallback_to: fixed
+      equity_curve_holding_days: [10]

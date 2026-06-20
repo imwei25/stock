@@ -1,0 +1,160 @@
+# Base for portfolio_ab_mask.yaml — ml_factor + training_universe=all,
+# portfolio top-K 等权,两 arm 区别仅 strategy.ml_factor.mask.enabled。
+# 使用 universe.parquet (4358 票) 作为可选股池,top-K 从这里选 20 票等权。
+
+stocks:
+  # 应用池(也作为 portfolio universe 的 strict-must-have 集合 — 见 PR-2 注解)
+  - {code: "605589", name: "圣泉集团",  sector: "化工"}
+  - {code: "603986", name: "兆易创新",  sector: "半导体"}
+  - {code: "000528", name: "柳工",      sector: "工程机械"}
+  - {code: "603026", name: "石大胜华",  sector: "化工"}
+  - {code: "603757", name: "大元泵业",  sector: "通用机械"}
+  - {code: "603667", name: "五洲新春",  sector: "通用机械"}
+  - {code: "002081", name: "金螳螂",    sector: "装修装饰"}
+  - {code: "000922", name: "华电辽能",  sector: "电力"}
+  - {code: "001309", name: "德明利",    sector: "半导体"}
+  - {code: "300302", name: "同有科技",  sector: "半导体"}
+  - {code: "002409", name: "雅克科技",  sector: "半导体"}
+  - {code: "301308", name: "江波龙",    sector: "半导体"}
+  - {code: "600584", name: "长电科技",  sector: "半导体"}
+  - {code: "688008", name: "澜起科技",  sector: "半导体"}
+  - {code: "688766", name: "普冉股份",  sector: "半导体"}
+  - {code: "300475", name: "香农芯创",  sector: "半导体"}
+
+data:
+  history_days: 500
+  cache_dir: "data"   # full A-share cache (universe.parquet + ipo_dates.parquet)
+  force_refresh: false
+  source: mootdx
+
+context:
+  indices:
+    - {code: "sh000001", name: "上证指数"}
+    - {code: "sz399001", name: "深证成指"}
+
+indicators:
+  ma_periods: [5, 10, 20, 60]
+  macd: {fast: 12, slow: 26, signal: 9}
+  kdj: {n: 9, m1: 3, m2: 3}
+  rsi_periods: [6, 12, 24]
+  boll: {n: 20, k: 2}
+  volume_ratio_window: 5
+  breakout_window: 20
+
+weights:
+  ma_cross_strong: 2
+  ma_alignment: 1
+  macd_cross_above_zero: 2
+  macd_cross_below_zero: 1
+  macd_histogram_expand: 1
+  kdj_oversold_cross: 2
+  kdj_overbought_cross: 2
+  kdj_normal_cross: 1
+  rsi_oversold: 1
+  rsi_overbought: 1
+  boll_band_touch: 2
+  boll_mid_cross: 1
+  volume_surge_bullish: 1
+  volume_surge_bearish: 1
+  breakout_new_high: 2
+  breakout_new_low: 2
+
+scoring:
+  daily_weight: 0.7
+  weekly_weight: 0.3
+  resonance_bonus: 2
+  resonance_daily_threshold: 3
+  resonance_weekly_threshold: 1
+
+verdicts:
+  strong_buy: 6
+  buy: 3
+  sell: -3
+  strong_sell: -6
+
+backtest:
+  forward_days: [1, 3, 5]
+  equity_curve_holding_days: [5]
+  risk_free_rate: 0.02
+  costs:
+    commission_rate: 0.0003
+    stamp_duty_rate: 0.0005
+    slippage_rate: 0.0005
+  engine: multi_lot
+  sizing:
+    type: fixed
+    fixed:
+      size: 0.05
+
+report:
+  output_dir: "reports"
+  keep_history: true
+  klines_to_show: 90
+
+recommend_pool:
+  enabled: false
+
+strategy:
+  name: ml_factor
+  ml_factor:
+    factors_file: reports/selection.json
+    horizon: 3
+    train_window: 250
+    min_train_samples: 60
+    refit_every: 20
+    panel_mode: pooled
+    training_universe: all   # 关键:4358 票训练池
+    share_pool_fit: true
+    selector:
+      type: lasso
+      lasso:
+        alpha: 0.001
+        max_iter: 1000
+        tol: 1.0e-06
+    weighter:
+      type: ic
+      ic:
+        use_rank: true
+        min_abs_ic: 0.0
+    thresholds:
+      strong_buy: 0.9
+      buy: 0.7
+      sell: 0.3
+      strong_sell: 0.1
+    # mask 在 arm-level 覆盖,base 默认关闭
+    mask:
+      enabled: false
+
+# Portfolio: top-K 等权,5 天 rebalance,从 universe.parquet 全选
+portfolio_backtest:
+  enabled: true
+  portfolio:
+    top_k: 8
+    rebalance_n_days: 5
+    max_per_industry: 5
+    initial_cash: 1.0
+  eligibility:
+    min_avg_amount_20d: 50000000
+    exclude_st: true
+    min_history_bars: 60
+  staggered_starts: 1
+  score_cache_dir: "data/portfolio_scores"
+  # 解耦:训练池仍是 load_universe_cache (4358 票),portfolio universe
+  # 限定到这 16 票避免 precompute_scores 在 4358 票全跑时 segfault。
+  universe_codes:
+    - "605589"
+    - "603986"
+    - "000528"
+    - "603026"
+    - "603757"
+    - "603667"
+    - "002081"
+    - "000922"
+    - "001309"
+    - "300302"
+    - "002409"
+    - "301308"
+    - "600584"
+    - "688008"
+    - "688766"
+    - "300475"

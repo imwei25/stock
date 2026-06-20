@@ -1,0 +1,28 @@
+# Portfolio A/B testing config (template).
+#
+# Compare two portfolio_backtest setups on the same universe + history.
+# Each arm only overrides `strategy:` (whole-replace) and `portfolio_backtest:`
+# (field-level merge). All other base config (data / indicators / weights /
+# scoring / verdicts / stocks) inherits from base_config.
+#
+# Run: `python -m stockpool portfolio-ab --config portfolio_ab.yaml`
+# Debug single arm: `... --arm arm_lasso_ic`
+
+base_config: config.yaml
+
+arms:
+  arm_lasso_ic:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        selector: {type: lasso}
+        weighter: {type: ic}
+        factors_file: reports/selection.json
+    # No portfolio_backtest override → arm inherits base.portfolio_backtest.
+
+  arm_composite:
+    strategy:
+      name: composite_verdict
+    portfolio_backtest:
+      portfolio:
+        top_k: 15            # only override top_k; everything else inherits

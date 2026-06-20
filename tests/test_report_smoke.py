@@ -150,7 +150,16 @@ report: {{output_dir: "{out_dir}", keep_history: true, klines_to_show: 120}}
         "振幅": [0] * 200, "涨跌幅": [0] * 200, "涨跌额": [0] * 200, "换手率": [0] * 200,
     })
 
+    idx_close = 3000 + np.cumsum(rng.normal(0, 10, 200))
+    fake_index = pd.DataFrame({
+        "date": pd.date_range("2025-08-01", periods=200, freq="B"),
+        "open": idx_close - 5, "close": idx_close,
+        "high": idx_close + 10, "low": idx_close - 10,
+        "volume": rng.integers(10_000_000, 100_000_000, 200).astype(float),
+    })
+
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake), \
+         patch("stockpool.fetcher.ak.stock_zh_index_daily", return_value=fake_index), \
          patch("stockpool.cli.ak.tool_trade_date_hist_sina",
                return_value=pd.DataFrame({"trade_date": [pd.Timestamp.today().date()]})):
         exit_code = main(["run", "--config", str(config_yaml)])
@@ -162,3 +171,23 @@ report: {{output_dir: "{out_dir}", keep_history: true, klines_to_show: 120}}
     assert "605589" in text
     assert "圣泉集团" in text
     assert (tmp_path / "out" / "latest.html").exists()
+
+
+def test_report_includes_verdict_bucket_section():
+    from stockpool.report import _stock_section_html, StockAnalysis
+    a = StockAnalysis(
+        code="000001", name="测试",
+        daily_score=2, weekly_score=1, final_score=3.0, verdict="buy",
+        verdict_hit_rates={
+            "buy": {
+                "count": 5,
+                "forward_5":  {"mean_return_pct": 1.2, "win_rate": 0.6, "sample_size": 5},
+                "forward_10": {"mean_return_pct": 0.0, "win_rate": 0.0, "sample_size": 0},
+                "forward_20": {"mean_return_pct": 0.0, "win_rate": 0.0, "sample_size": 0},
+            },
+        },
+    )
+    html = _stock_section_html(a, klines_to_show=60)
+    assert "综合评级历史回测" in html
+    assert "🟢 买入" in html
+    assert "+1.20%" in html

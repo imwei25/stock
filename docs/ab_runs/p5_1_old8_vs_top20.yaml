@@ -1,0 +1,57 @@
+# P5-1 A/B: 当前 8 个手挑因子 vs factor-analysis 选出的 top-20
+# Spec: docs/superpowers/specs/2026-05-24-f1-plan-2-custom-factors-and-ranking-design.md
+#
+# 跑法:
+#   python -m stockpool ab --config docs/ab_runs/p5_1_old8_vs_top20.yaml
+#
+# baseline arm 用 config.yaml 当前的 8 个手挑因子;
+# candidate arm 用 reports/selection.json 的 top-20 (factors analyze --universe all
+# + pick-by-ic 选出, 含 2 个 custom 因子: turnover_zscore_60 / industry_relative_strength_20)。
+#
+# 注意: ArmOverride.strategy 是 whole-block-replace, 所以 panel_mode/horizon/etc
+# 必须在 arm 里显式指定, 不能继承 base. 这里把 production config.yaml 的关键字段
+# 都搬过来, 确保两 arm 跑的就是生产环境状态, 仅 factors 列表不同.
+base_config: ../../config.yaml
+
+arms:
+  baseline:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors:
+          - momentum_20
+          - macd_hist
+          - rsi_centered_14
+          - ma_distance_20
+          - vol_ratio_5
+          - boll_position_20
+          - ma_slope_20_5
+          - kdj_j
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        share_pool_fit: true
+        selector: {type: lasso}
+        weighter: {type: ic}
+    backtest:
+      equity_curve_holding_days: [5]
+
+  candidate:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        share_pool_fit: true
+        selector: {type: lasso}
+        weighter: {type: ic}
+    backtest:
+      equity_curve_holding_days: [5]

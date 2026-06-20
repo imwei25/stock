@@ -1,0 +1,71 @@
+# Portfolio AB: ml_factor + training_universe=all,两 arm 只差 mask.enabled.
+# 验证 paper B mask-first 在 portfolio top-K 选股语境下的提升(应当比 per-stock
+# AB 的 +0.07 更大,因为 mask 直接影响 cross-section 选股结果)。
+#
+# 跑法:python -m stockpool portfolio-ab --config portfolio_ab_mask.yaml
+# 单 arm 调试:python -m stockpool portfolio-ab --config portfolio_ab_mask.yaml --arm baseline
+
+base_config: portfolio_ab_mask_base.yaml
+
+arms:
+  baseline:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        share_pool_fit: true
+        selector:
+          type: lasso
+          lasso:
+            alpha: 0.001
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter:
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+        thresholds:
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        mask:
+          enabled: false
+
+  with_mask:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        share_pool_fit: true
+        selector:
+          type: lasso
+          lasso:
+            alpha: 0.001
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter:
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+        thresholds:
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        mask:
+          enabled: true

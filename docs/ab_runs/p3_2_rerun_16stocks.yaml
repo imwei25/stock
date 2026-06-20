@@ -1,0 +1,65 @@
+# P3-2 重跑 — 16 股全量,验证 training_universe=pool vs all
+#
+# 上一次跑(p3_2_pool_vs_all_universe.yaml)因 ab/runner pool-sharing bug
+# 导致两 arm 实际用同样训练数据,Δ=0 不可信。
+# Bug 已在 commit 3648d50 修复,现在 universe 只注入到 training_universe=all
+# 的 arm,pool arm 走 prepare_pool 单独加载 cfg.stocks。
+#
+# 跑法:
+#   python -m stockpool ab --config docs/ab_runs/p3_2_rerun_16stocks.yaml
+#
+# 预计耗时:training_universe=all 加载 + factor panel 计算需要几分钟。
+# 如太慢,先用 --arm train_universe_pool 跑通 pool 侧再跑 all 侧。
+base_config: ../../config.yaml
+# 不设 stocks_filter,使用全部 16 只 base.stocks
+arms:
+  train_universe_pool:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors:
+          - momentum_20
+          - macd_hist
+          - rsi_centered_14
+          - ma_distance_20
+          - vol_ratio_5
+          - boll_position_20
+          - ma_slope_20_5
+          - kdj_j
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: pool
+        share_pool_fit: true
+        embargo_days: 0
+        selector: {type: lasso}
+        weighter: {type: ic}
+    backtest:
+      equity_curve_holding_days: [10]
+  train_universe_all:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors:
+          - momentum_20
+          - macd_hist
+          - rsi_centered_14
+          - ma_distance_20
+          - vol_ratio_5
+          - boll_position_20
+          - ma_slope_20_5
+          - kdj_j
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        share_pool_fit: true
+        embargo_days: 0
+        selector: {type: lasso}
+        weighter: {type: ic}
+    backtest:
+      equity_curve_holding_days: [10]

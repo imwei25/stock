@@ -1,0 +1,28 @@
+{
+  "sig": "78bb4fcf0cc0",
+  "factors": [
+    "alpha_016",
+    "turnover_zscore_60",
+    "industry_relative_strength_20",
+    "alpha_069",
+    "alpha_006",
+    "alpha_075",
+    "alpha_012",
+    "alpha_037",
+    "alpha_004",
+    "alpha_002",
+    "alpha_059",
+    "vol_ratio_5",
+    "alpha_007",
+    "alpha_081",
+    "alpha_029",
+    "alpha_082",
+    "alpha_001",
+    "alpha_067",
+    "alpha_073",
+    "alpha_042"
+  ],
+  "n_codes": 46,
+  "last_date": "2026-05-29",
+  "built_at": "2026-05-31T13:04:08.809646+00:00"
+}

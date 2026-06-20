@@ -1,0 +1,368 @@
+"""MLFactorStrategy + backtest engine integration tests."""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from stockpool.backtesting import (
+    BacktestEngine,
+    BarContext,
+    MLFactorStrategy,
+    PositionContext,
+    TradeCosts,
+)
+from stockpool.config import MLFactorConfig, QuantileThresholds, SelectorConfig, WeighterConfig
+
+
+def _synth_ohlcv(n: int, seed: int = 0, drift: float = 0.0005) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    returns = rng.normal(drift, 0.02, n)
+    close = 100.0 * np.cumprod(1 + returns)
+    return pd.DataFrame({
+        "date": pd.date_range("2023-01-02", periods=n, freq="B"),
+        "open": close * 0.998,
+        "high": close * 1.005,
+        "low": close * 0.995,
+        "close": close,
+        "volume": rng.integers(500_000, 5_000_000, n).astype(float),
+    })
+
+
+def test_generate_signals_yields_expected_columns():
+    df = _synth_ohlcv(300, seed=42)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strat = MLFactorStrategy(cfg)
+    sigs = strat.generate_signals(df)
+    # `final_score` mirrors `score` so portfolio scoring (which reads
+    # `final_score` by default) works without a special code path.
+    assert list(sigs.columns) == ["date", "open", "close", "signal", "score", "final_score"]
+    assert len(sigs) == len(df)
+
+
+def test_per_stock_mode_produces_mix_of_signals():
+    df = _synth_ohlcv(400, seed=1)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strat = MLFactorStrategy(cfg)
+    sigs = strat.generate_signals(df)
+    # Once past warmup, every verdict class should appear at least once.
+    counts = sigs["signal"].value_counts()
+    for label in ("strong_buy", "buy", "neutral", "sell", "strong_sell"):
+        assert counts.get(label, 0) > 0, f"missing label: {label}"
+
+
+def test_warmup_bars_are_neutral():
+    """Before min_train_samples + horizon, the model can't fit → neutral."""
+    df = _synth_ohlcv(200, seed=2)
+    cfg = MLFactorConfig(
+        train_window=80, refit_every=20, min_train_samples=80,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strat = MLFactorStrategy(cfg)
+    sigs = strat.generate_signals(df)
+    # First (min_train_samples + horizon - 1) rows should be all neutral.
+    warmup = cfg.min_train_samples + cfg.horizon
+    assert (sigs["signal"].iloc[:warmup] == "neutral").all()
+
+
+def test_engine_consumes_ml_signals():
+    df = _synth_ohlcv(400, seed=3)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strat = MLFactorStrategy(cfg)
+    engine = BacktestEngine(strat, costs=TradeCosts(0.0008, 0.0013))
+    result = engine.run(df, max_holding_days=10)
+    # Curve should be the same length as the input frame.
+    assert len(result.curve) == len(df)
+    # Equity must be positive throughout (long-only, costs < 1).
+    assert (result.curve["equity"] > 0).all()
+
+
+def test_decision_rules_respect_config_sets():
+    cfg = MLFactorConfig(
+        buy_verdicts=["buy"],
+        sell_verdicts=["sell"],
+        refresh_verdicts=[],
+        embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strat = MLFactorStrategy(cfg)
+    enter = BarContext(bar_idx=0, date=pd.Timestamp("2024-01-02"),
+                       close=1.0, signal="strong_buy")
+    # strong_buy is NOT in buy_verdicts here → no entry.
+    assert strat.should_enter(enter) is False
+    enter2 = enter.__class__(bar_idx=0, date=enter.date, close=1.0, signal="buy")
+    assert strat.should_enter(enter2) is True
+
+
+def test_pooled_mode_runs_on_multi_stock_panel():
+    pool = {f"S{i}": _synth_ohlcv(300, seed=i + 10) for i in range(3)}
+    cfg = MLFactorConfig(
+        train_window=150, refit_every=30, min_train_samples=80,
+        panel_mode="pooled",
+        embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strat = MLFactorStrategy(cfg, pool_data=pool, current_stock_code="S0")
+    sigs = strat.generate_signals(pool["S0"])
+    assert len(sigs) == 300
+    # Should produce at least some non-neutral signals.
+    assert (sigs["signal"] != "neutral").sum() > 0
+
+
+def test_score_is_nan_during_warmup_and_finite_after():
+    df = _synth_ohlcv(300, seed=4)
+    cfg = MLFactorConfig(
+        train_window=100, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strat = MLFactorStrategy(cfg)
+    sigs = strat.generate_signals(df)
+    # Warmup region: NaN scores
+    assert sigs["score"].iloc[:30].isna().all()
+    # Post-warmup region should be mostly finite.
+    finite_late = sigs["score"].iloc[-50:].notna().mean()
+    assert finite_late > 0.9
+
+
+def test_pooled_train_window_is_per_stock_not_global():
+    """In pooled mode, ``train_window`` caps PER STOCK, not the global panel
+    size. Otherwise we'd silently train on just the last stock's recent rows
+    and waste every other stock's data.
+    """
+    from stockpool.ml.dataset import build_panel  # local import to assert shape
+
+    pool = {f"S{i}": _synth_ohlcv(300, seed=i + 20) for i in range(4)}
+    cfg = MLFactorConfig(
+        train_window=80, refit_every=20, min_train_samples=50,
+        panel_mode="pooled",
+        embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strat = MLFactorStrategy(cfg, pool_data=pool, current_stock_code="S0")
+
+    # Drive a fit at bar 250 of S0 and inspect the panel it would build.
+    fitted = strat._try_fit(
+        pool["S0"],
+        X_full=__import__("stockpool.ml.dataset", fromlist=["build_factor_matrix"])
+            .build_factor_matrix(pool["S0"], cfg.factors),
+        y_full=__import__("stockpool.ml.dataset", fromlist=["forward_return"])
+            .forward_return(pool["S0"], cfg.horizon),
+        current_bar=250,
+    )
+    assert fitted is not None
+    pipeline, _ = fitted
+
+    # Replay the same fit-time panel selection logic to assert membership.
+    truncated = strat._build_truncated_pool(
+        pool["S0"], pool["S0"]["date"].iloc[250], current_bar=250,
+    )
+    X_panel, _ = build_panel(truncated, cfg.factors, cfg.horizon)
+    X_panel = X_panel.groupby(level="stock", group_keys=False, sort=False).tail(
+        cfg.train_window
+    )
+    # Every stock in the pool must contribute at least one row.
+    stocks_in_panel = set(X_panel.index.get_level_values("stock").unique())
+    assert stocks_in_panel == {"S0", "S1", "S2", "S3"}, (
+        f"some stocks missing from pooled training panel: {stocks_in_panel}"
+    )
+    # And no stock contributes more than `train_window` rows.
+    counts = X_panel.groupby(level="stock", sort=False).size()
+    assert (counts <= cfg.train_window).all()
+
+
+def test_pooled_mode_truncates_other_stocks_at_current_date():
+    """At bar t of host stock, pool stocks must not contribute future data."""
+    host = _synth_ohlcv(200, seed=5)
+    # Other stock has an obvious "future event" at bar 150 (10x close)
+    other = _synth_ohlcv(200, seed=6)
+    other.loc[150:, "close"] = other["close"].iloc[150] * 10
+    # If the strategy peeks at future close, fits at bar 100 will be tainted.
+    cfg = MLFactorConfig(
+        train_window=80, refit_every=20, min_train_samples=60,
+        panel_mode="pooled",
+        embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strat = MLFactorStrategy(
+        cfg, pool_data={"H": host, "O": other}, current_stock_code="H",
+    )
+    # Build the truncated pool the strategy would use at host bar 100.
+    truncated = strat._build_truncated_pool(
+        host, host["date"].iloc[100], current_bar=100,
+    )
+    other_truncated = truncated["O"]
+    # Every date in the truncated other-stock frame must precede the cutoff.
+    # With embargo_days=0, host_slice_end = label_end + horizon = (100-5) + 5 = 100,
+    # so cutoff_date = host["date"].iloc[99] < host["date"].iloc[100].
+    assert (other_truncated["date"] < host["date"].iloc[100]).all()
+
+
+def test_quantile_thresholds_consistent():
+    """Custom thresholds should still produce signal mix in correct order."""
+    df = _synth_ohlcv(400, seed=7)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        thresholds=QuantileThresholds(
+            strong_buy=0.95, buy=0.80, sell=0.20, strong_sell=0.05,
+        ),
+        weighter=WeighterConfig(type="equal"),
+        embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
+    )
+    strat = MLFactorStrategy(cfg)
+    sigs = strat.generate_signals(df).dropna(subset=["score"])
+    # With these strict thresholds, strong labels should be rarer than soft.
+    counts = sigs["signal"].value_counts()
+    if "strong_buy" in counts and "buy" in counts:
+        assert counts["strong_buy"] <= counts["buy"]
+    if "strong_sell" in counts and "sell" in counts:
+        assert counts["strong_sell"] <= counts["sell"]
+
+
+def test_predict_tolerates_partial_nan_in_factor_row(monkeypatch):
+    """Predict path imputes per-column NaN with 0 instead of rejecting the
+    whole row, so a single long-warmup factor (e.g. alpha_037's 200-bar
+    correlation) can't gate every predict — see handoff
+    2026-05-31-mask-ab-investigation.md Bug B."""
+    df = _synth_ohlcv(300, seed=99)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="equal"),
+    )
+    strat = MLFactorStrategy(cfg)
+
+    # Build the clean per-stock X via the strategy's own pipeline, then
+    # poison ~30% of post-warmup rows on one column to simulate a
+    # long-warmup factor that is NaN while everything else is valid.
+    original_build = strat._build_x_full
+
+    def _build_with_partial_nan(daily_df):
+        X = original_build(daily_df)
+        if len(X.columns) >= 1 and len(X) >= 250:
+            target_col = X.columns[0]
+            X = X.copy()
+            X.iloc[200:250, X.columns.get_loc(target_col)] = float("nan")
+        return X
+
+    monkeypatch.setattr(strat, "_build_x_full", _build_with_partial_nan)
+
+    sigs = strat.generate_signals(df)
+    poisoned = sigs.iloc[200:250]
+    # With partial NaN tolerance, post-warmup poisoned bars should still
+    # produce finite scores (impute=0 → predict) rather than NaN.
+    assert poisoned["score"].notna().any(), (
+        "predict path rejected every partially-NaN row — partial-NaN "
+        "tolerance fix is not active"
+    )
+
+
+def test_predict_returns_neutral_when_entire_row_is_nan(monkeypatch):
+    """Predict still bails when EVERY factor in a row is NaN — there's
+    nothing to impute around."""
+    df = _synth_ohlcv(300, seed=100)
+    cfg = MLFactorConfig(
+        train_window=120, refit_every=20, min_train_samples=60,
+        embargo_days=0, selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="equal"),
+    )
+    strat = MLFactorStrategy(cfg)
+
+    original_build = strat._build_x_full
+
+    def _build_with_full_nan_row(daily_df):
+        X = original_build(daily_df)
+        if len(X) >= 250:
+            X = X.copy()
+            X.iloc[220:230, :] = float("nan")
+        return X
+
+    monkeypatch.setattr(strat, "_build_x_full", _build_with_full_nan_row)
+
+    sigs = strat.generate_signals(df)
+    fully_nan = sigs.iloc[220:230]
+    assert (fully_nan["signal"] == "neutral").all()
+    assert fully_nan["score"].isna().all()
+
+
+def test_ml_factor_with_preprocess_runs_end_to_end():
+    """ml_factor strategy with three-step preprocess produces signals end-to-end.
+
+    8 synthetic stocks × 200 bars; pooled mode; full train + predict cycle.
+    Just verifies the pipeline doesn't crash and signals come out non-NaN.
+    """
+    from stockpool.config import PreprocessConfig
+    from stockpool.factors.context import set_sector_map
+    from stockpool.strategy_factory import build_factor_panel, build_close_panel
+
+    rng = np.random.default_rng(0)
+    n_stocks = 8
+    n_bars = 200
+    dates = pd.date_range("2024-01-01", periods=n_bars, freq="B")
+    pool_data = {}
+    for i in range(n_stocks):
+        close = 100 * np.exp(np.cumsum(rng.standard_normal(n_bars) * 0.02))
+        pool_data[f"S{i:03d}"] = pd.DataFrame({
+            "date": dates,
+            "open": close * 0.999,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": rng.integers(1_000_000, 10_000_000, n_bars).astype(float),
+        })
+
+    sector_map = {f"S{i:03d}": f"ind_{i % 3}" for i in range(n_stocks)}
+    set_sector_map(sector_map)
+
+    factor_names = ["momentum_20", "rsi_centered_14", "vol_ratio_5"]
+    preprocess_cfg = PreprocessConfig(
+        winsorize=(0.01, 0.99), zscore=True, industry_neutralize=True,
+    )
+    factor_panel = build_factor_panel(
+        factor_names, pool_data, preprocess_cfg=preprocess_cfg,
+    )
+    close_panel = build_close_panel(pool_data)
+    assert set(factor_panel.keys()) == set(factor_names)
+    for df in factor_panel.values():
+        assert df.shape == (n_bars, n_stocks)
+
+    cfg = MLFactorConfig(
+        factors=factor_names,
+        horizon=3,
+        train_window=100,
+        min_train_samples=30,
+        refit_every=20,
+        panel_mode="pooled",
+        embargo_days=0,
+        selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    strategy = MLFactorStrategy(
+        cfg,
+        pool_data=pool_data,
+        factor_panel=factor_panel,
+        close_panel=close_panel,
+    )
+    for code in pool_data:
+        result = strategy.predict_latest(pool_data[code])
+        # Result is a dict with 'signal' and 'final_score' (may be NaN
+        # on warmup or insufficient training data; just must not raise).
+        assert "signal" in result

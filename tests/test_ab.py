@@ -1,0 +1,716 @@
+"""Tests for stockpool.ab — config schema, deep-merge, runner, report."""
+from pathlib import Path
+
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from stockpool.ab import (
+    ABConfig,
+    ArmBacktestOverride,
+    ArmOverride,
+    build_effective_cfg,
+    load_ab_config,
+)
+from stockpool.config import (
+    load_config,
+    StrategyConfig,
+    SizingConfig,
+    FixedSizingConfig,
+    VolTargetSizingConfig,
+)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _write_base_config(tmp_path: Path) -> Path:
+    """Copy real config.yaml to tmp_path so tests don't tread on it."""
+    base_src = PROJECT_ROOT / "config.yaml"
+    base_dst = tmp_path / "config.yaml"
+    base_dst.write_bytes(base_src.read_bytes())
+    return base_dst
+
+
+# ── Schema ──────────────────────────────────────────────────────────────────
+
+
+def test_arm_holding_days_must_be_singleton():
+    """equity_curve_holding_days enforces length-1 list with N > 0."""
+    with pytest.raises(ValidationError):
+        ArmBacktestOverride(equity_curve_holding_days=[5, 10])
+    with pytest.raises(ValidationError):
+        ArmBacktestOverride(equity_curve_holding_days=[])
+    with pytest.raises(ValidationError):
+        ArmBacktestOverride(equity_curve_holding_days=[0])
+    o = ArmBacktestOverride(equity_curve_holding_days=[10])
+    assert o.equity_curve_holding_days == [10]
+
+
+def test_arm_backtest_other_fields_optional():
+    """All non-holding-days fields default to None (inherit base)."""
+    o = ArmBacktestOverride(equity_curve_holding_days=[7])
+    assert o.engine is None
+    assert o.position_size is None
+    assert o.costs is None
+
+
+def test_arm_extra_fields_forbidden():
+    """Typoed fields raise instead of silently being ignored."""
+    with pytest.raises(ValidationError):
+        ArmBacktestOverride(equity_curve_holding_days=[10], engin="single")  # typo
+
+
+def test_arms_must_be_exactly_two():
+    """ABConfig requires exactly 2 arms."""
+    arm = ArmOverride(
+        strategy=StrategyConfig(name="composite_verdict"),
+        backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+    )
+    with pytest.raises(ValidationError):
+        ABConfig(base_config="config.yaml", arms={"a": arm})
+    with pytest.raises(ValidationError):
+        ABConfig(base_config="config.yaml", arms={"a": arm, "b": arm, "c": arm})
+    ABConfig(base_config="config.yaml", arms={"a": arm, "b": arm})
+
+
+# ── Deep-merge ──────────────────────────────────────────────────────────────
+
+
+def test_merge_replaces_strategy_section_wholly(tmp_path):
+    """arm.strategy replaces base.strategy with no leakage."""
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+    from stockpool.config import MLFactorConfig
+    arm = ArmOverride(
+        strategy=StrategyConfig(
+            name="ml_factor",
+            ml_factor=MLFactorConfig(horizon=7),
+        ),
+        backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+    )
+    eff = build_effective_cfg(base, arm)
+    assert eff.strategy.name == "ml_factor"
+    assert eff.strategy.ml_factor.horizon == 7
+
+
+def test_merge_backtest_fields_inherit_when_none(tmp_path):
+    """arm.backtest fields left as None inherit from base.backtest."""
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+    base_engine = base.backtest.engine
+    arm = ArmOverride(
+        strategy=StrategyConfig(name="composite_verdict"),
+        backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+    )
+    eff = build_effective_cfg(base, arm)
+    assert eff.backtest.engine == base_engine
+    assert eff.backtest.equity_curve_holding_days == [10]
+
+
+def test_merge_backtest_fields_override_when_set(tmp_path):
+    """arm.backtest fields with explicit values replace base's."""
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+    arm = ArmOverride(
+        strategy=StrategyConfig(name="composite_verdict"),
+        backtest=ArmBacktestOverride(
+            equity_curve_holding_days=[10],
+            engine="single",
+            position_size=0.25,
+        ),
+    )
+    eff = build_effective_cfg(base, arm)
+    assert eff.backtest.engine == "single"
+    # position_size is deprecated and migrated; after migration it is cleared
+    # and the value is reflected in sizing.fixed.size.
+    assert eff.backtest.position_size is None
+    assert eff.backtest.sizing.type == "fixed"
+    assert eff.backtest.sizing.fixed.size == 0.25
+
+
+def test_merge_does_not_mutate_base(tmp_path):
+    """Merging is non-destructive on the base config object."""
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+    base_engine_before = base.backtest.engine
+    base_name_before = base.strategy.name
+    arm = ArmOverride(
+        strategy=StrategyConfig(name="ml_factor"),
+        backtest=ArmBacktestOverride(equity_curve_holding_days=[10], engine="single"),
+    )
+    build_effective_cfg(base, arm)
+    assert base.backtest.engine == base_engine_before
+    assert base.strategy.name == base_name_before
+
+
+def test_merge_recomputes_content_hash(tmp_path):
+    """Different arm overrides → different content_hash (ML cache isolation)."""
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+    arm_a = ArmOverride(
+        strategy=StrategyConfig(name="composite_verdict"),
+        backtest=ArmBacktestOverride(equity_curve_holding_days=[5]),
+    )
+    arm_b = ArmOverride(
+        strategy=StrategyConfig(name="composite_verdict"),
+        backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+    )
+    eff_a = build_effective_cfg(base, arm_a)
+    eff_b = build_effective_cfg(base, arm_b)
+    assert eff_a.content_hash != eff_b.content_hash
+
+
+def test_merge_revalidates_pydantic(tmp_path):
+    """A merge result that violates AppConfig constraints fails fast."""
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+    arm = ArmOverride(
+        strategy=StrategyConfig(name="composite_verdict"),
+        backtest=ArmBacktestOverride(
+            equity_curve_holding_days=[10],
+            position_size=2.0,  # exceeds le=1.0 in BacktestConfig
+        ),
+    )
+    with pytest.raises(ValidationError):
+        build_effective_cfg(base, arm)
+
+
+# ── load_ab_config ──────────────────────────────────────────────────────────
+
+
+def _write_ab_yaml(tmp_path: Path, base_rel: str = "config.yaml",
+                   stocks_filter=None, with_typo: bool = False) -> Path:
+    arms = {
+        "a": {
+            "strategy": {"name": "composite_verdict"},
+            "backtest": {"equity_curve_holding_days": [5]},
+        },
+        "b": {
+            "strategy": {"name": "composite_verdict"},
+            "backtest": {"equity_curve_holding_days": [10]},
+        },
+    }
+    if with_typo:
+        arms["a"]["backtest"]["equity_holding_days"] = [5]  # typo
+    raw = {"base_config": base_rel, "arms": arms}
+    if stocks_filter is not None:
+        raw["stocks_filter"] = stocks_filter
+    p = tmp_path / "ab.yaml"
+    p.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return p
+
+
+def test_load_ab_config_happy_path(tmp_path):
+    _write_base_config(tmp_path)
+    ab_path = _write_ab_yaml(tmp_path)
+    ab = load_ab_config(ab_path)
+    assert list(ab.arms) == ["a", "b"]
+
+
+def test_load_ab_config_missing_base_raises(tmp_path):
+    ab_path = _write_ab_yaml(tmp_path, base_rel="does_not_exist.yaml")
+    with pytest.raises(ValueError, match="base_config"):
+        load_ab_config(ab_path)
+
+
+def test_load_ab_config_resolves_base_relative_to_ab_yaml(tmp_path):
+    """base_config: ../config.yaml works when ab.yaml is in a subdir."""
+    _write_base_config(tmp_path)
+    subdir = tmp_path / "experiments"
+    subdir.mkdir()
+    ab_path = _write_ab_yaml(subdir, base_rel="../config.yaml")
+    ab = load_ab_config(ab_path)
+    assert ab.base_config == "../config.yaml"
+
+
+def test_stocks_filter_must_be_subset_of_base(tmp_path):
+    _write_base_config(tmp_path)
+    ab_path = _write_ab_yaml(tmp_path, stocks_filter=["999999"])  # not in base
+    with pytest.raises(ValueError, match="stocks_filter"):
+        load_ab_config(ab_path)
+
+
+def test_extra_field_in_arm_backtest_rejected(tmp_path):
+    _write_base_config(tmp_path)
+    ab_path = _write_ab_yaml(tmp_path, with_typo=True)
+    with pytest.raises(ValidationError):
+        load_ab_config(ab_path)
+
+
+# ── Pool sharing plan ───────────────────────────────────────────────────────
+
+
+def _make_cfg(tmp_path, strategy_name, panel_mode=None,
+              training_universe=None, factors=None):
+    """Helper: build an effective AppConfig with the requested strategy variant."""
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+    if strategy_name == "ml_factor":
+        from stockpool.config import MLFactorConfig
+        kw = {}
+        if panel_mode is not None:
+            kw["panel_mode"] = panel_mode
+        if training_universe is not None:
+            kw["training_universe"] = training_universe
+        if factors is not None:
+            kw["factors"] = factors
+        ml_cfg = MLFactorConfig(**kw)
+        arm = ArmOverride(
+            strategy=StrategyConfig(name="ml_factor", ml_factor=ml_cfg),
+            backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+        )
+    else:
+        arm = ArmOverride(
+            strategy=StrategyConfig(name="composite_verdict"),
+            backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+        )
+    return build_effective_cfg(base, arm)
+
+
+def test_pool_plan_both_composite(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    cfgs = [_make_cfg(tmp_path, "composite_verdict")] * 2
+    plan = _decide_pool_sharing(cfgs)
+    assert plan["load_universe"] is False
+    assert plan["shared_factors"] is None
+
+
+def test_pool_plan_ml_vs_composite(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    cfgs = [
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all"),
+        _make_cfg(tmp_path, "composite_verdict"),
+    ]
+    plan = _decide_pool_sharing(cfgs)
+    assert plan["load_universe"] is True
+    assert plan["shared_factors"] is None
+
+
+def test_pool_plan_both_ml_pooled_all_same_factors(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    factors = ["momentum_20", "rsi_centered_14"]
+    cfgs = [
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all", factors=factors),
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all", factors=factors),
+    ]
+    plan = _decide_pool_sharing(cfgs)
+    assert plan["load_universe"] is True
+    assert plan["shared_factors"] == factors
+
+
+def test_pool_plan_both_ml_pooled_all_different_factors(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    cfgs = [
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all", factors=["momentum_20"]),
+        _make_cfg(tmp_path, "ml_factor", panel_mode="pooled",
+                  training_universe="all", factors=["rsi_centered_14"]),
+    ]
+    plan = _decide_pool_sharing(cfgs)
+    assert plan["load_universe"] is True
+    assert plan["shared_factors"] is None
+
+
+def test_pool_plan_one_ml_per_stock_does_not_load_universe(tmp_path):
+    from stockpool.ab.runner import _decide_pool_sharing
+    cfgs = [
+        _make_cfg(tmp_path, "ml_factor", panel_mode="per_stock"),
+        _make_cfg(tmp_path, "composite_verdict"),
+    ]
+    plan = _decide_pool_sharing(cfgs)
+    assert plan["load_universe"] is False
+
+
+def test_decide_pool_sharing_blocked_by_preprocess_difference(tmp_path):
+    """Arms with different preprocess settings can't share factor_panel."""
+    from stockpool.ab.runner import _decide_pool_sharing
+    from stockpool.config import MLFactorConfig, PreprocessConfig
+
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+
+    def _make_preprocess_cfg(preprocess):
+        ml = MLFactorConfig(
+            panel_mode="pooled", training_universe="all",
+            factors=["momentum_20"], preprocess=preprocess,
+        )
+        arm = ArmOverride(
+            strategy=StrategyConfig(name="ml_factor", ml_factor=ml),
+            backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+        )
+        return build_effective_cfg(base, arm)
+
+    cfg_off = _make_preprocess_cfg(PreprocessConfig())
+    cfg_on = _make_preprocess_cfg(PreprocessConfig(zscore=True))
+
+    plan = _decide_pool_sharing([cfg_off, cfg_on])
+    assert plan["shared_factors"] is None, (
+        "Arms with different preprocess must not share factor_panel "
+        "(would silently apply arm_a's preprocess to arm_b)"
+    )
+
+
+def test_decide_pool_sharing_allowed_when_preprocess_matches(tmp_path):
+    """Arms with identical preprocess settings can share factor_panel."""
+    from stockpool.ab.runner import _decide_pool_sharing
+    from stockpool.config import MLFactorConfig, PreprocessConfig
+
+    base_path = _write_base_config(tmp_path)
+    base = load_config(base_path)
+
+    def _make_preprocess_cfg(preprocess):
+        ml = MLFactorConfig(
+            panel_mode="pooled", training_universe="all",
+            factors=["momentum_20"], preprocess=preprocess,
+        )
+        arm = ArmOverride(
+            strategy=StrategyConfig(name="ml_factor", ml_factor=ml),
+            backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+        )
+        return build_effective_cfg(base, arm)
+
+    cfg_a = _make_preprocess_cfg(PreprocessConfig(zscore=True))
+    cfg_b = _make_preprocess_cfg(PreprocessConfig(zscore=True))
+
+    plan = _decide_pool_sharing([cfg_a, cfg_b])
+    assert plan["shared_factors"] == ["momentum_20"]
+
+
+def test_run_ab_does_not_inject_universe_into_pool_arm(
+    tmp_path, isolated_cache_two_stocks, monkeypatch,
+):
+    """Regression test for the P3-2 bug (docs/ab_validation_results.md §3.7):
+
+    When arm A has training_universe=pool and arm B has training_universe=all,
+    run_ab must NOT inject the loaded all-A-share universe into arm A's
+    pool_data — otherwise arm A silently runs with the universe data,
+    making the A/B comparison degenerate (Δ=0)."""
+    import yaml
+    from stockpool.ab import run_ab
+    from stockpool.ab.config import load_ab_config
+    from stockpool.ab import runner as ab_runner
+    from stockpool.config import load_config
+
+    # Set up: ab.yaml with arm_a=pool, arm_b=all
+    cache_dir = isolated_cache_two_stocks
+    raw = yaml.safe_load((PROJECT_ROOT / "config.yaml").read_text(encoding="utf-8"))
+    raw["data"]["cache_dir"] = str(cache_dir)
+    raw["data"]["history_days"] = 200
+    raw["report"]["output_dir"] = str(tmp_path / "reports")
+    raw["stocks"] = [
+        {"code": "605589", "name": "Alpha", "sector": ""},
+        {"code": "300750", "name": "Bravo", "sector": ""},
+    ]
+    base_path = tmp_path / "config.yaml"
+    base_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    # Need universe.parquet so load_universe_cache doesn't crash.
+    import pandas as pd
+    pd.DataFrame({"code": ["605589", "300750"], "name": ["a", "b"], "market": ["SZ", "SZ"]}).to_parquet(
+        cache_dir / "universe.parquet", index=False,
+    )
+
+    ab_raw = {
+        "base_config": "config.yaml",
+        "arms": {
+            "pool_arm": {
+                "strategy": {
+                    "name": "ml_factor",
+                    "ml_factor": {
+                        "panel_mode": "pooled",
+                        "training_universe": "pool",
+                        "selector": {"type": "lasso"},
+                        "weighter": {"type": "ic"},
+                    },
+                },
+                "backtest": {"equity_curve_holding_days": [10]},
+            },
+            "all_arm": {
+                "strategy": {
+                    "name": "ml_factor",
+                    "ml_factor": {
+                        "panel_mode": "pooled",
+                        "training_universe": "all",
+                        "selector": {"type": "lasso"},
+                        "weighter": {"type": "ic"},
+                    },
+                },
+                "backtest": {"equity_curve_holding_days": [10]},
+            },
+        },
+    }
+    ab_path = tmp_path / "ab.yaml"
+    ab_path.write_text(yaml.safe_dump(ab_raw, sort_keys=False), encoding="utf-8")
+
+    # Capture which arms received injected_universe.
+    real_prep = ab_runner._prepare_pool_for_arm
+    captured: list[tuple[str, bool]] = []
+
+    def _spy(arm_cfg, stocks, refresh, injected_universe, injected_factor_panel):
+        # Identify arm by its training_universe (only field we vary here).
+        tu = arm_cfg.strategy.ml_factor.training_universe
+        captured.append((tu, injected_universe is not None))
+        return real_prep(arm_cfg, stocks, refresh, injected_universe, injected_factor_panel)
+
+    monkeypatch.setattr(ab_runner, "_prepare_pool_for_arm", _spy)
+
+    ab_cfg = load_ab_config(ab_path)
+    base_cfg = load_config(base_path)
+    run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+
+    # The pool arm must NOT have received an injected_universe.
+    # The all arm SHOULD have received one.
+    by_arm = dict(captured)
+    assert by_arm["pool"] is False, (
+        f"pool arm should not get injected universe, got {by_arm}"
+    )
+    assert by_arm["all"] is True, (
+        f"all arm should get injected universe, got {by_arm}"
+    )
+
+
+# ── Runner integration ──────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def isolated_cache_two_stocks(tmp_path, monkeypatch):
+    """Cache directory with two synthetic stocks ready to load."""
+    import numpy as np
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    for code, seed in [("605589", 7), ("300750", 19)]:
+        rng = np.random.default_rng(seed)
+        n = 220
+        returns = rng.normal(0.0005, 0.02, n)
+        close = 100.0 * np.cumprod(1 + returns)
+        df = __import__("pandas").DataFrame({
+            "date": __import__("pandas").date_range("2024-01-02", periods=n, freq="B"),
+            "open":  close * 0.998, "high": close * 1.005,
+            "low":   close * 0.995, "close": close,
+            "volume": rng.integers(500_000, 5_000_000, n).astype(float),
+        })
+        df.to_parquet(cache_dir / f"{code}_daily.parquet", index=False)
+
+    import pandas as pd
+    cache_last = pd.date_range("2024-01-02", periods=220, freq="B")[-1]
+    fresh_today = pd.Timestamp(cache_last) + pd.Timedelta(days=1)
+    monkeypatch.setattr("stockpool.fetcher._today", lambda: fresh_today)
+    return cache_dir
+
+
+def _ab_setup(tmp_path, cache_dir):
+    """Build an ab.yaml + base config wired to a synthetic cache."""
+    import yaml
+    raw = yaml.safe_load((PROJECT_ROOT / "config.yaml").read_text(encoding="utf-8"))
+    raw["data"]["cache_dir"] = str(cache_dir)
+    raw["data"]["history_days"] = 200
+    raw["report"]["output_dir"] = str(tmp_path / "reports")
+    raw["stocks"] = [
+        {"code": "605589", "name": "Alpha", "sector": ""},
+        {"code": "300750", "name": "Bravo", "sector": ""},
+    ]
+    base_path = tmp_path / "config.yaml"
+    base_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    ab_raw = {
+        "base_config": "config.yaml",
+        "arms": {
+            "single_engine": {
+                "strategy": {"name": "composite_verdict"},
+                "backtest": {"equity_curve_holding_days": [10], "engine": "single"},
+            },
+            "multi_lot_engine": {
+                "strategy": {"name": "composite_verdict"},
+                "backtest": {"equity_curve_holding_days": [10], "engine": "multi_lot"},
+            },
+        },
+    }
+    ab_path = tmp_path / "ab.yaml"
+    ab_path.write_text(yaml.safe_dump(ab_raw, sort_keys=False), encoding="utf-8")
+    ab_cfg = load_ab_config(ab_path)
+    base_cfg = load_config(base_path)
+    return ab_cfg, base_cfg
+
+
+def test_run_ab_smoke_two_composite_arms(tmp_path, isolated_cache_two_stocks):
+    from stockpool.ab import run_ab
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+    assert result.arm_a.name == "single_engine"
+    assert result.arm_b.name == "multi_lot_engine"
+    assert len(result.arm_a.per_stock) == 2
+    assert len(result.arm_b.per_stock) == 2
+    assert result.arm_a.failed == []
+    assert result.arm_b.failed == []
+
+
+def test_run_ab_per_stock_failure_isolated(tmp_path, isolated_cache_two_stocks,
+                                           monkeypatch):
+    """Force one stock's walk_forward_verdicts to crash; ABResult still returns,
+    crash recorded in `failed`."""
+    from stockpool.ab import run_ab
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+
+    from stockpool import backtest_runner as br
+    real_wf = br.walk_forward_verdicts
+    state = {"calls": 0}
+    def _maybe_throw(daily, *a, **kw):
+        state["calls"] += 1
+        # First call (first arm, first stock) throws once
+        if state["calls"] == 1:
+            raise RuntimeError("simulated crash")
+        return real_wf(daily, *a, **kw)
+    monkeypatch.setattr(br, "walk_forward_verdicts", _maybe_throw)
+
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+    # First call (arm_a, 605589) throws; everything else succeeds.
+    assert len(result.arm_a.failed) == 1
+    assert result.arm_a.failed[0][0] == "605589"
+    assert len(result.arm_a.per_stock) == 1
+    assert result.arm_a.per_stock[0][0] == "300750"
+    assert len(result.arm_b.failed) == 0
+    assert len(result.arm_b.per_stock) == 2
+
+
+def test_run_single_arm_returns_arm_result(tmp_path, isolated_cache_two_stocks):
+    from stockpool.ab import run_single_arm
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_single_arm(ab_cfg, base_cfg, base_cfg.stocks, False, "multi_lot_engine")
+    assert result.name == "multi_lot_engine"
+    assert len(result.per_stock) == 2
+
+
+def test_run_single_arm_unknown_name_raises(tmp_path, isolated_cache_two_stocks):
+    from stockpool.ab import run_single_arm
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    with pytest.raises(KeyError):
+        run_single_arm(ab_cfg, base_cfg, base_cfg.stocks, False, "no_such_arm")
+
+
+# ── Report smoke ────────────────────────────────────────────────────────────
+
+
+def test_render_ab_report_smoke(tmp_path, isolated_cache_two_stocks):
+    """End-to-end: run_ab + render_ab_report produces valid HTML."""
+    from stockpool.ab import run_ab, render_ab_report
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+    out_dir = tmp_path / "reports" / "ab"
+    out_path = render_ab_report(result, output_dir=out_dir)
+    assert out_path.exists()
+    assert out_path.stat().st_size > 2048
+    html = out_path.read_text(encoding="utf-8")
+    assert "single_engine" in html
+    assert "multi_lot_engine" in html
+    assert "605589" in html
+    assert "300750" in html
+    # latest.html copied
+    assert (out_dir / "latest.html").exists()
+
+
+def test_render_ab_report_handles_arm_with_no_successes(tmp_path,
+                                                        isolated_cache_two_stocks):
+    """If one arm has empty per_stock, the report still renders without crashing."""
+    from stockpool.ab import run_ab, render_ab_report
+    from stockpool.ab.runner import ArmResult
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+    # Synthetically empty arm A
+    result.arm_a = ArmResult(
+        name=result.arm_a.name,
+        effective_cfg=result.arm_a.effective_cfg,
+        per_stock=[],
+        failed=[("605589", "synthetic"), ("300750", "synthetic")],
+    )
+    out_path = render_ab_report(result, output_dir=tmp_path / "reports" / "ab")
+    html = out_path.read_text(encoding="utf-8")
+    # Either text variant of "0 succeeded" is acceptable
+    assert ("0 succeeded" in html) or ("0&nbsp;succeeded" in html)
+
+
+def test_compute_diff_table_uses_only_common_stocks(tmp_path,
+                                                     isolated_cache_two_stocks):
+    """Aggregate diff table aggregates over stocks present in BOTH arms."""
+    from stockpool.ab.report import compute_diff_table
+    from stockpool.ab.runner import ArmResult
+    from stockpool.ab import run_ab
+
+    ab_cfg, base_cfg = _ab_setup(tmp_path, isolated_cache_two_stocks)
+    result = run_ab(ab_cfg, base_cfg, base_cfg.stocks, refresh=False)
+
+    # Drop one stock from arm B
+    result.arm_b = ArmResult(
+        name=result.arm_b.name,
+        effective_cfg=result.arm_b.effective_cfg,
+        per_stock=result.arm_b.per_stock[:1],
+        failed=[("300750", "synthetic miss")],
+    )
+    table = compute_diff_table(result.arm_a, result.arm_b)
+    assert table["common_stocks_count"] == 1
+
+
+# ============================================================================
+# F3 PR-C — sizing merge through ArmBacktestOverride
+# ============================================================================
+
+
+def test_arm_sizing_replaces_base_sizing(tmp_path):
+    """When an arm provides sizing, it replaces base.backtest.sizing wholesale."""
+    base = load_config(_write_base_config(tmp_path))
+    arm = ArmOverride(
+        strategy=base.strategy,
+        backtest=ArmBacktestOverride(
+            equity_curve_holding_days=[10],
+            sizing=SizingConfig(
+                type="vol_target",
+                vol_target=VolTargetSizingConfig(reference_vol_annual=0.25),
+            ),
+        ),
+    )
+    eff = build_effective_cfg(base, arm)
+    assert eff.backtest.sizing.type == "vol_target"
+    assert eff.backtest.sizing.vol_target.reference_vol_annual == 0.25
+
+
+def test_arm_without_sizing_inherits_base_sizing(tmp_path):
+    """When arm.sizing is None, base.backtest.sizing carries through."""
+    base = load_config(_write_base_config(tmp_path))
+    base.backtest.sizing = SizingConfig(
+        type="fixed",
+        fixed=FixedSizingConfig(size=0.07),
+    )
+    arm = ArmOverride(
+        strategy=base.strategy,
+        backtest=ArmBacktestOverride(equity_curve_holding_days=[10]),
+    )
+    eff = build_effective_cfg(base, arm)
+    assert eff.backtest.sizing.type == "fixed"
+    assert eff.backtest.sizing.fixed.size == 0.07
+
+
+def test_two_arms_with_different_sizing_stay_isolated(tmp_path):
+    """Different arms produce different effective_cfgs with different content_hash."""
+    base = load_config(_write_base_config(tmp_path))
+    arm_fixed = ArmOverride(
+        strategy=base.strategy,
+        backtest=ArmBacktestOverride(
+            equity_curve_holding_days=[10],
+            sizing=SizingConfig(type="fixed", fixed=FixedSizingConfig(size=0.1)),
+        ),
+    )
+    arm_vol = ArmOverride(
+        strategy=base.strategy,
+        backtest=ArmBacktestOverride(
+            equity_curve_holding_days=[10],
+            sizing=SizingConfig(type="vol_target"),
+        ),
+    )
+    eff_fixed = build_effective_cfg(base, arm_fixed)
+    eff_vol = build_effective_cfg(base, arm_vol)
+    assert eff_fixed.backtest.sizing.type == "fixed"
+    assert eff_vol.backtest.sizing.type == "vol_target"
+    assert eff_fixed.content_hash != eff_vol.content_hash

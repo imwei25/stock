@@ -14,8 +14,16 @@ dist/
 venv/
 
 # Project-specific
-# AKShare 缓存(Parquet),每次跑会重建
-data/
+# AKShare / 行情 Parquet 缓存,每次跑会重建。注意:用 data/* 而不是 data/ —
+# 后者会把整个目录从 git index 排除,导致后面的 ! 例外失效。
+data/*
+# fundamentals 季度数据破例入 git —— baostock 拉一次要数小时(实测
+# 2026-06-07 单 IP 单日能稳定拉到 ~4100 codes,且经常 hang),5 张表合计
+# ~5MB 远低于 git 限,提交后新机器 clone 就能直接用,避免每个 contributor
+# 或 AI session 都等数小时。30 天 staleness 触发后 diff 自然是增量更新。
+!data/fundamentals_*.parquet
+# partial 不入 git(增量 fetch 中间产物)
+data/fundamentals_*.partial.parquet
 # 每日报告归档,体积会涨
 reports/
 *.log

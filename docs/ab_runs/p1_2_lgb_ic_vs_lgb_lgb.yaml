@@ -1,0 +1,52 @@
+base_config: ../../config.yaml
+arms:
+  lgb_ic:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors:
+          - momentum_20
+          - macd_hist
+          - rsi_centered_14
+          - ma_distance_20
+          - vol_ratio_5
+          - boll_position_20
+          - ma_slope_20_5
+          - kdj_j
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: pool
+        share_pool_fit: true
+        embargo_days: 0
+        selector: {type: lightgbm}
+        weighter: {type: ic}
+    backtest:
+      equity_curve_holding_days: [10]
+  lgb_lgb:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors:
+          - momentum_20
+          - macd_hist
+          - rsi_centered_14
+          - ma_distance_20
+          - vol_ratio_5
+          - boll_position_20
+          - ma_slope_20_5
+          - kdj_j
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: pool
+        share_pool_fit: true
+        embargo_days: 0
+        selector: {type: lightgbm}
+        weighter: {type: lightgbm}
+    backtest:
+      equity_curve_holding_days: [10]
