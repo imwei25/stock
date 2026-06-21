@@ -238,32 +238,86 @@ def industry_neutralize_panel(
         )
         return demeaned.T
 
-    # OLS path: build one-hot industry dummies (drop first to avoid singularity)
+    # OLS path (vectorised, PR-T1.1):
+    # 把 [industry_dummies | intercept | log_mcap] 拼成 (T, N, K+2) 三维 X,
+    # 配合 valid_mask 用 einsum 算 X^T X 和 X^T y,np.linalg.solve 一次解 T 个系数。
+    # 与 mcap_neutralize_panel 同范式。
     industries = pd.Series(
         {c: sector_map.get(c, "_unknown_") for c in df.columns},
     )
     dummies = pd.get_dummies(industries, prefix="ind", drop_first=True, dtype=float)
-    # dummies index = codes; columns = ind_<label> minus reference
+    # dummies.index = codes; dummies.columns = ind_<label> minus reference.
 
     log_mcap_aligned = log_mcap.reindex(index=df.index, columns=df.columns)
-    out = df.astype(float).copy()
-    fallback_days = 0
 
-    # Pre-compute group-demean output once for fallback rows
+    # 预计算 group-demean fallback panel 一次,fallback 日按 date 复用。
     legacy_fallback = industry_neutralize_panel(df, sector_map, log_mcap=None)
 
-    for date in df.index:
-        y = df.loc[date]
-        m = log_mcap_aligned.loc[date]
-        X = dummies.copy()
-        X["intercept"] = 1.0
-        X["log_mcap"] = m.values
-        resid, used_ols = _per_day_ols_residual(y, X)
-        if used_ols:
-            out.loc[date] = resid
-        else:
-            out.loc[date] = legacy_fallback.loc[date]
+    T = len(df.index)
+    N = len(df.columns)
+    K = dummies.shape[1]  # 行业 dummy 数(已 drop_first)
+    F = K + 2             # +intercept +log_mcap
+
+    Y = df.astype(float).values                     # (T, N)
+    M = log_mcap_aligned.values                     # (T, N)
+    valid = ~(np.isnan(Y) | np.isnan(M))            # (T, N)
+    n_valid = valid.sum(axis=1)                     # (T,)
+
+    # X shape: (T, N, F);dummies + intercept 在所有 t 上相同,log_mcap 沿 t 变化。
+    # 用广播构造,避免 T 次显式 copy。
+    dummies_TNK = np.broadcast_to(
+        dummies.values[None, :, :], (T, N, K),
+    )                                                # (T, N, K)
+    intercept = np.ones((T, N, 1))                  # (T, N, 1)
+    log_mcap_col = M[:, :, None]                    # (T, N, 1)
+    X = np.concatenate([dummies_TNK, intercept, log_mcap_col], axis=2)  # (T, N, F)
+
+    # invalid 行(NaN in Y 或 M)零化,等价于剔出回归。
+    valid_3d = valid[:, :, None]                    # (T, N, 1)
+    X_masked = np.where(valid_3d, X, 0.0)           # (T, N, F)
+    Y_masked = np.where(valid, Y, 0.0)              # (T, N)
+
+    # Normal equation: XtX (T, F, F), XtY (T, F)
+    XtX = np.einsum("tnf,tng->tfg", X_masked, X_masked)
+    XtY = np.einsum("tnf,tn->tf", X_masked, Y_masked)
+
+    coefs = np.full((T, F), np.nan, dtype=float)
+    fallback_days = 0
+    for t in range(T):
+        if n_valid[t] < 10:
             fallback_days += 1
+            continue
+        try:
+            coefs[t] = np.linalg.solve(XtX[t], XtY[t])
+        except np.linalg.LinAlgError:
+            fallback_days += 1
+
+    # 残差 = Y - X · β 对每个 (t, n) 单独算 (fallback 行的 coefs 仍是 NaN -> resid 全 NaN -> 下面 fallback_t_mask 覆盖)
+    fitted = np.einsum("tnf,tf->tn", X, coefs)       # (T, N)
+    resid = Y - fitted
+
+    fallback_t_mask = np.isnan(coefs[:, 0])          # (T,) — fallback 行
+    # fallback 日 -> 用 legacy_fallback 该天的整行(group demean)。
+    out_vals = np.where(fallback_t_mask[:, None], legacy_fallback.values, resid)
+
+    # 单成员行业处理:与 _per_day_ols_residual 对称 — 若某 dummy 列在 t 日 valid 样本中只有 1 个 hot 码,
+    # 该码的回归系数完全由它自己决定,残差会被静默清零。保留原 Y 以匹配 per-row 语义。
+    # dummies 矩阵列索引 0..K-1 对应 dummies_TNK[:, :, 0..K-1]
+    # valid_dummies[t, k] = valid[t, :] @ dummies.values[:, k] == 该 dummy 列在 t 日有效成员数
+    dummies_vals = dummies.values  # (N, K)
+    # (T, K): 每天每个 dummy 列的 valid 成员数
+    valid_dummy_count = (valid[:, :, None] * dummies_vals[None, :, :]).sum(axis=1)  # (T, K)
+    # (T, K) bool: 哪些 dummy 在 t 日只有 1 个 valid 成员
+    single_member_tk = valid_dummy_count == 1  # (T, K)
+    if single_member_tk.any():
+        # (T, N): 对每个 (t, n),如果 n 所在 dummy 列在 t 日是 single-member,则该 cell 为 True
+        # dummies_vals[n, k] == 1 表示 code n 属于 dummy k;single_member_tk[t, k] 表示该 dummy 在 t 日单成员
+        single_member_tn = (single_member_tk[:, None, :] * dummies_vals[None, :, :]).any(axis=2)  # (T, N)
+        out_vals = np.where(single_member_tn, Y, out_vals)
+
+    # 与原 per-row OLS 一致 — log_mcap 缺但 Y 在的 code 保留原 Y(不残化)。
+    cell_preserve = np.isnan(M) & ~np.isnan(Y)
+    out_vals = np.where(cell_preserve, Y, out_vals)
 
     if fallback_days:
         log.warning(
@@ -271,7 +325,7 @@ def industry_neutralize_panel(
             "(degenerate cross-section); used group demean for those days",
             fallback_days, len(df.index),
         )
-    return out
+    return pd.DataFrame(out_vals, index=df.index, columns=df.columns)
 
 
 def _industry_neutralize_per_day_loop(
