@@ -566,6 +566,7 @@ class MLFactorStrategy(Strategy):
         pipeline: TwoStepPipeline | None = None
         quantiles: dict[str, float] | None = None
         last_fit_bar = -10**9
+        current_month_key: tuple | None = None  # shared_key for the active pipeline
 
         rows: list[dict] = []
         for i in range(n):
@@ -589,6 +590,25 @@ class MLFactorStrategy(Strategy):
                 if fitted is not None:
                     pipeline, quantiles = fitted
                     last_fit_bar = i
+                    current_month_key = shared_key_i
+            elif (
+                shared_key_i is not None
+                and shared_key_i != current_month_key
+                and self._shared_cache is not None
+                and i - cfg.horizon >= cfg.min_train_samples
+            ):
+                # Month's fit may be in cache from prewarm (or a prior stock
+                # in serial mode) even though the cadence trigger did not
+                # fire.  Sync the local pipeline so all stocks use the same
+                # month-canonical fit — this is the invariant that makes
+                # prewarm + parallel produce bit-exact results vs serial.
+                # Guard with min_train_samples to preserve the warmup-period
+                # NaN contract (same condition as the primary refit trigger).
+                cached_month = self._shared_cache.get(shared_key_i)
+                if cached_month is not None:
+                    pipeline, quantiles = cached_month
+                    last_fit_bar = i
+                    current_month_key = shared_key_i
 
             signal = "neutral"
             score_value: float = float("nan")

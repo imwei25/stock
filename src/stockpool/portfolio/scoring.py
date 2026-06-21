@@ -91,11 +91,86 @@ def _serial_loop(legacy_strategy, tasks, score_field, code_iter):
     return series_by_code
 
 
+def _prewarm_monthly_fits(legacy_strategy, panel_data) -> int:
+    """Pre-compute monthly ML fits in the main process so subprocess workers
+    inherit them via the pickled ``_shared_cache``.
+
+    Only applies when: (a) strategy is ``MLFactorStrategy``, (b) it's in
+    pooled + share_pool_fit mode, (c) the shared_cache is a real dict.
+    Otherwise no-op.
+
+    Calls ``generate_signals`` on the first stock in iteration order (the same
+    host that serial mode iterates first via ``panel_data.items()``).  This
+    ensures the cache is populated with **exactly** the same ``(sig, year,
+    month)`` → ``(pipeline, quantiles)`` entries as the serial loop would
+    build — including month-boundary triggered refits — so prewarm + parallel
+    produces a bit-exact score panel compared to no-prewarm + serial mode.
+
+    The previous implementation walked at ``refit_every`` cadence via
+    ``_try_fit`` directly, which missed month-boundary refits and produced
+    different pipeline fits than ``generate_signals``.
+
+    After the walk, drops the ``__pooled_xy_long__`` key from shared_cache
+    so it doesn't bloat the pickle blob sent to workers (workers will
+    rebuild that panel locally — same as today's baseline).
+
+    Returns the number of fits placed into the cache (for log/diagnostic).
+    """
+    # Lazy imports to avoid circular-import surface for non-ML callers.
+    from stockpool.backtesting.strategies import MLFactorStrategy
+
+    if not isinstance(legacy_strategy, MLFactorStrategy):
+        return 0
+    if not legacy_strategy._is_sharing():
+        return 0
+    if legacy_strategy._shared_cache is None:
+        return 0
+    if not panel_data:
+        return 0
+
+    # Use dict iteration order (first key) — this matches what the serial loop
+    # does when iterating panel_data.items(), so prewarm + parallel produces
+    # bit-exact the same score panel as no-prewarm + serial mode.
+    warmup_code = next(iter(panel_data))
+    warmup_strat = legacy_strategy.with_stock(warmup_code)
+    daily = panel_data[warmup_code]
+
+    pre_count = len(legacy_strategy._shared_cache)
+
+    # Call generate_signals rather than walking _try_fit directly.  This
+    # replicates the EXACT same trigger logic (refit_every cadence + month-
+    # boundary `need_month_fit` checks) that the serial scoring loop runs for
+    # the first stock, so the ``(sig, year, month)`` cache entries are
+    # populated with the same pipelines.  Using _try_fit at range(0,n,refit_every)
+    # misses month-boundary refits and produces different training cutoffs.
+    warmup_strat.generate_signals(daily)
+
+    # Drop the heavy long-form pooled panel from the cache before pickle.
+    # Key shape is ``("__pooled_xy_long__", sig)``. Workers will rebuild
+    # locally (same as the pre-prewarm baseline).
+    heavy_keys = [
+        k for k in list(legacy_strategy._shared_cache.keys())
+        if isinstance(k, tuple) and len(k) == 2
+        and k[0] == "__pooled_xy_long__"
+    ]
+    for k in heavy_keys:
+        del legacy_strategy._shared_cache[k]
+
+    n_new = len(legacy_strategy._shared_cache) - pre_count + len(heavy_keys)
+    log.info(
+        "precompute_scores: pre-warmed %d monthly fits from host=%s "
+        "(via generate_signals); dropped %d heavy keys before worker spawn",
+        n_new, warmup_code, len(heavy_keys),
+    )
+    return n_new
+
+
 def precompute_scores_from_legacy(
     legacy_strategy,
     panel_data: Mapping[str, pd.DataFrame],
     score_field: str = "final_score",
     n_workers: int | None = None,
+    prewarm: bool = True,
 ) -> pd.DataFrame:
     """Build a (T × N) score panel by calling ``legacy.generate_signals`` per stock.
 
@@ -107,6 +182,10 @@ def precompute_scores_from_legacy(
         n_workers: number of parallel workers. ``None`` (default) = auto =
             ``min(8, max(1, cpu_count() - 1))``; ``1`` = serial (preserves
             original behavior); higher = ``multiprocessing.Pool`` parallelism.
+        prewarm: When True (default) and ``n_workers > 1``, pre-compute the
+            monthly ML fits in the main process so workers inherit them via
+            the pickled ``_shared_cache``. Set False to disable (verifies
+            equivalence in tests).
 
     Returns:
         ``pd.DataFrame`` indexed by date, columns = codes, values = score.
@@ -134,6 +213,11 @@ def precompute_scores_from_legacy(
             len(panel_data),
         )
         n_workers = 1
+
+    # NEW: prewarm before tasks/Pool setup so the populated cache is what
+    # gets pickled into each worker.
+    if n_workers > 1 and prewarm:
+        _prewarm_monthly_fits(legacy_strategy, panel_data)
 
     tasks = [(code, daily, score_field) for code, daily in panel_data.items()]
 
