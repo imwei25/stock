@@ -882,8 +882,10 @@ def cmd_fetch_universe(args: argparse.Namespace) -> int:
 
 def cmd_factors_analyze(args: argparse.Namespace) -> int:
     """Analyze factors on the pooled panel and write HTML + JSON reports."""
+    import json
+
     from stockpool.factors import list_factors
-    from stockpool.factors_analysis import analyze_factors
+    from stockpool import factors_analysis as _factors_analysis_mod
     from stockpool.factors_analysis_report import render_factor_analysis_report
     from stockpool.panel import build_panel_from_cache
 
@@ -912,7 +914,15 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
     else:
         codes = [s.code for s in cfg.stocks]
 
-    factor_names = list(args.factors) if args.factors else list_factors()
+    if args.factors_file:
+        with open(args.factors_file, "r", encoding="utf-8") as fh:
+            factor_names = list(json.load(fh)["factors"])
+    else:
+        factor_names = list(args.factors) if args.factors else list_factors()
+
+    winsorize_arg = (
+        None if args.no_winsorize else (args.winsorize_low, args.winsorize_high)
+    )
     log.info(
         "Analyzing %d factors over %d stocks (universe=%s)",
         len(factor_names), len(codes), args.universe,
@@ -946,12 +956,14 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
                     "regime index cache missing (%s); skipping regime split", idx_path
                 )
 
-    result = analyze_factors(
+    result = _factors_analysis_mod.analyze_factors(
         panel=panel,
         factor_names=factor_names,
         horizon=args.horizon,
         ic_window=args.ic_window,
         regime_index_close=regime_close,
+        winsorize=winsorize_arg,
+        degenerate_day_unique_ratio_threshold=args.degenerate_threshold,
     )
 
     out_dir = Path(args.output)
@@ -1315,6 +1327,27 @@ def _build_parser() -> argparse.ArgumentParser:
     p_analyze.add_argument(
         "--output", default="reports/factor_analysis",
         help="Output directory (HTML + JSON written here)",
+    )
+    p_analyze.add_argument(
+        "--factors-file", type=str, default=None,
+        help="JSON file with {\"factors\": [...]} listing factor names "
+             "(overrides --factors if both given). Matches `factors pick` output.",
+    )
+    p_analyze.add_argument(
+        "--winsorize-low", type=float, default=0.01,
+        help="Lower quantile for per-day cross-sec winsorize (default 0.01).",
+    )
+    p_analyze.add_argument(
+        "--winsorize-high", type=float, default=0.99,
+        help="Upper quantile for per-day cross-sec winsorize (default 0.99).",
+    )
+    p_analyze.add_argument(
+        "--no-winsorize", action="store_true",
+        help="Disable winsorize on the factor panel before IC.",
+    )
+    p_analyze.add_argument(
+        "--degenerate-threshold", type=float, default=0.01,
+        help="Mark factor-day NaN if nunique/n_valid <= this (default 0.01).",
     )
     p_analyze.set_defaults(func=cmd_factors_analyze)
 

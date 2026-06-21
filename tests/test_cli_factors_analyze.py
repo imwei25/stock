@@ -76,6 +76,80 @@ def test_factors_analyze_cli_writes_outputs(tmp_path, isolated_cache):
     assert payload["horizon"] == 3
 
 
+def test_factors_analyze_cli_reads_factors_file(tmp_path, isolated_cache):
+    """--factors-file restricts the analysis to the listed factors."""
+    cfg_file = _make_config(tmp_path, isolated_cache)
+    sel = tmp_path / "selection.json"
+    sel.write_text(json.dumps({"factors": ["momentum_20", "rsi_centered_14"]}))
+
+    out_dir = tmp_path / "factor_analysis"
+    rc = main([
+        "factors", "analyze",
+        "--config", str(cfg_file),
+        "--universe", "pool",
+        "--factors-file", str(sel),
+        "--horizon", "3",
+        "--output", str(out_dir),
+        "--no-winsorize",
+    ])
+    assert rc == 0
+    json_files = list(out_dir.glob("[0-9]*.json"))
+    assert len(json_files) == 1
+    payload = json.loads(json_files[0].read_text(encoding="utf-8"))
+    assert set(payload["factor_names"]) == {"momentum_20", "rsi_centered_14"}
+
+
+def test_factors_analyze_cli_no_winsorize_disables(tmp_path, isolated_cache, monkeypatch):
+    """--no-winsorize passes winsorize=None to analyze_factors."""
+    cfg_file = _make_config(tmp_path, isolated_cache)
+    captured = {}
+    # Import the symbol that cmd_factors_analyze uses; patch THAT name.
+    # cli.py imports analyze_factors lazily inside cmd_factors_analyze, so we
+    # patch the source module.
+    from stockpool import factors_analysis as _fa
+    real = _fa.analyze_factors
+    def _spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(_fa, "analyze_factors", _spy)
+
+    rc = main([
+        "factors", "analyze",
+        "--config", str(cfg_file),
+        "--universe", "pool",
+        "--factors", "momentum_20",
+        "--horizon", "3",
+        "--output", str(tmp_path / "out"),
+        "--no-winsorize",
+    ])
+    assert rc == 0
+    assert captured.get("winsorize") is None
+
+
+def test_factors_analyze_cli_default_winsorize_passed(tmp_path, isolated_cache, monkeypatch):
+    """Without --no-winsorize, CLI passes the (low, high) tuple."""
+    cfg_file = _make_config(tmp_path, isolated_cache)
+    captured = {}
+    from stockpool import factors_analysis as _fa
+    real = _fa.analyze_factors
+    def _spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(_fa, "analyze_factors", _spy)
+
+    rc = main([
+        "factors", "analyze",
+        "--config", str(cfg_file),
+        "--universe", "pool",
+        "--factors", "momentum_20",
+        "--horizon", "3",
+        "--output", str(tmp_path / "out"),
+    ])
+    assert rc == 0
+    assert captured.get("winsorize") == (0.01, 0.99)
+    assert captured.get("degenerate_day_unique_ratio_threshold") == 0.01
+
+
 def test_factors_pick_by_ic_writes_selection(tmp_path, isolated_cache):
     cfg_file = _make_config(tmp_path, isolated_cache)
     analyze_dir = tmp_path / "factor_analysis"
