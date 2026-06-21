@@ -129,3 +129,109 @@ def test_armresult_primary_curve_empty_when_failed():
     assert arm.primary_curve.empty
     assert arm.primary_metrics == {}
     assert list(arm.trades) == []
+
+
+def _build_minimal_ab(base_cfg, tmp_path):
+    """Build a 2-arm PortfolioABConfig + companion data for parity tests.
+
+    Uses the same pool_data as test_run_portfolio_ab_happy so both arms are
+    deterministic composite_verdict arms with different top_k only — the
+    score panel cache key differs between arms (different content_hash) but
+    each arm's serial vs parallel result must be bitwise equal.
+
+    score_cache_dir is forced to ``tmp_path / "scores"`` so that the
+    serial run writes the parquet files and the parallel run reads them
+    (refresh_scores=False), guaranteeing identical inputs to PortfolioEngine.
+    """
+    import copy
+    import yaml
+
+    # Rebuild base_cfg with score_cache_dir under tmp_path so caches land
+    # in the right place.  The fixture already sets score_cache_dir, so we
+    # can use base_cfg directly — both the serial and parallel call share the
+    # same object reference, which is what we want.
+    pool_data = _seed_panel(["A", "B", "C", "D"])
+    ab_cfg = PortfolioABConfig(
+        base_config="config.yaml",
+        arms={
+            "a": PortfolioArmOverride(strategy={"name": "composite_verdict"}),
+            "b": PortfolioArmOverride(
+                strategy={"name": "composite_verdict"},
+                portfolio_backtest={"portfolio": {"top_k": 1}},
+            ),
+        },
+    )
+    sector_map: dict = {}
+    name_map = {c: c for c in pool_data}
+    return ab_cfg, pool_data, sector_map, name_map
+
+
+def test_parallel_arms_matches_serial(base_cfg, tmp_path):
+    """parallel_arms=True should yield metrics + equity curves identical to serial.
+
+    PR-T1.4: Both arms run concurrently via ProcessPoolExecutor.  Sub-ULP FP
+    drift from subprocess BLAS state is absorbed by rtol=1e-12 (well below
+    cost/slippage noise).
+
+    Strategy: run serial first so score parquet caches are written, then run
+    parallel with refresh_scores=False so each subprocess reads from parquet
+    rather than recomputing, ensuring identical inputs → identical outputs.
+    """
+    import numpy as np
+
+    ab_cfg, pool_data, sector_map, name_map = _build_minimal_ab(base_cfg, tmp_path)
+
+    # Serial run — writes score parquet files under base_cfg.score_cache_dir.
+    res_serial = run_portfolio_ab(
+        ab_cfg, base_cfg, pool_data=pool_data,
+        sector_map=sector_map, name_map=name_map,
+        parallel_arms=False,
+    )
+    # Sanity: serial run succeeded for both arms.
+    for arm_name in ab_cfg.arms:
+        assert not res_serial.arms[arm_name].failed, (
+            f"serial arm '{arm_name}' unexpectedly failed: "
+            f"{res_serial.arms[arm_name].error}"
+        )
+
+    # Parallel run — reads score parquet files written above (refresh_scores=False).
+    res_parallel = run_portfolio_ab(
+        ab_cfg, base_cfg, pool_data=pool_data,
+        sector_map=sector_map, name_map=name_map,
+        parallel_arms=True,
+        refresh_scores=False,
+    )
+    # Sanity: parallel run succeeded for both arms.
+    for arm_name in ab_cfg.arms:
+        assert not res_parallel.arms[arm_name].failed, (
+            f"parallel arm '{arm_name}' failed: "
+            f"{res_parallel.arms[arm_name].error}"
+        )
+
+    # Metric parity — allow rtol=1e-12 to absorb any sub-ULP FP drift.
+    for arm_name in ab_cfg.arms:
+        m_s = res_serial.arms[arm_name].primary_metrics
+        m_p = res_parallel.arms[arm_name].primary_metrics
+        assert set(m_s) == set(m_p), (
+            f"arm '{arm_name}' metric keys differ: serial={set(m_s)} parallel={set(m_p)}"
+        )
+        for k in m_s:
+            v_s, v_p = m_s[k], m_p[k]
+            if isinstance(v_s, float) and np.isnan(v_s):
+                assert isinstance(v_p, float) and np.isnan(v_p), (
+                    f"arm '{arm_name}' metric '{k}': serial=NaN but parallel={v_p}"
+                )
+            else:
+                assert np.isclose(v_s, v_p, rtol=1e-12, atol=0), (
+                    f"arm '{arm_name}' metric '{k}': serial={v_s!r} vs parallel={v_p!r}"
+                )
+
+    # Equity-curve parity.
+    for arm_name in ab_cfg.arms:
+        curve_s = res_serial.arms[arm_name].primary_curve["equity"].values
+        curve_p = res_parallel.arms[arm_name].primary_curve["equity"].values
+        np.testing.assert_allclose(
+            curve_s, curve_p,
+            rtol=1e-12, atol=0, equal_nan=True,
+            err_msg=f"arm '{arm_name}' equity curve differs between serial and parallel",
+        )

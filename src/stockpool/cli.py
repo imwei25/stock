@@ -603,11 +603,19 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
         from stockpool.portfolio.ensemble import StaggeredRunner
         from stockpool.portfolio.report import render_ensemble_report
         log.info("Running staggered ensemble: %d offsets", n_offsets)
+        components = (
+            portfolio_strat, cfg.portfolio_backtest.portfolio, costs,
+            cfg.backtest.risk_free_rate, eligibility, sector_map,
+        )
         runner = StaggeredRunner(
             engine_factory=_make_engine,
+            components=components,
             risk_free_rate=cfg.backtest.risk_free_rate,
         )
-        ensemble = runner.run(portfolio_pool_data, n_offsets=n_offsets)
+        ensemble = runner.run(
+            portfolio_pool_data, n_offsets=n_offsets,
+            parallel=cfg.portfolio_backtest.parallel_staggered,
+        )
         log.info(
             "Ensemble done: %d offsets, ensemble total_return=%+.3f",
             ensemble.n_offsets,
@@ -781,6 +789,7 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
         refresh_scores=args.refresh_scores,
         portfolio_pool_data=portfolio_pool_data,
         n_workers=args.workers,
+        parallel_arms=args.parallel_arms,
     )
     out = render_portfolio_ab_report(result, run_date=run_date, output_dir=out_root)
     log.info("Portfolio AB report written: %s", out)
@@ -1199,6 +1208,10 @@ def _build_parser() -> argparse.ArgumentParser:
                             "training pool + factor_panel, so raising "
                             "this needs ~6 GB RAM headroom per worker). "
                             "Pass 1 to run serial (lowest memory).")
+    p_pab.add_argument(
+        "--parallel-arms", action="store_true",
+        help="Run the two arms concurrently in subprocess (peak memory ~2x single arm).",
+    )
     p_pab.set_defaults(func=cmd_portfolio_ab)
 
     p_fu = sub.add_parser(

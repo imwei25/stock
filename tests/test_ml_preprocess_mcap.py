@@ -271,3 +271,60 @@ def test_apply_pipeline_pe_with_contains_mcap_skips_both():
         log_mcap_panel=log_mcap, n_codes=50,
     )
     pd.testing.assert_frame_equal(out["pe"], df)
+
+
+def test_industry_log_mcap_batch_matches_legacy():
+    """新批量路径 vs 旧 per-day loop 在合成 panel 上 bit-near-exact."""
+    from stockpool.ml.preprocess import (
+        industry_neutralize_panel,
+        _industry_neutralize_per_day_loop,
+    )
+    rng = np.random.default_rng(42)
+    T, N = 50, 200
+    n_industries = 5
+    dates = pd.date_range("2024-01-01", periods=T, freq="D")
+    codes = [f"S{i:04d}" for i in range(N)]
+
+    df = pd.DataFrame(
+        rng.standard_normal((T, N)), index=dates, columns=codes,
+    )
+    # 部分 NaN,触发各种边界
+    df.iloc[5:10, :40] = np.nan          # 头部某些行大面积 NaN -> fallback
+    df.iloc[:, ::17] = np.nan            # 列方向稀疏 NaN
+
+    log_mcap = pd.DataFrame(
+        rng.normal(15.0, 2.0, size=(T, N)), index=dates, columns=codes,
+    )
+    log_mcap.iloc[:, ::23] = np.nan      # 部分 code 在所有天都缺 mcap
+
+    sector_map = {c: f"ind_{i % n_industries}" for i, c in enumerate(codes)}
+
+    out_old = _industry_neutralize_per_day_loop(df, sector_map, log_mcap)
+    out_new = industry_neutralize_panel(df, sector_map, log_mcap)
+
+    # 容差:normal equation vs lstsq 在 condition number 较好时数值近似;
+    # 退化日两条路径都走 group-demean fallback -> 应 bit-exact。
+    np.testing.assert_allclose(
+        out_new.values, out_old.values,
+        rtol=1e-8, atol=1e-10, equal_nan=True,
+    )
+
+
+def test_industry_log_mcap_batch_no_log_mcap_unchanged():
+    """log_mcap=None 路径不能被批量改动影响 — 严格 bit-exact。"""
+    from stockpool.ml.preprocess import (
+        industry_neutralize_panel,
+        _industry_neutralize_per_day_loop,
+    )
+    rng = np.random.default_rng(0)
+    T, N = 20, 30
+    df = pd.DataFrame(
+        rng.standard_normal((T, N)),
+        index=pd.date_range("2024-01-01", periods=T, freq="D"),
+        columns=[f"S{i:04d}" for i in range(N)],
+    )
+    sector_map = {c: f"ind_{i % 3}" for i, c in enumerate(df.columns)}
+
+    out_old = _industry_neutralize_per_day_loop(df, sector_map, log_mcap=None)
+    out_new = industry_neutralize_panel(df, sector_map, log_mcap=None)
+    pd.testing.assert_frame_equal(out_new, out_old, check_exact=True)

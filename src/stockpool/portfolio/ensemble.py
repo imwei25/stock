@@ -15,8 +15,8 @@ Three aggregations come back:
   * ``aggregated_metrics`` — median / min / max of headline metrics across
     offsets, plus the ensemble curve's own metrics.
 
-PR-3 runs offsets serially. ``ProcessPoolExecutor`` parallelisation is in
-scope only as a Spec §12 followup.
+PR-3 runs offsets serially. PR-T1.3 adds opt-in ``parallel=True`` via
+``ProcessPoolExecutor`` when a ``components`` tuple is provided.
 """
 from __future__ import annotations
 
@@ -29,6 +29,24 @@ import pandas as pd
 from stockpool.backtesting.metrics import compute_metrics
 from stockpool.portfolio.engine import PortfolioEngine
 from stockpool.portfolio.result import PortfolioBacktestResult
+
+
+def _run_one_offset_in_subprocess(components, panel_data, k):
+    """Worker (must be top-level for pickle).
+
+    components = (strategy, portfolio_cfg, costs, risk_free_rate,
+                  eligibility, sector_map)
+    """
+    strategy, portfolio_cfg, costs, risk_free_rate, eligibility, sector_map = components
+    engine = PortfolioEngine(
+        strategy=strategy,
+        portfolio_cfg=portfolio_cfg,
+        costs=costs,
+        risk_free_rate=risk_free_rate,
+        eligibility=eligibility,
+        sector_map=sector_map,
+    )
+    return engine.run(panel_data, start_offset=k)
 
 
 @dataclass
@@ -50,26 +68,79 @@ class StaggeredRunner:
 
     Uses an engine factory rather than a single engine because each run
     needs fresh portfolio state (cash + open positions reset).
+
+    PR-T1.3: accepts an optional ``components`` tuple (picklable) enabling
+    ``parallel=True`` execution via ``ProcessPoolExecutor``.
     """
 
     def __init__(
         self,
-        engine_factory: Callable[[], PortfolioEngine],
+        engine_factory: Callable[[], PortfolioEngine] | None = None,
         risk_free_rate: float = 0.02,
+        components: tuple | None = None,
     ):
+        """PR-T1.3: ``components``(可 pickle 元组)是 parallel mode 必需的备用入口。
+        ``engine_factory`` 是串行 mode 的传统入口;两者至少需要一个。
+        """
+        if engine_factory is None and components is None:
+            raise ValueError(
+                "StaggeredRunner needs either engine_factory or components"
+            )
         self._engine_factory = engine_factory
+        self._components = components
         self.risk_free_rate = risk_free_rate
 
     def run(
         self,
         panel_data: Mapping[str, pd.DataFrame],
         n_offsets: int,
+        parallel: bool = False,
     ) -> EnsembleResult:
         if n_offsets < 1:
             raise ValueError(f"n_offsets must be >= 1, got {n_offsets}")
+        if parallel and self._components is not None and n_offsets > 1:
+            try:
+                import concurrent.futures
+                import os
+                max_workers = min(n_offsets, os.cpu_count() or 1)
+                # ProcessPoolExecutor gives real CPU parallelism for the
+                # bar-loop in PortfolioEngine.run (which is GIL-bound Python
+                # — dict lookups, pandas .iloc[], top-K sort). Sub-ULP FP
+                # drift across spawn boundaries is expected and absorbed by
+                # the test's rtol=1e-12 / atol=0 tolerance (well below
+                # cost/slippage noise in any portfolio simulation).
+                with concurrent.futures.ProcessPoolExecutor(
+                    max_workers=max_workers,
+                ) as ex:
+                    # Submit in offset order; collect by k so the result
+                    # list is deterministic regardless of completion order
+                    # (the ensemble mean is FP-order-sensitive).
+                    futures = {
+                        k: ex.submit(
+                            _run_one_offset_in_subprocess,
+                            self._components, panel_data, k,
+                        )
+                        for k in range(n_offsets)
+                    }
+                    results = [futures[k].result() for k in range(n_offsets)]
+                return self._aggregate(results)
+            except Exception as e:  # noqa: BLE001
+                import logging
+                logging.getLogger("stockpool").warning(
+                    "parallel staggered failed (%s); fallback to serial", e,
+                )
+        # Serial path (default; also fallback)
         results: list[PortfolioBacktestResult] = []
         for k in range(n_offsets):
-            engine = self._engine_factory()
+            if self._engine_factory is not None:
+                engine = self._engine_factory()
+            else:
+                # components-only mode: rebuild engine in main process.
+                strategy, portfolio_cfg, costs, rfr, eligibility, sector_map = self._components
+                engine = PortfolioEngine(
+                    strategy=strategy, portfolio_cfg=portfolio_cfg, costs=costs,
+                    risk_free_rate=rfr, eligibility=eligibility, sector_map=sector_map,
+                )
             results.append(engine.run(panel_data, start_offset=k))
         return self._aggregate(results)
 

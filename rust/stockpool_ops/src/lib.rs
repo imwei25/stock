@@ -8,10 +8,11 @@
 //! computation via py.allow_threads, so rayon's per-row parallelism actually
 //! runs in parallel.
 
-use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
+use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 
 mod cs;
+mod decay;
 mod rolling;
 mod util;
 
@@ -77,6 +78,35 @@ fn correlation_py<'py>(
     out.to_pyarray_bound(py)
 }
 
+/// Linearly-weighted moving average. Weights 1..=d (oldest -> newest);
+/// NaN positions drop from numerator + denominator; min_periods = max(1, int(d*0.6)).
+#[pyfunction]
+#[pyo3(name = "decay_linear")]
+fn decay_linear_py<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<'py, f64>,
+    d: usize,
+) -> Bound<'py, PyArray2<f64>> {
+    let view = x.as_array();
+    let out = py.allow_threads(|| decay::decay_linear(view, d));
+    out.to_pyarray_bound(py)
+}
+
+/// Group demean per row. sector_ids[c] = integer sector id for column c
+/// (negative = solo group / not in map).
+#[pyfunction]
+#[pyo3(name = "indneutralize")]
+fn indneutralize_py<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<'py, f64>,
+    sector_ids: PyReadonlyArray1<'py, i32>,
+) -> Bound<'py, PyArray2<f64>> {
+    let x_view = x.as_array();
+    let s_view = sector_ids.as_array();
+    let out = py.allow_threads(|| cs::indneutralize(x_view, s_view));
+    out.to_pyarray_bound(py)
+}
+
 #[pymodule]
 fn stockpool_ops_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rank, m)?)?;
@@ -85,5 +115,7 @@ fn stockpool_ops_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ts_argmin_py, m)?)?;
     m.add_function(wrap_pyfunction!(ts_rank_py, m)?)?;
     m.add_function(wrap_pyfunction!(correlation_py, m)?)?;
+    m.add_function(wrap_pyfunction!(decay_linear_py, m)?)?;
+    m.add_function(wrap_pyfunction!(indneutralize_py, m)?)?;
     Ok(())
 }

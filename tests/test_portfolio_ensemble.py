@@ -107,3 +107,82 @@ def test_invalid_n_offsets_raises():
     panel, factory = _setup()
     with pytest.raises(ValueError):
         StaggeredRunner(factory).run(panel, n_offsets=0)
+
+
+def test_parallel_matches_serial():
+    """parallel=True vs serial 跑 staggered 结果应在 rtol=1e-12 内一致。
+
+    PR-T1.3: StaggeredRunner gains a `components` kwarg + `parallel: bool`
+    on `.run()`. When components is provided and parallel=True, runs offsets
+    via ProcessPoolExecutor; results must match the serial path within
+    rtol=1e-12 (sub-ULP FP drift across spawn boundaries is expected and
+    well below cost/slippage noise in any portfolio simulation).
+    """
+    # Synthetic 8 codes × 40 bars panel.
+    rng = np.random.default_rng(42)
+    dates = pd.bdate_range("2024-01-02", periods=40)
+    codes = [f"S{i:03d}" for i in range(8)]
+    panel = {}
+    for code in codes:
+        prices = 10.0 * np.cumprod(1 + rng.normal(0.0005, 0.02, len(dates)))
+        panel[code] = pd.DataFrame({
+            "date": dates,
+            "open": prices * (1 + rng.normal(0, 0.001, len(dates))),
+            "high": prices * 1.02,
+            "low": prices * 0.98,
+            "close": prices,
+            "volume": rng.integers(int(1e5), int(5e6), len(dates)),
+        })
+
+    # Deterministic score panel.
+    rng_scores = np.random.default_rng(0)
+    scores = pd.DataFrame(
+        rng_scores.standard_normal((len(dates), len(codes))),
+        index=dates, columns=codes,
+    )
+    strategy = PrecomputedScoreStrategy(scores, name="test")
+    portfolio_cfg = PortfolioRunConfig(top_k=3, rebalance_n_days=5)
+    costs = TradeCosts(buy_cost=0.001, sell_cost=0.001)
+
+    components = (strategy, portfolio_cfg, costs, 0.02, None, {})
+
+    def _factory():
+        return PortfolioEngine(
+            strategy=strategy, portfolio_cfg=portfolio_cfg, costs=costs,
+            risk_free_rate=0.02, eligibility=None, sector_map={},
+        )
+
+    # Serial run.
+    runner_serial = StaggeredRunner(_factory, risk_free_rate=0.02)
+    ens_serial = runner_serial.run(panel, n_offsets=3)
+
+    # Parallel run — needs `components` and `parallel=True`.
+    runner_par = StaggeredRunner(
+        _factory, components=components, risk_free_rate=0.02,
+    )
+    ens_par = runner_par.run(panel, n_offsets=3, parallel=True)
+
+    # Equity curve within rtol=1e-12 (sub-ULP FP drift across spawn boundaries
+    # is expected with ProcessPoolExecutor; well below cost/slippage noise).
+    np.testing.assert_allclose(
+        ens_serial.ensemble_curve["equity"].values,
+        ens_par.ensemble_curve["equity"].values,
+        rtol=1e-12, atol=0,
+    )
+    # Envelope within rtol=1e-12.
+    for col in ("min", "p25", "median", "p75", "max"):
+        np.testing.assert_allclose(
+            ens_serial.envelope[col].values,
+            ens_par.envelope[col].values,
+            rtol=1e-12, atol=0,
+        )
+    # Ensemble metrics within rtol=1e-12.
+    s_m = ens_serial.aggregated_metrics["ensemble"]
+    p_m = ens_par.aggregated_metrics["ensemble"]
+    assert set(s_m) == set(p_m)
+    for k in s_m:
+        sv, pv = s_m[k], p_m[k]
+        if isinstance(sv, float) and np.isnan(sv):
+            assert isinstance(pv, float) and np.isnan(pv), f"{k}: NaN mismatch"
+        else:
+            assert np.isclose(sv, pv, rtol=1e-12, atol=0), f"{k}: {sv} vs {pv}"

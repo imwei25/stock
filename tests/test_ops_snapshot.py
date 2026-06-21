@@ -42,6 +42,11 @@ EXPECTED_RUST_DIVERGENCE: dict[str, dict[str, float]] = {
     "alpha_022": {"atol": 0.05, "rtol": 0.5, "max_mismatches": 30},
     "alpha_034": {"atol": 0.05, "rtol": 0.05, "max_mismatches": 80},
     "alpha_040": {"atol": 0.02, "rtol": 0.5, "max_mismatches": 150},
+    # PR-T1.2: decay_linear dispatcher (Rust +=  vs pandas np.dot  differ by
+    # 1 ULP = 2.2e-16). When ts_rank output (exact rationals k/19) goes through
+    # decay_linear then ts_rank again, those 1-ULP diffs can flip rank order by
+    # exactly 1/19 ≈ 0.0526 per cell. Observed: 15 cells / max_diff = 0.0526.
+    "alpha_076": {"atol": 0.06, "rtol": 0.5, "max_mismatches": 30},
 }
 
 _STRICT_ATOL = 1e-9

@@ -93,6 +93,7 @@ PIT 警告:基本面数据按 **公告日(pubDate)** 而非 **报告期末(statD
 # Portfolio AB — 比较两套 portfolio 策略 (与 per-stock `ab` 平行)
 .venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab.yaml
 .venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <name>   # 调试单 arm, stdout 打印指标
+.venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab.yaml --parallel-arms  # 两 arm 并行(subprocess; peak 内存 ~2×)
 ```
 
 `portfolio_ab.yaml` 最小示例(模板见 `portfolio_ab.yaml.example`):
