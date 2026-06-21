@@ -686,12 +686,16 @@ class MLFactorStrategy(Strategy):
         else:
             # Legacy path: rebuild factors from raw OHLCV at every refit.
             # Kept for per_stock-mode tests and CLI paths that don't pre-build
-            # the close panel.
+            # the close panel. ``preprocess_cfg`` mirrors the fast path's
+            # ``strategy_factory.build_factor_panel`` invocation so both paths
+            # produce identical (X, y) regardless of preprocess settings.
             pool = self._build_truncated_pool(daily_df, current_date, current_bar)
             X_pool, y_pool = build_panel(
                 pool, cfg.factors, cfg.horizon,
                 mask_config=cfg.mask,
                 ipo_dates=self._get_ipo_dates(),
+                preprocess_cfg=cfg.preprocess,
+                cache_dir=self._cache_dir,
             )
             if len(X_pool) > 0 and cfg.train_window > 0:
                 X_pool = X_pool.groupby(
@@ -840,7 +844,19 @@ class MLFactorStrategy(Strategy):
         if drop_host and self._current_stock_code in close_sub.columns:
             close_sub = close_sub.drop(columns=[self._current_stock_code])
 
-        fwd = forward_return_panel(close_sub, cfg.horizon)
+        # Mask must be applied here too — pre-stack path (above) already does,
+        # and legacy ``build_panel(..., mask_config=cfg.mask)`` does. Without
+        # this, fallback silently diverges when mask is enabled.
+        mask: pd.DataFrame | None = None
+        if cfg.mask.enabled:
+            ohlcv = self._build_ohlcv_from_pool_data()
+            if ohlcv:
+                from stockpool.panel import compute_tradability_mask
+                mask = compute_tradability_mask(
+                    ohlcv, cfg.mask, ipo_dates=self._get_ipo_dates(),
+                )
+
+        fwd = forward_return_panel(close_sub, cfg.horizon, mask=mask)
         X, y = stack_panel_to_xy(sliced_fp, fwd, dropna=True)
         if len(X) > 0 and cfg.train_window > 0:
             X = X.groupby(
@@ -852,11 +868,13 @@ class MLFactorStrategy(Strategy):
     def _build_truncated_pool(
         self, daily_df: pd.DataFrame, current_date, current_bar: int,
     ) -> dict[str, pd.DataFrame]:
-        """All pool stocks truncated to ``date < current_date``; the host
-        stock's truncation is via row index (``iloc[:current_bar]``).
+        """All pool stocks truncated to ``date <= cutoff_date``.
 
-        When ``share_pool_fit`` 开启,host 不再被排除——训练集对所有 host 一致,
-        换得跨股 fit 复用。host 自己贡献 ~1/N 权重,IC 加权下偏差可忽略。
+        ``share_pool_fit=True``:host 包含在池里,训练集对所有 host 一致,换得跨股
+        fit 复用,host 自己贡献 ~1/N 权重。
+
+        ``share_pool_fit=False``:host 从池里排除,训练集完全不见 host —— 与 fast
+        path (``_build_pooled_xy_from_panel`` 的 drop_host 分支) 保持一致。
         """
         sharing = self._is_sharing()
 
@@ -883,9 +901,6 @@ class MLFactorStrategy(Strategy):
             sub = df.loc[mask].reset_index(drop=True)
             if len(sub) > 0:
                 out[code] = sub
-        if not sharing:
-            host_key = self._current_stock_code or "_self_"
-            out[host_key] = daily_df.iloc[:host_slice_end].reset_index(drop=True)
         return out
 
     def should_enter(self, ctx: BarContext) -> bool:

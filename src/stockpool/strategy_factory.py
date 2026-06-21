@@ -67,6 +67,9 @@ def build_strategy(
     if name == "ml_factor":
         # 在 pooled 模式 + 有 pool_data 时,预算因子面板,让 WQ101 cross-sec
         # 因子在 predict 阶段拿到真实横截面值(否则会退化为 1-stock 常数)。
+        # preprocess_cfg 必须和 prepare_pool→load_or_build_factor_panel 走同一份,
+        # 否则开了 winsorize/zscore/industry/mcap 时这条 caller 自建的 panel 会
+        # 是 raw 值,与生产路径的预处理版不一致(Bug C1)。
         if (
             factor_panel is None
             and cfg.strategy.ml_factor.panel_mode == "pooled"
@@ -74,6 +77,7 @@ def build_strategy(
         ):
             factor_panel = build_factor_panel(
                 cfg.strategy.ml_factor.factors, pool_data,
+                preprocess_cfg=cfg.strategy.ml_factor.preprocess,
                 cache_dir=cfg.data.cache_dir,
             )
         if (

@@ -15,9 +15,11 @@ import numpy as np
 import pandas as pd
 
 from stockpool.backtesting.strategies import MLFactorStrategy
-from stockpool.config import MLFactorConfig, SelectorConfig, WeighterConfig
-from stockpool.ml.dataset import compute_factor_panel
-from stockpool.strategy_factory import build_close_panel
+from stockpool.config import (
+    MaskConfig, MLFactorConfig, PreprocessConfig, SelectorConfig, WeighterConfig,
+)
+from stockpool.ml.dataset import build_panel, compute_factor_panel
+from stockpool.strategy_factory import build_close_panel, build_factor_panel
 
 
 def _stock_df(close: list[float], seed: int = 0) -> pd.DataFrame:
@@ -253,3 +255,233 @@ def test_prestack_cache_skips_redundant_stack_calls(monkeypatch):
     for bar in (60, 80, 100):
         strat._build_pooled_xy_from_panel(pool["A"], bar)
     assert calls["n"] == 1, f"expected 1 stack call, got {calls['n']}"
+
+
+def _stock_df_with_limit_up(seed: int, n_bars: int, hit_bars: tuple[int, ...]) -> pd.DataFrame:
+    """Generate OHLCV with one or more limit-up days at given iloc positions."""
+    rng = np.random.default_rng(seed)
+    rets = rng.standard_normal(n_bars) * 0.02
+    close = 100 * np.exp(np.cumsum(rets))
+    for hit in hit_bars:
+        if hit + 1 < n_bars:
+            close[hit] = close[hit - 1] * 1.099
+            close[hit + 1] = close[hit] * 0.998
+    return pd.DataFrame({
+        "date": pd.date_range("2024-01-02", periods=n_bars, freq="B"),
+        "open":  close * 0.998,
+        "high":  close * 1.005,
+        "low":   close * 0.995,
+        "close": close,
+        "volume": rng.uniform(5e5, 2e6, n_bars),
+    })
+
+
+def test_fast_fallback_applies_mask_when_enabled():
+    """Bug A regression: ``_build_pooled_xy_from_panel`` 的 fallback(无 shared_cache)
+    必须和 pre-stack 路径以及 legacy build_panel 一样应用 mask。
+
+    历史背景:commit 1582b52 只在 ``_ensure_pooled_xy_long`` 加了 mask,fallback 漏掉。
+    导致 shared_cache=None 时(单元测试 + 任何不传 shared_cache 的 caller)
+    fallback 静默忽略 ``cfg.mask``,与生产 fast path 输出不一致。
+    """
+    factors = ["momentum_5"]
+    # Put limit-up days INSIDE the train_window tail so mask actually bites.
+    # current_bar=90, horizon=3, embargo=0 → label_cutoff iloc=86, tail(40)=[47..86].
+    pool = {
+        f"S{i:02d}": _stock_df_with_limit_up(seed=i + 1, n_bars=120, hit_bars=(60, 75))
+        for i in range(5)
+    }
+    factor_panel, close_panel = _make_panels(pool, factors)
+    cfg = MLFactorConfig(
+        factors=factors, horizon=3, train_window=40,
+        min_train_samples=10, refit_every=10, panel_mode="pooled",
+        embargo_days=0, share_pool_fit=True,
+        selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+        mask=MaskConfig(enabled=True, min_listing_days=0),
+    )
+    host_daily = pool["S00"]
+    current_bar = 90
+
+    # Fast pre-stack (with shared_cache → mask applied)
+    strat_pre = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="S00",
+        factor_panel=factor_panel, close_panel=close_panel, shared_cache={},
+    )
+    X_pre, y_pre = strat_pre._build_pooled_xy_from_panel(host_daily, current_bar)
+
+    # Fast fallback (without shared_cache → must still apply mask)
+    strat_fb = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="S00",
+        factor_panel=factor_panel, close_panel=close_panel, shared_cache=None,
+    )
+    X_fb, y_fb = strat_fb._build_pooled_xy_from_panel(host_daily, current_bar)
+
+    # Legacy build_panel with mask
+    strat_legacy = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="S00",
+    )
+    cur_date = host_daily["date"].iloc[current_bar]
+    pool_t = strat_legacy._build_truncated_pool(host_daily, cur_date, current_bar)
+    X_l, y_l = build_panel(pool_t, factors, cfg.horizon, mask_config=cfg.mask)
+    if len(X_l) > 0 and cfg.train_window > 0:
+        X_l = X_l.groupby(level="stock", group_keys=False, sort=False).tail(cfg.train_window)
+        y_l = y_l.loc[X_l.index]
+
+    # Normalize index order: pre-stack returns (date, stock), legacy returns (stock, date).
+    def norm(X, y):
+        if X.index.names[0] == "date":
+            X = X.swaplevel("date", "stock")
+            y = y.swaplevel("date", "stock")
+        return X.sort_index(), y.sort_index()
+
+    Xp, yp = norm(X_pre, y_pre)
+    Xf, yf = norm(X_fb,  y_fb)
+    Xl, yl = norm(X_l,   y_l)
+
+    # All three should have identical row sets.
+    assert set(Xp.index) == set(Xl.index), "pre-stack vs legacy diverge"
+    assert set(Xf.index) == set(Xp.index), (
+        f"fallback skipped mask: {len(set(Xf.index) ^ set(Xp.index))} rows differ"
+    )
+    pd.testing.assert_frame_equal(Xf, Xp, atol=0.0, rtol=0.0)
+    pd.testing.assert_series_equal(yf, yp, check_names=False, atol=0.0, rtol=0.0)
+
+
+def test_legacy_matches_fast_when_share_pool_fit_false():
+    """Bug B regression: 非共享模式下 ``_build_truncated_pool`` 必须也 drop host,
+    与 ``_build_pooled_xy_from_panel`` 一致。
+
+    历史 legacy 通过 ``out[host_key] = daily_df.iloc[:host_slice_end]`` 把 host 重新
+    塞回去,但 fast path 直接 drop host;两路径在非共享下输出不一致。Bug B 已对齐到
+    "两路径都 drop host"(非共享语义本意:训练完全不见 host)。
+    """
+    factors = ["momentum_5"]
+    pool = _make_pool(n_bars=120, n_stocks=5)
+    factor_panel, close_panel = _make_panels(pool, factors)
+    cfg = MLFactorConfig(
+        factors=factors, horizon=3, train_window=40,
+        min_train_samples=10, refit_every=10, panel_mode="pooled",
+        embargo_days=0, share_pool_fit=False,
+        selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    host_daily = pool["A"]
+    current_bar = 90
+
+    # Fast path (drops host)
+    strat_fast = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="A",
+        factor_panel=factor_panel, close_panel=close_panel, shared_cache={},
+    )
+    X_fast, y_fast = strat_fast._build_pooled_xy_from_panel(host_daily, current_bar)
+
+    # Legacy (must also drop host after Bug B fix)
+    strat_legacy = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="A",
+    )
+    cur_date = host_daily["date"].iloc[current_bar]
+    pool_t = strat_legacy._build_truncated_pool(host_daily, cur_date, current_bar)
+    assert "A" not in pool_t, "host must not be in legacy truncated pool when not sharing"
+    X_l, y_l = build_panel(pool_t, factors, cfg.horizon)
+    if len(X_l) > 0 and cfg.train_window > 0:
+        X_l = X_l.groupby(level="stock", group_keys=False, sort=False).tail(cfg.train_window)
+        y_l = y_l.loc[X_l.index]
+
+    def norm(X, y):
+        if X.index.names[0] == "date":
+            X = X.swaplevel("date", "stock")
+            y = y.swaplevel("date", "stock")
+        return X.sort_index(), y.sort_index()
+
+    Xf, yf = norm(X_fast, y_fast)
+    Xl, yl = norm(X_l, y_l)
+    assert "A" not in Xf.index.get_level_values("stock"), "fast must not include host"
+    assert "A" not in Xl.index.get_level_values("stock"), "legacy must not include host"
+    assert set(Xf.index) == set(Xl.index)
+    pd.testing.assert_frame_equal(Xf, Xl, atol=0.0, rtol=0.0)
+    pd.testing.assert_series_equal(yf, yl, check_names=False, atol=0.0, rtol=0.0)
+
+
+def test_preprocess_applied_consistently_across_paths():
+    """Bug C regression: preprocess (zscore) 必须在 fast pre-stack / fast fallback /
+    legacy ``build_panel`` 三路径下产出相同 (X, y)。
+
+    历史背景:``ml/dataset.py:build_panel`` 不接 preprocess_cfg,只算 raw 因子;
+    ``prepare_pool`` 把 preprocess 包进 ``factor_panel`` 灌给 fast path。
+    当用户开 preprocess 时 fast 用预处理值、legacy 用 raw 值,语义分裂。
+    现在 ``build_panel`` 也接 preprocess_cfg → 三路径对齐。
+    """
+    factors = ["momentum_5", "rsi_centered_14"]
+    pool = _make_pool(n_bars=120, n_stocks=10)  # ≥ default min_pool_size? no, but we override
+    preprocess = PreprocessConfig(zscore=True, min_pool_size=1)
+    # Fast path inputs: preprocessed factor_panel (as prepare_pool builds it).
+    factor_panel_processed = build_factor_panel(
+        factors, pool, preprocess_cfg=preprocess,
+    )
+    close_panel = build_close_panel(pool)
+    cfg = MLFactorConfig(
+        factors=factors, horizon=3, train_window=40,
+        min_train_samples=10, refit_every=10, panel_mode="pooled",
+        embargo_days=0, share_pool_fit=True,
+        preprocess=preprocess,
+        selector=SelectorConfig(type="lasso"),
+        weighter=WeighterConfig(type="ic"),
+    )
+    host_daily = pool["A"]
+    current_bar = 90
+
+    # Fast pre-stack (shared_cache)
+    strat_pre = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="A",
+        factor_panel=factor_panel_processed, close_panel=close_panel,
+        shared_cache={},
+    )
+    X_pre, y_pre = strat_pre._build_pooled_xy_from_panel(host_daily, current_bar)
+
+    # Fast fallback (no shared_cache)
+    strat_fb = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="A",
+        factor_panel=factor_panel_processed, close_panel=close_panel,
+        shared_cache=None,
+    )
+    X_fb, y_fb = strat_fb._build_pooled_xy_from_panel(host_daily, current_bar)
+
+    # Legacy build_panel with preprocess
+    strat_legacy = MLFactorStrategy(
+        cfg=cfg, pool_data=pool, current_stock_code="A",
+    )
+    cur_date = host_daily["date"].iloc[current_bar]
+    pool_t = strat_legacy._build_truncated_pool(host_daily, cur_date, current_bar)
+    X_l, y_l = build_panel(
+        pool_t, factors, cfg.horizon, preprocess_cfg=preprocess,
+    )
+    if len(X_l) > 0 and cfg.train_window > 0:
+        X_l = X_l.groupby(level="stock", group_keys=False, sort=False).tail(cfg.train_window)
+        y_l = y_l.loc[X_l.index]
+
+    def norm(X, y):
+        if X.index.names[0] == "date":
+            X = X.swaplevel("date", "stock")
+            y = y.swaplevel("date", "stock")
+        return X.sort_index(), y.sort_index()
+
+    Xp, yp = norm(X_pre, y_pre)
+    Xf, yf = norm(X_fb,  y_fb)
+    Xl, yl = norm(X_l,   y_l)
+
+    assert set(Xp.index) == set(Xl.index), "pre-stack vs legacy diverge"
+    assert set(Xf.index) == set(Xl.index), "fallback vs legacy diverge"
+    pd.testing.assert_frame_equal(Xp, Xl, atol=1e-9, rtol=1e-9)
+    pd.testing.assert_frame_equal(Xf, Xl, atol=1e-9, rtol=1e-9)
+    pd.testing.assert_series_equal(yp, yl, check_names=False, atol=1e-9, rtol=1e-9)
+    pd.testing.assert_series_equal(yf, yl, check_names=False, atol=1e-9, rtol=1e-9)
+
+    # Sanity: with zscore on, the factor values are NOT the same as the raw
+    # build_panel(preprocess_cfg=None) — otherwise this test wouldn't be testing
+    # anything meaningful.
+    X_raw, _ = build_panel(pool_t, factors, cfg.horizon)
+    if len(X_raw) > 0 and cfg.train_window > 0:
+        X_raw = X_raw.groupby(level="stock", group_keys=False, sort=False).tail(cfg.train_window)
+    X_raw = X_raw.sort_index()
+    assert not X_raw.equals(Xl), "raw vs preprocessed should differ when zscore=True"
