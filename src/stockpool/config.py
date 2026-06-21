@@ -581,6 +581,10 @@ class PortfolioBacktestConfig(BaseModel):
         default_factory=PortfolioEligibilityConfig,
     )
     staggered_starts: int = Field(default=1, ge=1, le=20)
+    parallel_staggered: bool = False
+    """PR-T1.3: 并行跑 N 个 staggered offset(opt-in)。需要 engine 的
+    components (strategy, portfolio_cfg, costs, risk_free_rate, eligibility,
+    sector_map) 全部可 pickle — 通常都满足。失败 fallback 串行 + warning。"""
     score_cache_dir: str = "data/portfolio_scores"
     # Portfolio universe override. ``None`` (default) → use the full training
     # pool (``load_universe_cache`` of cache_dir) as portfolio universe too.
