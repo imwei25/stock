@@ -182,3 +182,67 @@ class TestTsArgmaxArgmin:
 # scoped for a follow-up. Until then, correlation stays on pandas in the
 # dispatcher, so no Layer A test belongs here.
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# decay_linear — Rust impl in rust/stockpool_ops/src/decay.rs.
+# ops.py currently re-exports _ops_py.decay_linear (not wired through
+# dispatcher yet), so we test stockpool_ops_rs.decay_linear directly
+# against the pandas oracle _ops_py.decay_linear.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_rust = ops._rust  # stockpool_ops_rs module (or None when Rust unavailable)
+
+
+@pytest.mark.parametrize("T,N,d", [
+    (50, 20, 5),
+    (30, 50, 10),
+    (10, 5, 3),
+])
+def test_decay_linear_happy(T, N, d):
+    rng = np.random.default_rng(42)
+    arr = rng.standard_normal((T, N))
+    df = _frame(arr)
+    rust_out = pd.DataFrame(
+        _rust.decay_linear(np.ascontiguousarray(arr), d),
+        index=df.index, columns=df.columns,
+    )
+    py_out = _ops_py.decay_linear(df, d)
+    np.testing.assert_allclose(
+        rust_out.values, py_out.values,
+        rtol=1e-7, atol=1e-9, equal_nan=True,
+    )
+
+
+def test_decay_linear_all_nan_window():
+    arr = np.full((10, 3), np.nan)
+    arr[5:, :] = 1.0  # latter half valid
+    rust_out = _rust.decay_linear(arr, 5)
+    py_out = _ops_py.decay_linear(_frame(arr), 5).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_decay_linear_partial_window_mid():
+    """d=20, single column with 12 valid data points (mid-partial window) — weight tail alignment boundary."""
+    arr = np.arange(1, 13, dtype=float).reshape(12, 1)
+    rust_out = _rust.decay_linear(np.ascontiguousarray(arr), 20)
+    py_out = _ops_py.decay_linear(_frame(arr), 20).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_decay_linear_constant_input():
+    arr = np.full((10, 3), 5.0)
+    rust_out = _rust.decay_linear(arr, 3)
+    py_out = _ops_py.decay_linear(_frame(arr), 3).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_decay_linear_scattered_nan():
+    rng = np.random.default_rng(7)
+    arr = rng.standard_normal((30, 10))
+    # 10% scattered NaN
+    nan_mask = rng.random((30, 10)) < 0.1
+    arr[nan_mask] = np.nan
+    rust_out = _rust.decay_linear(np.ascontiguousarray(arr), 5)
+    py_out = _ops_py.decay_linear(_frame(arr), 5).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
