@@ -137,6 +137,26 @@
 
 ---
 
+## #8 — T2.2 副作用:legacy 测试期望 bit-exact,Rust+Kahan 引入 1 ULP 差 + dtype 漂移修复
+
+- **日期**:2026-06-21
+- **Task**:Tier 2 T2.2 合 main 后回归
+- **背景**:T2.2 把 `industry_neutralize_panel(log_mcap=None)` 从 pandas `groupby().transform("mean")` 切到 `ops.indneutralize`(Rust + Kahan)。T2.2 agent verify 在 T=50/N=200 panel 上 bit-exact 通过(`rtol=0, atol=0`),但合 main 后 PR-T1.1 留下来的 `test_industry_log_mcap_batch_no_log_mcap_unchanged` 在 T=20/N=30 上炸了。
+- **触发问题(两个)**:
+  1. **数值层**:Kahan 顺序 vs pandas groupby 内部 reduction 顺序在小 panel(N=10/sector)上有 ~1 ULP 漂移(max_rel ≈ 1.3e-14)。
+  2. **Index dtype**:Rust 路径 `pd.DataFrame(out_arr, index=df.index, ...)` 保留 `DatetimeIndex(datetime64[ns])`;legacy pandas 路径 `df.T → groupby → transform → .T` 链上 datetime64 退化为 `Index(object dtype)`。这是 legacy 路径的**历史隐式 bug**,T2.2 顺便修复。
+- **修正**(commit 即将):
+  - 把 `assert_frame_equal(check_exact=True)` 改成:
+    - 值层 `assert_allclose(rtol=1e-13, atol=1e-15)` 容许 1 ULP
+    - Index 标签层 `pd.DatetimeIndex(...) == pd.DatetimeIndex(...)` 规范化 dtype 后比较
+    - Columns 简单 list 等值比对
+- **审计**:
+  - 用户验收"结果没变或精度内改变":数值 1 ULP 在精度内 ✓;index dtype 是 bug 修复 ✓
+  - 副作用 = `_industry_neutralize_per_day_loop` 现在退役只用做 PR-T1.1 OLS 路径(`log_mcap≠None` 那分支)的测试参考,不再做 group demean 的真理(因为 dtype bug)
+- **教训**:future Tier 2 agent 验证 minimal example 时,**不要只测一个 panel size** — 至少 2 个量级(50×200 + 20×30 + 200×500),覆盖 N/sector 个数差异引出的 reduction 顺序差。
+
+---
+
 ## 决策原则备忘
 
 - **战术偏差**(FP / 库选型 / 容差):recommender 选好就执行,写入本日志即可。

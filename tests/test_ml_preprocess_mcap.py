@@ -311,7 +311,16 @@ def test_industry_log_mcap_batch_matches_legacy():
 
 
 def test_industry_log_mcap_batch_no_log_mcap_unchanged():
-    """log_mcap=None 路径不能被批量改动影响 — 严格 bit-exact。"""
+    """log_mcap=None 路径在 ULP 精度内等价于 legacy pandas oracle。
+
+    T2.2 后 industry_neutralize_panel(log_mcap=None) 切到 Rust ops.indneutralize
+    (Kahan 累加),与 legacy pandas groupby().transform('mean') 数学等价但
+    FP 归约顺序不同 → 1 ULP 级差(4-5e-16)。rtol=1e-14 容许这点漂移。
+
+    另外 Rust 路径保留了 input 的 DatetimeIndex dtype(legacy oracle 的
+    transpose+groupby+transpose 链上 datetime64 → object 是历史隐式行为)—
+    这里不检查 dtype。
+    """
     from stockpool.ml.preprocess import (
         industry_neutralize_panel,
         _industry_neutralize_per_day_loop,
@@ -327,4 +336,13 @@ def test_industry_log_mcap_batch_no_log_mcap_unchanged():
 
     out_old = _industry_neutralize_per_day_loop(df, sector_map, log_mcap=None)
     out_new = industry_neutralize_panel(df, sector_map, log_mcap=None)
-    pd.testing.assert_frame_equal(out_new, out_old, check_exact=True)
+    np.testing.assert_allclose(
+        out_new.values, out_old.values, rtol=1e-13, atol=1e-15, equal_nan=True,
+    )
+    # Normalise both to DatetimeIndex(values) — object-dtype Timestamps and
+    # DatetimeIndex give the same .values list after normalisation.
+    assert (
+        pd.DatetimeIndex(out_new.index)
+        == pd.DatetimeIndex(out_old.index)
+    ).all()
+    assert list(out_new.columns) == list(out_old.columns)
