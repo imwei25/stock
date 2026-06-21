@@ -77,7 +77,7 @@ python -m stockpool ab-pool show    # 渲染 reports/ab_pool.html + 浏览器打
 | `src/stockpool/indicators.py` | MA / MACD / KDJ / RSI / BOLL / Volume / Breakout |
 | `src/stockpool/signals.py` | `detect_signals` + `score_triggers` + `combine_daily_weekly` + `verdict_of` |
 | `src/stockpool/factors/` | **连续因子库**(Factor ABC + 注册表 + 内置技术因子 + **WQ101**) |
-| `src/stockpool/factors/ops.py` | **WQ 算子库** (ts_rank / rank / decay_linear / indneutralize / ...). 7 个 hot op 自动 dispatch 到 Rust 加速 (`stockpool_ops_rs`),装好 maturin + `maturin develop --release --manifest-path rust/stockpool_ops/Cargo.toml` 后自动启用;`STOCKPOOL_USE_PYTHON_OPS=1` 强制回 pandas oracle (`_ops_py.py`)。 |
+| `src/stockpool/factors/ops.py` | **WQ 算子库** (ts_rank / rank / decay_linear / indneutralize / ...). 9 个 hot op 自动 dispatch 到 Rust 加速 (`stockpool_ops_rs`,PR-T1.2 新增 `decay_linear` + `indneutralize` dispatcher),装好 maturin + `maturin develop --release --manifest-path rust/stockpool_ops/Cargo.toml` 后自动启用;`STOCKPOOL_USE_PYTHON_OPS=1` 强制回 pandas oracle (`_ops_py.py`)。注:correlation dispatcher 保留 pandas oracle 路径(Rust Welford 与 pandas rolling.corr 对近±1 相关的 FP 路径不同,改走 Rust 会导致下游 rank 级联 NaN 差异,超出 snapshot 容差)。 |
 | `src/stockpool/factors/wq101.py` | **WorldQuant 101 Formulaic Alphas** 全套实现 (Alpha001..Alpha101) |
 | `src/stockpool/factors/original_stats.py` | rolling 直接统计量族(close_std/skew/kurt、volume_skew/kurt、range_std、volume_std),~25 变体 |
 | `src/stockpool/factors/ewma.py` | EWMA 平滑动量/波动/换手 族(halflife 参数化),~15 变体 |

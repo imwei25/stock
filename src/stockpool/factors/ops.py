@@ -10,9 +10,10 @@ NaN 安全:窗口期不足或除零返回 NaN。
 
 WQ101 论文里 ``rank(x)`` 默认就是横截面 (每天对所有股票打分),与本库一致。
 
-实现拆分:7 个 hot op(correlation / ts_rank / decay_linear / ts_std /
-ts_argmax / ts_argmin / rank / indneutralize)的 pandas oracle 在
-``_ops_py.py`` —— 后续 PR 会接 Rust 加速,本模块的公开 API 不变。
+实现拆分:9 个 hot op(correlation / ts_rank / decay_linear / ts_std /
+ts_argmax / ts_argmin / rank / indneutralize + PR-T1.2 新增的
+decay_linear + indneutralize Rust dispatcher)的 pandas oracle 在
+``_ops_py.py`` —— Rust 加速通过 dispatcher 透明接入,本模块的公开 API 不变。
 """
 from __future__ import annotations
 
@@ -23,11 +24,6 @@ import pandas as pd
 
 import os as _os
 
-from ._ops_py import (
-    correlation,
-    decay_linear,
-    indneutralize,
-)
 from . import _ops_py as _py_ops
 
 # Rust dispatch hook. PR-2 ports `rank` only; later PRs will add more
@@ -101,6 +97,64 @@ def ts_rank(x, d):
         out_arr = _rust.ts_rank(arr, int(d))
         return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
     return _py_ops.ts_rank(x, d)
+
+
+def decay_linear(x, d):
+    """Linearly-weighted moving average; weights 1..=d normalised, NaN-safe."""
+    if _USE_RUST:
+        import numpy as _np
+        import pandas as _pd
+        arr = _np.ascontiguousarray(x.to_numpy(), dtype=_np.float64)
+        out_arr = _rust.decay_linear(arr, int(d))
+        return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
+    return _py_ops.decay_linear(x, d)
+
+
+def indneutralize(x, group):
+    """Cross-sectional demean within sector groups (NaN-safe).
+
+    ``group`` 是 ``{code -> sector_name}`` dict 或 Series — dispatcher 内部
+    会编成 ``int32`` sector_id 数组喂给 Rust 端;缺 map 的 code 编 -1。
+    """
+    if _USE_RUST:
+        import numpy as _np
+        import pandas as _pd
+        # 编码:连续 0..K-1;缺 map -> -1。
+        if hasattr(group, "to_dict"):
+            gmap = group.to_dict()
+        else:
+            gmap = dict(group)
+        label_to_id: dict[str, int] = {}
+        sector_ids = _np.empty(len(x.columns), dtype=_np.int32)
+        for i, c in enumerate(x.columns):
+            s = gmap.get(c)
+            if s is None:
+                sector_ids[i] = -1
+                continue
+            if s not in label_to_id:
+                label_to_id[s] = len(label_to_id)
+            sector_ids[i] = label_to_id[s]
+        arr = _np.ascontiguousarray(x.to_numpy(), dtype=_np.float64)
+        out_arr = _rust.indneutralize(arr, sector_ids)
+        return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
+    return _py_ops.indneutralize(x, group)
+
+
+def correlation(x, y, d):
+    """Per-column trailing-d Pearson correlation (cleaned for FP noise).
+
+    NOTE: Always uses the pandas oracle path (``_ops_py.correlation``),
+    even when Rust is available. The Rust Welford accumulator and pandas'
+    internal rolling formula have slightly different FP overflow behaviour
+    for near-±1 inputs (window × 2-3 elements with tied rank values), which
+    cascades through downstream ``rank()`` calls into large NaN-placement
+    differences in factors like ``alpha_015`` / ``alpha_045``. The snapshot
+    test is generated against the pandas oracle, so Rust dispatch for
+    ``correlation`` would require regenerating the snapshot — a larger scope
+    change outside this PR. ``decay_linear`` and ``indneutralize`` are
+    dispatched to Rust as planned.
+    """
+    return _py_ops.correlation(x, y, d)
 
 
 __all__ = [

@@ -90,15 +90,24 @@ pub fn indneutralize(
     Zip::from(out.axis_iter_mut(Axis(0)))
         .and(x.axis_iter(Axis(0)))
         .par_for_each(|mut out_row, in_row| {
+            // Kahan compensated summation per sector to match pandas' groupby
+            // numerically-stable reduce path (avoids ULP divergence that would
+            // cascade through downstream rank() calls).
             let mut sum_by_sector = vec![0.0f64; n_buckets];
+            let mut comp_by_sector = vec![0.0f64; n_buckets];  // Kahan compensator
             let mut cnt_by_sector = vec![0usize; n_buckets];
             for (c, v) in in_row.iter().enumerate() {
                 let sid = sector_ids[c];
                 if sid < 0 || !v.is_finite() {
                     continue;
                 }
-                sum_by_sector[sid as usize] += *v;
-                cnt_by_sector[sid as usize] += 1;
+                let s = sid as usize;
+                // Kahan step
+                let y = *v - comp_by_sector[s];
+                let t = sum_by_sector[s] + y;
+                comp_by_sector[s] = (t - sum_by_sector[s]) - y;
+                sum_by_sector[s] = t;
+                cnt_by_sector[s] += 1;
             }
             for (c, v) in in_row.iter().enumerate() {
                 if !v.is_finite() {
