@@ -225,18 +225,15 @@ def industry_neutralize_panel(
         raise ValueError("sector_map is empty; cannot industry-neutralize")
 
     if log_mcap is None:
-        # Legacy fast path — group demean (bit-for-bit unchanged).
-        industries = pd.Series(
-            {c: sector_map.get(c, "_unknown_") for c in df.columns},
-            name="industry",
-        )
-        transposed = df.T.copy()
-        transposed["__industry__"] = industries
-        date_cols = [c for c in transposed.columns if c != "__industry__"]
-        demeaned = transposed.groupby("__industry__")[date_cols].transform(
-            lambda s: s - s.mean()
-        )
-        return demeaned.T
+        # PR-T2.2: delegate to ops.indneutralize (Rust-dispatched, Kahan-bit-exact
+        # vs pandas groupby().transform("mean")). Maps unmapped codes into the
+        # "_unknown_" bucket so they're demeaned TOGETHER (matching the original
+        # legacy semantics — ops.indneutralize's solo-group behavior for missing
+        # keys would not match the legacy behavior).
+        from stockpool.factors.ops import indneutralize as _indneutralize_op
+        # Build a mapping with explicit "_unknown_" fallback for unmapped codes.
+        full_map = {c: sector_map.get(c, "_unknown_") for c in df.columns}
+        return _indneutralize_op(df, full_map)
 
     # OLS path (vectorised, PR-T1.1):
     # 把 [industry_dummies | intercept | log_mcap] 拼成 (T, N, K+2) 三维 X,
