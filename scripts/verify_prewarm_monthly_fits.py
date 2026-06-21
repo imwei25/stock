@@ -1,33 +1,27 @@
-"""Verify: _prewarm_monthly_fits fires and produces a deterministic cached
-score panel when used with n_workers > 1.
+"""Verify that prewarm + parallel produces bit-exact scores as serial mode.
 
-Key facts about the prewarm design:
-- prewarm walks the longest-history stock at refit_every cadence, populating
-  _shared_cache[(sig, year, month)] for each month encountered.
-- Workers inherit this cache via pickle and skip those monthly fits.
-- The prewarm intentionally uses its own cutoff dates (based on the host
-  stock's bar indices at range(0,n,refit_every)), NOT the exact cutoff dates
-  that would be used during generate_signals.  This means prewarm=True and
-  prewarm=False can produce different score values — the goal is not result
-  equivalence but rather that each worker reuses ONE set of fits instead of
-  computing its own.
+Strict invariant (as of the fix after commit 84e2ee9):
+    precompute_scores_from_legacy(legacy, panel, n_workers=1, prewarm=False)
+    ==
+    precompute_scores_from_legacy(legacy, panel, n_workers=2, prewarm=True)
 
-What we verify here:
-  1. _prewarm_monthly_fits fires: n_warmed > 0.
-  2. Cache is non-empty, heavy (__pooled_xy_long__) keys removed.
-  3. Two successive calls with prewarm=True + n_workers=1 (serial) produce
-     identical panels (determinism check — prewarm is no-op for n_workers=1).
-  4. Two successive calls with prewarm=True + n_workers=2 produce identical
-     panels (determinism: same host stock + same fits → same worker output).
+Both must agree within rtol=1e-12, atol=0 (bit-exact up to IEEE754 rounding).
+
+The fix switches _prewarm_monthly_fits from max(panel_data, key=len) to
+next(iter(panel_data)) — the same implicit host that the serial loop uses
+when iterating panel_data.items() — so the canonical monthly fits are
+identical and score panels are bit-exact.
 
 Usage:
     .venv/Scripts/python.exe scripts/verify_prewarm_monthly_fits.py
 
-Passes if final assertion prints OK.
+Passes if final line prints OK.
 """
 from __future__ import annotations
 
 import logging
+import sys
+
 import numpy as np
 import pandas as pd
 
@@ -103,10 +97,12 @@ def _make_strategy(
 
 def main():
     factors = ["momentum_5", "momentum_10"]
-    # Use >= 20 stocks so the <20 short-circuit in precompute_scores does not fire.
+    # Use >= 20 stocks so the <20 short-circuit in precompute_scores does not
+    # force serial even when n_workers=2.
     pool = {f"S{i:03d}": _stock_df(n_bars=200, seed=i) for i in range(25)}
+    log.info("Panel: %d stocks × 200 bars; factors=%s", len(pool), factors)
 
-    # ── Test 1: prewarm actually fires ──────────────────────────────────────
+    # ── Test 1: _prewarm_monthly_fits actually fires and caches ──────────────
     log.info("=== Test 1: _prewarm_monthly_fits populates cache ===")
     sc1: dict = {}
     strat1 = _make_strategy(pool, factors, sc1)
@@ -114,7 +110,7 @@ def main():
 
     n_warmed = _prewarm_monthly_fits(strat1, pool)
 
-    assert n_warmed > 0, f"Expected ≥1 fit warmed, got {n_warmed}"
+    assert n_warmed > 0, f"Expected >=1 fit warmed, got {n_warmed}"
     assert len(sc1) > 0, "cache should be non-empty after prewarm"
     heavy = [k for k in sc1 if isinstance(k, tuple) and k[0] == "__pooled_xy_long__"]
     assert len(heavy) == 0, f"heavy keys not removed after prewarm: {heavy}"
@@ -123,67 +119,13 @@ def main():
         n_warmed, len(sc1),
     )
 
-    # ── Test 2: n_workers=1 serial determinism ──────────────────────────────
-    log.info("=== Test 2: n_workers=1 serial determinism ===")
-    sc_a: dict = {}
-    strat_a = _make_strategy(pool, factors, sc_a)
-    panel_a1 = precompute_scores_from_legacy(
-        strat_a, pool, n_workers=1, prewarm=False,
-    )
+    # ── Test 2: no-op guards still work ─────────────────────────────────────
+    log.info("=== Test 2: _prewarm_monthly_fits no-op guards ===")
 
-    sc_b: dict = {}
-    strat_b = _make_strategy(pool, factors, sc_b)
-    panel_a2 = precompute_scores_from_legacy(
-        strat_b, pool, n_workers=1, prewarm=False,
-    )
-
-    ci = panel_a1.index.intersection(panel_a2.index)
-    cc = sorted(panel_a1.columns.intersection(panel_a2.columns))
-    np.testing.assert_allclose(
-        panel_a1.loc[ci, cc].values,
-        panel_a2.loc[ci, cc].values,
-        rtol=1e-12, atol=0, equal_nan=True,
-    )
-    log.info("Test 2 OK: serial runs are identical; shape=%s", (len(ci), len(cc)))
-
-    # ── Test 3: prewarm=True n_workers=2 determinism ─────────────────────────
-    # Two identical prewarm+parallel runs should produce the same panel:
-    # both use the same host stock for prewarm → same monthly fits →
-    # same worker outputs.
-    log.info("=== Test 3: prewarm=True n_workers=2 determinism ===")
-    sc_p1: dict = {}
-    strat_p1 = _make_strategy(pool, factors, sc_p1)
-    panel_p1 = precompute_scores_from_legacy(
-        strat_p1, pool, n_workers=2, prewarm=True,
-    )
-
-    sc_p2: dict = {}
-    strat_p2 = _make_strategy(pool, factors, sc_p2)
-    panel_p2 = precompute_scores_from_legacy(
-        strat_p2, pool, n_workers=2, prewarm=True,
-    )
-
-    ci2 = panel_p1.index.intersection(panel_p2.index)
-    cc2 = sorted(panel_p1.columns.intersection(panel_p2.columns))
-    np.testing.assert_allclose(
-        panel_p1.loc[ci2, cc2].values,
-        panel_p2.loc[ci2, cc2].values,
-        rtol=1e-12, atol=0, equal_nan=True,
-    )
-    log.info(
-        "Test 3 OK: prewarm=True n_workers=2 is deterministic; shape=%s",
-        (len(ci2), len(cc2)),
-    )
-
-    # ── Test 4: no-op guards ────────────────────────────────────────────────
-    log.info("=== Test 4: _prewarm_monthly_fits no-op guards ===")
-
-    # Non-MLFactorStrategy → 0
     class _DummyStrategy:
         pass
     assert _prewarm_monthly_fits(_DummyStrategy(), pool) == 0
 
-    # _is_sharing() = False (per_stock mode)
     cfg_per_stock = MLFactorConfig(
         factors=factors, horizon=3, train_window=60, min_train_samples=30,
         refit_every=20, panel_mode="per_stock",
@@ -192,7 +134,6 @@ def main():
     s_per = MLFactorStrategy(cfg=cfg_per_stock, pool_data=pool, shared_cache={})
     assert _prewarm_monthly_fits(s_per, pool) == 0
 
-    # shared_cache = None → 0
     cfg_ok = MLFactorConfig(
         factors=factors, horizon=3, train_window=60, min_train_samples=30,
         refit_every=20, panel_mode="pooled", embargo_days=0, share_pool_fit=True,
@@ -201,11 +142,55 @@ def main():
     s_nocache = MLFactorStrategy(cfg=cfg_ok, pool_data=pool, shared_cache=None)
     assert _prewarm_monthly_fits(s_nocache, pool) == 0
 
-    log.info("Test 4 OK: all no-op guards pass")
+    log.info("Test 2 OK: all no-op guards pass")
+
+    # ── Test 3: STRICT INVARIANT — serial == parallel+prewarm (bit-exact) ────
+    # This is the core regression: prior to the fix, _prewarm_monthly_fits
+    # used max(panel_data, key=len) as the host, which differs from the
+    # first key in iteration order that the serial loop implicitly uses.
+    # After the fix, both paths use next(iter(panel_data)), so the monthly
+    # Lasso fits are identical and score panels are bit-exact.
+    log.info("=== Test 3: serial (n_workers=1, prewarm=False) == parallel (n_workers=2, prewarm=True) ===")
+
+    # Run A: ground truth — serial, no prewarm
+    log.info("  Run A: n_workers=1, prewarm=False …")
+    sc_a: dict = {}
+    strat_a = _make_strategy(pool, factors, sc_a)
+    score_a = precompute_scores_from_legacy(
+        strat_a, pool, n_workers=1, prewarm=False,
+    )
+    log.info("  score_a shape=%s, NaN%%=%.1f%%", score_a.shape,
+             score_a.isna().mean().mean() * 100)
+
+    # Run B: prewarm + parallel
+    log.info("  Run B: n_workers=2, prewarm=True …")
+    sc_b: dict = {}
+    strat_b = _make_strategy(pool, factors, sc_b)
+    score_b = precompute_scores_from_legacy(
+        strat_b, pool, n_workers=2, prewarm=True,
+    )
+    log.info("  score_b shape=%s, NaN%%=%.1f%%", score_b.shape,
+             score_b.isna().mean().mean() * 100)
+
+    common_idx = score_a.index.intersection(score_b.index)
+    common_cols = sorted(score_a.columns.intersection(score_b.columns))
+    if len(common_idx) == 0 or len(common_cols) == 0:
+        log.error("No common rows/cols between runs — aborting.")
+        sys.exit(1)
+
+    a = score_a.loc[common_idx, common_cols].sort_index()
+    b = score_b.loc[common_idx, common_cols].sort_index()
+
+    np.testing.assert_allclose(
+        a.values, b.values, rtol=1e-12, atol=0, equal_nan=True,
+    )
+    log.info(
+        "Test 3 OK: bit-exact match; shape=%s", a.shape,
+    )
 
     print(
-        f"OK: prewarm=True == prewarm=False (rtol=1e-12, atol=0); "
-        f"shape={panel_a1.loc[ci, cc].shape}; n_warmed={n_warmed}"
+        f"\nOK: serial (n_workers=1, prewarm=False) == parallel (n_workers=2, prewarm=True) "
+        f"bit-exact within rtol=1e-12; shape={a.shape}"
     )
 
 

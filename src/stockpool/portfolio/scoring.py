@@ -99,9 +99,16 @@ def _prewarm_monthly_fits(legacy_strategy, panel_data) -> int:
     pooled + share_pool_fit mode, (c) the shared_cache is a real dict.
     Otherwise no-op.
 
-    Walks the longest-history stock at ``cfg.refit_every`` cadence, calling
-    ``_try_fit`` at each refit bar — populating the cache with one
-    ``(sig, year, month)`` entry per refit bar.
+    Calls ``generate_signals`` on the first stock in iteration order (the same
+    host that serial mode iterates first via ``panel_data.items()``).  This
+    ensures the cache is populated with **exactly** the same ``(sig, year,
+    month)`` → ``(pipeline, quantiles)`` entries as the serial loop would
+    build — including month-boundary triggered refits — so prewarm + parallel
+    produces a bit-exact score panel compared to no-prewarm + serial mode.
+
+    The previous implementation walked at ``refit_every`` cadence via
+    ``_try_fit`` directly, which missed month-boundary refits and produced
+    different pipeline fits than ``generate_signals``.
 
     After the walk, drops the ``__pooled_xy_long__`` key from shared_cache
     so it doesn't bloat the pickle blob sent to workers (workers will
@@ -111,7 +118,6 @@ def _prewarm_monthly_fits(legacy_strategy, panel_data) -> int:
     """
     # Lazy imports to avoid circular-import surface for non-ML callers.
     from stockpool.backtesting.strategies import MLFactorStrategy
-    from stockpool.ml.dataset import forward_return
 
     if not isinstance(legacy_strategy, MLFactorStrategy):
         return 0
@@ -122,23 +128,22 @@ def _prewarm_monthly_fits(legacy_strategy, panel_data) -> int:
     if not panel_data:
         return 0
 
-    # Pick the longest-history stock as the "host" for the warm-up walk.
-    warmup_code = max(panel_data, key=lambda c: len(panel_data[c]))
+    # Use dict iteration order (first key) — this matches what the serial loop
+    # does when iterating panel_data.items(), so prewarm + parallel produces
+    # bit-exact the same score panel as no-prewarm + serial mode.
+    warmup_code = next(iter(panel_data))
     warmup_strat = legacy_strategy.with_stock(warmup_code)
     daily = panel_data[warmup_code]
-    cfg = warmup_strat.cfg
 
     pre_count = len(legacy_strategy._shared_cache)
 
-    X_full = warmup_strat._build_x_full(daily)
-    y_full = forward_return(daily, cfg.horizon)
-
-    n = len(daily)
-    refit_attempts = 0
-    for i in range(0, n, cfg.refit_every):
-        if i - cfg.horizon >= cfg.min_train_samples:
-            warmup_strat._try_fit(daily, X_full, y_full, i)
-            refit_attempts += 1
+    # Call generate_signals rather than walking _try_fit directly.  This
+    # replicates the EXACT same trigger logic (refit_every cadence + month-
+    # boundary `need_month_fit` checks) that the serial scoring loop runs for
+    # the first stock, so the ``(sig, year, month)`` cache entries are
+    # populated with the same pipelines.  Using _try_fit at range(0,n,refit_every)
+    # misses month-boundary refits and produces different training cutoffs.
+    warmup_strat.generate_signals(daily)
 
     # Drop the heavy long-form pooled panel from the cache before pickle.
     # Key shape is ``("__pooled_xy_long__", sig)``. Workers will rebuild
@@ -153,9 +158,9 @@ def _prewarm_monthly_fits(legacy_strategy, panel_data) -> int:
 
     n_new = len(legacy_strategy._shared_cache) - pre_count + len(heavy_keys)
     log.info(
-        "precompute_scores: pre-warmed %d monthly fits (%d refit attempts) "
-        "from host=%s; dropped %d heavy keys before worker spawn",
-        n_new, refit_attempts, warmup_code, len(heavy_keys),
+        "precompute_scores: pre-warmed %d monthly fits from host=%s "
+        "(via generate_signals); dropped %d heavy keys before worker spawn",
+        n_new, warmup_code, len(heavy_keys),
     )
     return n_new
 
