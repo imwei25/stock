@@ -46,3 +46,7 @@ rust/**/target/
 rust/**/*.pyd
 rust/**/*.dll
 rust/**/Cargo.lock
+
+# Local dev utility scripts (per-machine, not project logic)
+scripts/_*.ps1
+scripts/probe_*.py
