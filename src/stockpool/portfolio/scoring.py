@@ -114,9 +114,15 @@ def precompute_scores_from_legacy(
         skipped. If *all* codes fail, returns an empty frame.
     """
     if n_workers is None:
-        # Leave one core for OS / parent process; cap at 8 to keep
-        # per-worker strategy pickle memory in check.
-        n_workers = max(1, min(8, (os.cpu_count() or 1) - 1))
+        # Conservative default: each Pool worker on Windows (spawn) gets a
+        # fresh deep-copy of legacy_strategy via pickle — that includes the
+        # full pool_data + factor_panel + close_panel dicts (~hundreds of
+        # MB per worker for a 4358-stock training pool). Each worker also
+        # independently rebuilds `_ensure_pooled_xy_long` (~5 GB long-form
+        # DataFrame in pooled mode), so total memory ≈ n_workers × ~6 GB.
+        # Default to 3 keeps us under ~20 GB worker memory on a 32 GB box;
+        # users can raise via the --workers CLI flag if they have headroom.
+        n_workers = max(1, min(3, (os.cpu_count() or 1) - 1))
 
     tasks = [(code, daily, score_field) for code, daily in panel_data.items()]
 

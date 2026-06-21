@@ -770,6 +770,7 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
             pool_data=pool_data, sector_map=sector_map, name_map=name_map,
             refresh_scores=args.refresh_scores,
             portfolio_pool_data=portfolio_pool_data,
+            n_workers=args.workers,
         )
         _print_portfolio_arm_stdout(arm_result)
         return 0
@@ -779,6 +780,7 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
         sector_map=sector_map, name_map=name_map,
         refresh_scores=args.refresh_scores,
         portfolio_pool_data=portfolio_pool_data,
+        n_workers=args.workers,
     )
     out = render_portfolio_ab_report(result, run_date=run_date, output_dir=out_root)
     log.info("Portfolio AB report written: %s", out)
@@ -1191,6 +1193,12 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Bypass data/portfolio_scores cache for both arms")
     p_pab.add_argument("--arm", default=None,
                        help="Debug: run only one arm; prints metrics to stdout, no HTML")
+    p_pab.add_argument("--workers", type=int, default=None,
+                       help="Parallel workers for precompute_scores "
+                            "(default: 3; each pickles ~hundreds MB of "
+                            "training pool + factor_panel, so raising "
+                            "this needs ~6 GB RAM headroom per worker). "
+                            "Pass 1 to run serial (lowest memory).")
     p_pab.set_defaults(func=cmd_portfolio_ab)
 
     p_fu = sub.add_parser(
