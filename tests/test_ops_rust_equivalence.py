@@ -246,3 +246,78 @@ def test_decay_linear_scattered_nan():
     rust_out = _rust.decay_linear(np.ascontiguousarray(arr), 5)
     py_out = _ops_py.decay_linear(_frame(arr), 5).values
     np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# indneutralize — Rust impl in rust/stockpool_ops/src/lib.rs.
+# ops._rust.indneutralize(arr, sector_ids) takes an int32 sector_id array
+# where -1 means "solo group" (code not in sector_map).
+# Tested directly against _ops_py.indneutralize (pandas oracle).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _encode_sectors(codes, sector_map):
+    """{code -> str sector} -> int32 array; codes missing from map get -1."""
+    label_to_id: dict[str, int] = {}
+    sector_ids = np.empty(len(codes), dtype=np.int32)
+    for i, c in enumerate(codes):
+        s = sector_map.get(c)
+        if s is None:
+            sector_ids[i] = -1
+            continue
+        if s not in label_to_id:
+            label_to_id[s] = len(label_to_id)
+        sector_ids[i] = label_to_id[s]
+    return sector_ids
+
+
+@pytest.mark.parametrize("T,N,n_sec", [
+    (20, 30, 3),
+    (50, 100, 8),
+    (5, 12, 2),
+])
+def test_indneutralize_happy(T, N, n_sec):
+    rng = np.random.default_rng(1)
+    arr = rng.standard_normal((T, N))
+    codes = [f"S{i:04d}" for i in range(N)]
+    sector_map = {c: f"ind_{i % n_sec}" for i, c in enumerate(codes)}
+    sector_ids = _encode_sectors(codes, sector_map)
+    rust_out = _rust.indneutralize(np.ascontiguousarray(arr), sector_ids)
+    py_out = _ops_py.indneutralize(pd.DataFrame(arr, columns=codes), sector_map).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_indneutralize_with_nan():
+    rng = np.random.default_rng(2)
+    arr = rng.standard_normal((10, 8))
+    arr[0:3, 0] = np.nan
+    arr[5, :] = np.nan
+    codes = [f"S{i}" for i in range(8)]
+    sector_map = {c: ("A" if i < 4 else "B") for i, c in enumerate(codes)}
+    sector_ids = _encode_sectors(codes, sector_map)
+    rust_out = _rust.indneutralize(np.ascontiguousarray(arr), sector_ids)
+    py_out = _ops_py.indneutralize(pd.DataFrame(arr, columns=codes), sector_map).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_indneutralize_missing_code_solo_group():
+    """Codes not in sector_map -> Rust sector_id=-1 -> output 0 (self-demean)."""
+    rng = np.random.default_rng(3)
+    arr = rng.standard_normal((5, 4))
+    codes = ["A", "B", "C", "D"]
+    sector_map = {"A": "x", "B": "x"}  # C, D not in map
+    sector_ids = _encode_sectors(codes, sector_map)
+    rust_out = _rust.indneutralize(np.ascontiguousarray(arr), sector_ids)
+    py_out = _ops_py.indneutralize(pd.DataFrame(arr, columns=codes), sector_map).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_indneutralize_single_member_group():
+    """Single-member industry -> mean = self -> demeaned = 0."""
+    arr = np.array([[1.0, 2.0, 3.0]])
+    codes = ["A", "B", "C"]
+    sector_map = {"A": "x", "B": "y", "C": "z"}  # each code is its own group
+    sector_ids = _encode_sectors(codes, sector_map)
+    rust_out = _rust.indneutralize(np.ascontiguousarray(arr), sector_ids)
+    py_out = _ops_py.indneutralize(pd.DataFrame(arr, columns=codes), sector_map).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
