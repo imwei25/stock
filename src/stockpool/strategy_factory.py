@@ -150,6 +150,11 @@ def build_factor_panel(
     """
     from stockpool.ml.dataset import compute_factor_panel
     from stockpool.ml import preprocess as preproc_mod
+    from stockpool._instrumentation import checkpoint, panel_size_mb
+
+    checkpoint("build_factor_panel: start", extra={
+        "n_stocks": len(pool_data), "n_factors": len(factor_names),
+    })
 
     # 1) 把每股 daily_df → date-indexed,按列拼成宽表
     per_stock: dict[str, pd.DataFrame] = {}
@@ -167,8 +172,16 @@ def build_factor_panel(
             {code: d[field].reindex(idx) for code, d in per_stock.items()},
             index=idx,
         )
+    checkpoint("build_factor_panel: OHLCV wide panel built", extra={
+        "T": len(idx), "N": len(per_stock),
+        "ohlcv_mb": panel_size_mb(panel),
+    })
 
     raw = compute_factor_panel(panel, factor_names)
+    checkpoint("build_factor_panel: compute_factor_panel done", extra={
+        "n_factors_built": len(raw),
+        "raw_mb": panel_size_mb(raw),
+    })
     if preprocess_cfg is None or preproc_mod._is_all_off(preprocess_cfg):
         return raw
 
@@ -190,10 +203,15 @@ def build_factor_panel(
             from stockpool.ml.mcap import build_log_mcap_panel
             log_mcap_panel = build_log_mcap_panel(panel, cache_dir=cache_dir)
 
-    return preproc_mod.apply_preprocess_pipeline(
+    checkpoint("build_factor_panel: before preprocess_pipeline")
+    out = preproc_mod.apply_preprocess_pipeline(
         raw, preprocess_cfg, sector_map=sector_map, factor_types=types_map,
         n_codes=len(pool_data), log_mcap_panel=log_mcap_panel,
     )
+    checkpoint("build_factor_panel: preprocess done", extra={
+        "preprocessed_mb": panel_size_mb(out),
+    })
+    return out
 
 
 def _fundamentals_latest_mtime(cache_dir: str | Path | None) -> str | None:

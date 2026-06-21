@@ -49,15 +49,35 @@ def _worker_init(strategy, sector_map):
     _WORKER_STRATEGY = strategy
     from stockpool.factors.context import set_sector_map
     set_sector_map(sector_map or {})
+    from stockpool._instrumentation import checkpoint, reset_clock
+    reset_clock()
+    checkpoint("worker_init: pickle inflated + sector_map restored")
+
+
+# Module-global, per-worker counter so we can sample a checkpoint on the
+# first task each worker handles (worker memory after first inflate is the
+# OOM-likely peak).
+_WORKER_STOCKS_SEEN: int = 0
 
 
 def _score_one_stock(args):
     """Worker task: returns ``(code, series_or_None, err_msg_or_None)``."""
+    global _WORKER_STOCKS_SEEN
     code, daily, score_field = args
+    _WORKER_STOCKS_SEEN += 1
+    if _WORKER_STOCKS_SEEN == 1:
+        from stockpool._instrumentation import checkpoint
+        checkpoint(f"worker first stock start ({code})")
     try:
         sig = _WORKER_STRATEGY.generate_signals(daily)  # type: ignore[union-attr]
     except Exception as e:  # noqa: BLE001 — failure-isolation contract
         return (code, None, f"generate_signals failed: {e}")
+    if _WORKER_STOCKS_SEEN == 1:
+        from stockpool._instrumentation import checkpoint
+        checkpoint(
+            f"worker first stock done ({code}) "
+            f"— peak after _ensure_pooled_xy_long + first generate_signals"
+        )
     if score_field not in sig.columns:
         return (code, None, f"missing {score_field!r} in generate_signals output")
     if "date" not in sig.columns:
@@ -192,6 +212,8 @@ def precompute_scores_from_legacy(
         Codes whose ``generate_signals`` raises or omits ``score_field`` are
         skipped. If *all* codes fail, returns an empty frame.
     """
+    from stockpool._instrumentation import checkpoint, pool_data_size_mb
+    checkpoint("precompute_scores_from_legacy: entry")
     if n_workers is None:
         # Conservative default: each Pool worker on Windows (spawn) gets a
         # fresh deep-copy of legacy_strategy via pickle — that includes the
@@ -217,9 +239,17 @@ def precompute_scores_from_legacy(
     # NEW: prewarm before tasks/Pool setup so the populated cache is what
     # gets pickled into each worker.
     if n_workers > 1 and prewarm:
+        checkpoint("before _prewarm_monthly_fits")
         _prewarm_monthly_fits(legacy_strategy, panel_data)
+        checkpoint("after _prewarm_monthly_fits", extra={
+            "shared_cache_size": len(legacy_strategy._shared_cache or {}),
+        })
 
     tasks = [(code, daily, score_field) for code, daily in panel_data.items()]
+    checkpoint("tasks built", extra={
+        "n_tasks": len(tasks),
+        "pool_data_mb": pool_data_size_mb(panel_data),
+    })
 
     try:
         from tqdm import tqdm
@@ -251,11 +281,13 @@ def precompute_scores_from_legacy(
         # init (see _worker_init for why this is required on spawn).
         from stockpool.factors.context import get_sector_map
         parent_sector_map = get_sector_map()
+        checkpoint("before Pool() spawn — parent peak before pickle")
         with Pool(
             processes=n_workers,
             initializer=_worker_init,
             initargs=(legacy_strategy, parent_sector_map),
         ) as pool:
+            checkpoint("Pool() spawned — workers initialised")
             for code, series, err in pool.imap_unordered(_score_one_stock, tasks):
                 if err is not None:
                     log.warning("score panel: %s %s; skip", code, err)
@@ -265,6 +297,7 @@ def precompute_scores_from_legacy(
                     progress.update(1)
         if progress is not None:
             progress.close()
+        checkpoint("Pool() exited", extra={"n_done": len(series_by_code)})
 
     if not series_by_code:
         return pd.DataFrame()

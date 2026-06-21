@@ -444,7 +444,9 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     from stockpool.portfolio.report import render_portfolio_report
     from stockpool.portfolio.scoring import precompute_scores_from_legacy
     from stockpool.portfolio.strategy import PrecomputedScoreStrategy
+    from stockpool._instrumentation import checkpoint, panel_size_mb, pool_data_size_mb
 
+    checkpoint("cmd_portfolio_backtest: start")
     cfg = load_config(args.config)
     if not cfg.portfolio_backtest.enabled:
         log.error(
@@ -503,6 +505,10 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     if not pool_data:
         log.error("No usable stock data; aborting.")
         return 1
+    checkpoint("pool_data loaded", extra={
+        "n_stocks": len(pool_data),
+        "pool_size_mb": pool_data_size_mb(pool_data),
+    })
 
     # ---- sector map (PR-2) ----
     # Only meaningful if max_per_industry is set; load anyway for stability
@@ -511,6 +517,7 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     log.info("Sector map: %d codes mapped", len(sector_map))
     from stockpool.factors.context import set_sector_map
     set_sector_map(sector_map)
+    checkpoint("sector_map loaded", extra={"n_mapped": len(sector_map)})
 
     # ---- Decouple portfolio universe from training pool (optional) ----
     # See PortfolioBacktestConfig.universe_codes. Default None = use full
@@ -538,10 +545,16 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     close_panel = None
     if cfg.strategy.name == "ml_factor" and cfg.strategy.ml_factor.panel_mode == "pooled":
         from stockpool.strategy_factory import load_or_build_factor_panel
+        checkpoint("before load_or_build_factor_panel")
         factor_panel, close_panel = load_or_build_factor_panel(
             cfg.strategy.ml_factor.factors, pool_data, cfg.data.cache_dir,
             preprocess_cfg=cfg.strategy.ml_factor.preprocess,
         )
+        checkpoint("factor_panel + close_panel ready", extra={
+            "n_factors": len(factor_panel) if factor_panel else 0,
+            "fp_size_mb": panel_size_mb(factor_panel) if factor_panel else 0.0,
+            "close_size_mb": (close_panel.memory_usage(deep=False).sum() / (1024 ** 2)) if close_panel is not None else 0.0,
+        })
 
     shared_cache: dict = {}
     legacy = build_strategy(
@@ -551,6 +564,7 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
         close_panel=close_panel,
         shared_cache=shared_cache,
     )
+    checkpoint("build_strategy done")
 
     # Score-panel cache: keyed by cfg.content_hash. Spec §6.5 accepts the
     # known suboptimality that changing top_k also invalidates (no partial
@@ -561,12 +575,17 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     if score_path.exists() and not args.refresh_scores:
         log.info("Loading cached score panel: %s", score_path)
         score_panel = pd.read_parquet(score_path)
+        checkpoint("score_panel loaded from cache", extra={"shape": score_panel.shape})
     else:
         log.info(
             "Precomputing score panel over %d stocks (portfolio universe) ...",
             len(portfolio_pool_data),
         )
+        checkpoint("before precompute_scores_from_legacy", extra={
+            "n_portfolio": len(portfolio_pool_data),
+        })
         score_panel = precompute_scores_from_legacy(legacy, portfolio_pool_data)
+        checkpoint("after precompute_scores_from_legacy", extra={"shape": score_panel.shape})
         if score_panel.empty:
             log.error("Score panel is empty (all stocks failed).")
             return 1
