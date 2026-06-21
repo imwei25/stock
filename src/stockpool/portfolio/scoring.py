@@ -91,11 +91,81 @@ def _serial_loop(legacy_strategy, tasks, score_field, code_iter):
     return series_by_code
 
 
+def _prewarm_monthly_fits(legacy_strategy, panel_data) -> int:
+    """Pre-compute monthly ML fits in the main process so subprocess workers
+    inherit them via the pickled ``_shared_cache``.
+
+    Only applies when: (a) strategy is ``MLFactorStrategy``, (b) it's in
+    pooled + share_pool_fit mode, (c) the shared_cache is a real dict.
+    Otherwise no-op.
+
+    Walks the longest-history stock at ``cfg.refit_every`` cadence, calling
+    ``_try_fit`` at each refit bar — populating the cache with one
+    ``(sig, year, month)`` entry per refit bar.
+
+    After the walk, drops the ``__pooled_xy_long__`` key from shared_cache
+    so it doesn't bloat the pickle blob sent to workers (workers will
+    rebuild that panel locally — same as today's baseline).
+
+    Returns the number of fits placed into the cache (for log/diagnostic).
+    """
+    # Lazy imports to avoid circular-import surface for non-ML callers.
+    from stockpool.backtesting.strategies import MLFactorStrategy
+    from stockpool.ml.dataset import forward_return
+
+    if not isinstance(legacy_strategy, MLFactorStrategy):
+        return 0
+    if not legacy_strategy._is_sharing():
+        return 0
+    if legacy_strategy._shared_cache is None:
+        return 0
+    if not panel_data:
+        return 0
+
+    # Pick the longest-history stock as the "host" for the warm-up walk.
+    warmup_code = max(panel_data, key=lambda c: len(panel_data[c]))
+    warmup_strat = legacy_strategy.with_stock(warmup_code)
+    daily = panel_data[warmup_code]
+    cfg = warmup_strat.cfg
+
+    pre_count = len(legacy_strategy._shared_cache)
+
+    X_full = warmup_strat._build_x_full(daily)
+    y_full = forward_return(daily, cfg.horizon)
+
+    n = len(daily)
+    refit_attempts = 0
+    for i in range(0, n, cfg.refit_every):
+        if i - cfg.horizon >= cfg.min_train_samples:
+            warmup_strat._try_fit(daily, X_full, y_full, i)
+            refit_attempts += 1
+
+    # Drop the heavy long-form pooled panel from the cache before pickle.
+    # Key shape is ``("__pooled_xy_long__", sig)``. Workers will rebuild
+    # locally (same as the pre-prewarm baseline).
+    heavy_keys = [
+        k for k in list(legacy_strategy._shared_cache.keys())
+        if isinstance(k, tuple) and len(k) == 2
+        and k[0] == "__pooled_xy_long__"
+    ]
+    for k in heavy_keys:
+        del legacy_strategy._shared_cache[k]
+
+    n_new = len(legacy_strategy._shared_cache) - pre_count + len(heavy_keys)
+    log.info(
+        "precompute_scores: pre-warmed %d monthly fits (%d refit attempts) "
+        "from host=%s; dropped %d heavy keys before worker spawn",
+        n_new, refit_attempts, warmup_code, len(heavy_keys),
+    )
+    return n_new
+
+
 def precompute_scores_from_legacy(
     legacy_strategy,
     panel_data: Mapping[str, pd.DataFrame],
     score_field: str = "final_score",
     n_workers: int | None = None,
+    prewarm: bool = True,
 ) -> pd.DataFrame:
     """Build a (T × N) score panel by calling ``legacy.generate_signals`` per stock.
 
@@ -107,6 +177,10 @@ def precompute_scores_from_legacy(
         n_workers: number of parallel workers. ``None`` (default) = auto =
             ``min(8, max(1, cpu_count() - 1))``; ``1`` = serial (preserves
             original behavior); higher = ``multiprocessing.Pool`` parallelism.
+        prewarm: When True (default) and ``n_workers > 1``, pre-compute the
+            monthly ML fits in the main process so workers inherit them via
+            the pickled ``_shared_cache``. Set False to disable (verifies
+            equivalence in tests).
 
     Returns:
         ``pd.DataFrame`` indexed by date, columns = codes, values = score.
@@ -134,6 +208,11 @@ def precompute_scores_from_legacy(
             len(panel_data),
         )
         n_workers = 1
+
+    # NEW: prewarm before tasks/Pool setup so the populated cache is what
+    # gets pickled into each worker.
+    if n_workers > 1 and prewarm:
+        _prewarm_monthly_fits(legacy_strategy, panel_data)
 
     tasks = [(code, daily, score_field) for code, daily in panel_data.items()]
 
