@@ -545,3 +545,129 @@ def test_analyze_factors_marks_degenerate_days_nan():
     assert hasattr(r, "degenerate_day_ratio")
     ratio = r.degenerate_day_ratio["degenerate_test"]
     assert 0.4 < ratio <= 0.55, f"expected ~50% degenerate, got {ratio}"
+
+
+def test_analyze_factors_all_degenerate_ratio_one(monkeypatch):
+    """Factor constant across all days → degenerate_day_ratio == 1.0."""
+    import numpy as np
+    import pandas as pd
+    from stockpool.factors_analysis import analyze_factors
+    from stockpool.factors.registry import _REGISTRY, FactorSpec
+    from stockpool.factors.base import Factor
+
+    dates = pd.date_range("2024-01-01", periods=30, freq="B")
+    codes = [f"S{i:03d}" for i in range(100)]
+    rng = np.random.default_rng(0)
+    close = pd.DataFrame(
+        np.cumprod(1 + rng.normal(0, 0.01, (30, 100)), axis=0),
+        index=dates, columns=codes,
+    )
+    panel = {"open": close, "high": close, "low": close, "close": close,
+             "volume": pd.DataFrame(1.0, index=dates, columns=codes)}
+
+    class _AllConstFactor(Factor):
+        sources = ("test",); types = ("cross_sectional",)
+        description = "all-constant factor"
+        @property
+        def name(self): return "all_const_test"
+        def compute(self, panel):
+            return pd.DataFrame(7.0, index=panel["close"].index,
+                                columns=panel["close"].columns)
+
+    monkeypatch.setitem(_REGISTRY, "all_const_test", FactorSpec(
+        base_name="all_const_test", cls=_AllConstFactor,
+        sources=("test",), types=("cross_sectional",), description="",
+    ))
+    r = analyze_factors(panel, ["all_const_test"], horizon=2, winsorize=None)
+    assert r.daily_ic["all_const_test"].isna().all()
+    assert r.degenerate_day_ratio["all_const_test"] == 1.0
+
+
+def test_analyze_factors_zero_degenerate_ratio(monkeypatch):
+    """Factor with fully unique cross-section every day → ratio == 0.0."""
+    import numpy as np
+    import pandas as pd
+    from stockpool.factors_analysis import analyze_factors
+    from stockpool.factors.registry import _REGISTRY, FactorSpec
+    from stockpool.factors.base import Factor
+
+    dates = pd.date_range("2024-01-01", periods=30, freq="B")
+    codes = [f"S{i:03d}" for i in range(100)]
+    rng = np.random.default_rng(1)
+    close = pd.DataFrame(
+        np.cumprod(1 + rng.normal(0, 0.01, (30, 100)), axis=0),
+        index=dates, columns=codes,
+    )
+    panel = {"open": close, "high": close, "low": close, "close": close,
+             "volume": pd.DataFrame(1.0, index=dates, columns=codes)}
+
+    class _RankFactor(Factor):
+        sources = ("test",); types = ("cross_sectional",)
+        description = "rank factor (always 100 unique values)"
+        @property
+        def name(self): return "rank_test"
+        def compute(self, panel):
+            return panel["close"].rank(axis=1)
+
+    monkeypatch.setitem(_REGISTRY, "rank_test", FactorSpec(
+        base_name="rank_test", cls=_RankFactor,
+        sources=("test",), types=("cross_sectional",), description="",
+    ))
+    r = analyze_factors(panel, ["rank_test"], horizon=2, winsorize=None)
+    assert r.degenerate_day_ratio["rank_test"] == 0.0
+
+
+def test_factor_analysis_result_roundtrip_preserves_degenerate_ratio(tmp_path):
+    """to_dict / from_dict round-trips degenerate_day_ratio."""
+    import json
+    import numpy as np
+    import pandas as pd
+    from stockpool.factors_analysis import FactorAnalysisResult
+
+    r = FactorAnalysisResult(
+        factor_names=["f1", "f2"],
+        daily_ic={"f1": pd.Series([0.1, 0.2], index=pd.date_range("2024-01-01", periods=2)),
+                  "f2": pd.Series([np.nan, 0.3], index=pd.date_range("2024-01-01", periods=2))},
+        mean_ic=pd.Series({"f1": 0.15, "f2": 0.3}),
+        ic_ir=pd.Series({"f1": 1.5, "f2": float("nan")}),
+        abs_ic_mean=pd.Series({"f1": 0.15, "f2": 0.3}),
+        half_life=pd.Series({"f1": 10.0, "f2": float("nan")}),
+        ic_correlation=pd.DataFrame(
+            [[1.0, 0.5], [0.5, 1.0]], index=["f1", "f2"], columns=["f1", "f2"],
+        ),
+        regime_ic={},
+        horizon=3, ic_window=252, n_stocks=100, n_days=2,
+        start_date=pd.Timestamp("2024-01-01"),
+        end_date=pd.Timestamp("2024-01-02"),
+        degenerate_day_ratio=pd.Series({"f1": 0.05, "f2": 0.5}),
+    )
+    p = tmp_path / "r.json"
+    r.to_json(p)
+    r2 = FactorAnalysisResult.from_json(p)
+    assert r2.degenerate_day_ratio["f1"] == 0.05
+    assert r2.degenerate_day_ratio["f2"] == 0.5
+
+
+def test_factor_analysis_result_roundtrip_legacy_json_without_degenerate(tmp_path):
+    """from_dict accepts legacy JSON missing degenerate_day_ratio (back-compat)."""
+    import json
+    from pathlib import Path
+    from stockpool.factors_analysis import FactorAnalysisResult
+
+    legacy = {
+        "factor_names": ["f1"],
+        "daily_ic": {"f1": {"index": ["2024-01-01"], "values": [0.1]}},
+        "mean_ic": {"f1": 0.1},
+        "ic_ir": {"f1": 1.0},
+        "abs_ic_mean": {"f1": 0.1},
+        "half_life": {"f1": 10.0},
+        "ic_correlation": {"index": ["f1"], "columns": ["f1"], "values": [[1.0]]},
+        "regime_ic": {},
+        "horizon": 3, "ic_window": 252, "n_stocks": 100, "n_days": 1,
+        "start_date": "2024-01-01", "end_date": "2024-01-01",
+        # NOTE: no degenerate_day_ratio key
+    }
+    p = tmp_path / "legacy.json"
+    p.write_text(json.dumps(legacy), encoding="utf-8")
+    r = FactorAnalysisResult.from_json(p)
+    assert len(r.degenerate_day_ratio) == 0  # empty Series default

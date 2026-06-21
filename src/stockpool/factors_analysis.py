@@ -315,7 +315,7 @@ def analyze_factors(
         daily_ic[name] = compute_daily_ic(fp_one, fwd, method=method)
         # Detect degenerate (near-constant) days on the post-winsorize panel.
         n_valid = fp_one.notna().sum(axis=1)
-        unique_counts = fp_one.apply(lambda row: row.dropna().nunique(), axis=1)
+        unique_counts = fp_one.nunique(axis=1, dropna=True)
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio_per_day = unique_counts / n_valid.replace(0, np.nan)
         degenerate = (ratio_per_day <= degenerate_day_unique_ratio_threshold)
