@@ -150,6 +150,85 @@ def test_factors_analyze_cli_default_winsorize_passed(tmp_path, isolated_cache, 
     assert captured.get("degenerate_day_unique_ratio_threshold") == 0.01
 
 
+def test_factors_analyze_cli_factors_file_missing(tmp_path, isolated_cache, caplog):
+    """--factors-file pointing to nonexistent path → log.error + exit 1."""
+    import logging
+    cfg_file = _make_config(tmp_path, isolated_cache)
+    missing = tmp_path / "does_not_exist.json"
+    with caplog.at_level(logging.ERROR):
+        rc = main([
+            "factors", "analyze",
+            "--config", str(cfg_file),
+            "--universe", "pool",
+            "--factors-file", str(missing),
+            "--output", str(tmp_path / "out"),
+        ])
+    assert rc == 1
+    assert any("factors_file not found" in rec.message for rec in caplog.records)
+
+
+def test_factors_analyze_cli_factors_file_missing_key(tmp_path, isolated_cache, caplog):
+    """--factors-file JSON without 'factors' key → log.error + exit 1."""
+    import logging
+    cfg_file = _make_config(tmp_path, isolated_cache)
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"other_key": []}), encoding="utf-8")
+    with caplog.at_level(logging.ERROR):
+        rc = main([
+            "factors", "analyze",
+            "--config", str(cfg_file),
+            "--universe", "pool",
+            "--factors-file", str(bad),
+            "--output", str(tmp_path / "out"),
+        ])
+    assert rc == 1
+    assert any("'factors' list" in rec.message for rec in caplog.records)
+
+
+def test_factors_analyze_cli_factors_file_wrong_type(tmp_path, isolated_cache, caplog):
+    """--factors-file JSON with 'factors' as non-list → log.error + exit 1."""
+    import logging
+    cfg_file = _make_config(tmp_path, isolated_cache)
+    bad = tmp_path / "bad2.json"
+    bad.write_text(json.dumps({"factors": "momentum_20"}), encoding="utf-8")
+    with caplog.at_level(logging.ERROR):
+        rc = main([
+            "factors", "analyze",
+            "--config", str(cfg_file),
+            "--universe", "pool",
+            "--factors-file", str(bad),
+            "--output", str(tmp_path / "out"),
+        ])
+    assert rc == 1
+    assert any("'factors' list" in rec.message for rec in caplog.records)
+
+
+def test_factors_analyze_cli_no_winsorize_overrides_low_high(tmp_path, isolated_cache, monkeypatch):
+    """--no-winsorize wins even when --winsorize-low/high are also passed."""
+    cfg_file = _make_config(tmp_path, isolated_cache)
+    captured = {}
+    from stockpool import factors_analysis as _fa
+    real = _fa.analyze_factors
+    def _spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(_fa, "analyze_factors", _spy)
+
+    rc = main([
+        "factors", "analyze",
+        "--config", str(cfg_file),
+        "--universe", "pool",
+        "--factors", "momentum_20",
+        "--horizon", "3",
+        "--output", str(tmp_path / "out"),
+        "--no-winsorize",
+        "--winsorize-low", "0.05",
+        "--winsorize-high", "0.95",
+    ])
+    assert rc == 0
+    assert captured.get("winsorize") is None
+
+
 def test_factors_pick_by_ic_writes_selection(tmp_path, isolated_cache):
     cfg_file = _make_config(tmp_path, isolated_cache)
     analyze_dir = tmp_path / "factor_analysis"

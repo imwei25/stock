@@ -915,8 +915,15 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
         codes = [s.code for s in cfg.stocks]
 
     if args.factors_file:
-        with open(args.factors_file, "r", encoding="utf-8") as fh:
-            factor_names = list(json.load(fh)["factors"])
+        fpath = Path(args.factors_file)
+        if not fpath.exists():
+            log.error("factors_file not found: %s", fpath)
+            return 1
+        data = json.loads(fpath.read_text(encoding="utf-8"))
+        if "factors" not in data or not isinstance(data["factors"], list):
+            log.error("factors_file %s must contain a 'factors' list", fpath)
+            return 1
+        factor_names = list(data["factors"])
     else:
         factor_names = list(args.factors) if args.factors else list_factors()
 
