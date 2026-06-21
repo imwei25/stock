@@ -182,12 +182,20 @@ def run_single_arm(
 
         n_offsets = effective_cfg.portfolio_backtest.staggered_starts
         if n_offsets > 1:
+            components = (
+                portfolio_strat, effective_cfg.portfolio_backtest.portfolio, costs,
+                effective_cfg.backtest.risk_free_rate, eligibility, sector_map,
+            )
             runner = StaggeredRunner(
-                _factory, risk_free_rate=effective_cfg.backtest.risk_free_rate,
+                _factory, components=components,
+                risk_free_rate=effective_cfg.backtest.risk_free_rate,
             )
             # Engine runs over portfolio_pool_data (needs OHLCV of the stocks
             # it actually trades, not the full training pool).
-            ensemble = runner.run(portfolio_pool_data, n_offsets=n_offsets)
+            ensemble = runner.run(
+                portfolio_pool_data, n_offsets=n_offsets,
+                parallel=effective_cfg.portfolio_backtest.parallel_staggered,
+            )
             return ArmResult(
                 name=arm_name, effective_cfg=effective_cfg, ensemble=ensemble,
             )
