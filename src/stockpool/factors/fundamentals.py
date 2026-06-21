@@ -104,15 +104,36 @@ class ROEFactor(_ScalarFundamentalFactor):
     "roa",
     sources=("custom",),
     types=("fundamental", "cross_sectional"),
-    description="总资产收益率,每 1 元资产年化产出多少利润。衡量经营效率;与 ROE 对比可看出杠杆水平。",
+    description="总资产收益率 = ROE / (Asset/Equity)。baostock 没有直接 ROA 字段;从 profit.roeAvg + balance.assetToEquity 联算(数学等价于 NI/Asset)。",
 )
-class ROAFactor(_ScalarFundamentalFactor):
-    _table = "profit"
-    _field = "roaAvg"
+class ROAFactor(Factor):
+    """ROA derived = ROE / (Asset/Equity).
+
+    数学上: ROE = NI/E, A/E = Asset/E → ROA = NI/Asset = ROE/(A/E)。
+    baostock query_profit_data 不返回 roaAvg 字段(只有 roeAvg),
+    所以靠 balance.assetToEquity 把 ROE 杠杆比例除掉。
+    """
+
+    def __init__(self):
+        pass
 
     @property
     def name(self) -> str:
         return "roa"
+
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        from stockpool.fundamentals_loader import load_or_build_fundamentals
+        profit = load_or_build_fundamentals("profit", cache_dir=_default_cache_dir())
+        balance = load_or_build_fundamentals("balance", cache_dir=_default_cache_dir())
+        if profit is None or profit.empty or balance is None or balance.empty:
+            return pd.DataFrame(
+                np.nan, index=panel["close"].index, columns=panel["close"].columns
+            )
+
+        roe_panel = _pit_align(profit, "roeAvg", panel["close"])
+        a2e_panel = _pit_align(balance, "assetToEquity", panel["close"])
+        # A/E > 0 才有意义(亏损公司 ROE 可能为负,这里只看资产杠杆,> 0)
+        return roe_panel / a2e_panel.where(a2e_panel > 0)
 
 
 @register(
@@ -149,15 +170,41 @@ class NetMarginFactor(_ScalarFundamentalFactor):
     "revenue_yoy",
     sources=("custom",),
     types=("fundamental", "cross_sectional"),
-    description="营收同比增长率,看企业当下的成长性。配合毛利率可判断“高增长是否伴随毛利下滑”。",
+    description="营收同比增长率,看企业当下的成长性。baostock growth 表没 YOYIncome 字段;从 profit.MBRevenue 自己 shift(4) 季算 YoY(银行/保险类 MBRevenue 可能为空 → NaN)。",
 )
-class RevenueYoYFactor(_ScalarFundamentalFactor):
-    _table = "growth"
-    _field = "YOYIncome"
+class RevenueYoYFactor(Factor):
+    """Revenue YoY computed from profit.MBRevenue (4-quarter lag).
+
+    baostock query_growth_data 只返回 YOYEquity/YOYAsset/YOYNI/YOYEPSBasic/YOYPNI,
+    没有直接的 revenue YoY。从 profit.MBRevenue 自己算:同股按 pubDate 排序后
+    shift(4) 拿同期上年 4 个季度前的值,YoY = (now - prior) / |prior|。
+
+    覆盖率 caveat:profit.MBRevenue 在银行/保险类股票上经常为空字符串(主营业务
+    收入对金融机构定义模糊),导致这些 code 整段 NaN。
+    """
+
+    def __init__(self):
+        pass
 
     @property
     def name(self) -> str:
         return "revenue_yoy"
+
+    def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        from stockpool.fundamentals_loader import load_or_build_fundamentals
+        profit = load_or_build_fundamentals("profit", cache_dir=_default_cache_dir())
+        if profit is None or profit.empty:
+            return pd.DataFrame(
+                np.nan, index=panel["close"].index, columns=panel["close"].columns
+            )
+
+        profit = profit.sort_values(["code", "pubDate"]).copy()
+        profit["_mbrev"] = pd.to_numeric(profit["MBRevenue"], errors="coerce")
+        profit["_mbrev_lag4"] = profit.groupby("code")["_mbrev"].shift(4)
+        # YoY 防 division-by-zero
+        denom = profit["_mbrev_lag4"].abs()
+        profit["_yoy"] = (profit["_mbrev"] - profit["_mbrev_lag4"]) / denom.where(denom > 1e-9)
+        return _pit_align(profit, "_yoy", panel["close"])
 
 
 @register(
@@ -216,14 +263,27 @@ class PBFactor(Factor):
 
     def compute(self, panel: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         from stockpool.fundamentals_loader import load_or_build_fundamentals
-        balance = load_or_build_fundamentals("balance", cache_dir=_default_cache_dir())
-        if balance is None or balance.empty:
+        # baostock balance 表没有 totalShare / totalShareholdersEquity 字段;
+        # 用 profit 同期(YTD)反推 equity = netProfit / roeAvg。
+        # baostock 的 netProfit 与 roeAvg 都是 YTD 累计(Q1=3 月,Q4=全年),
+        # 比例消掉年内尺度差异 → 给出稳定的 equity 估算。**不要 rolling 4 季 TTM**,
+        # 因为 4 行 YTD 相加 = Q1+H1+9个月+全年 ≈ 2.5× 年度,会把 equity 高估同样倍数。
+        profit = load_or_build_fundamentals("profit", cache_dir=_default_cache_dir())
+        if profit is None or profit.empty:
             return pd.DataFrame(
                 np.nan, index=panel["close"].index, columns=panel["close"].columns
             )
 
-        shares_panel = _pit_align(balance, "totalShare", panel["close"])
-        equity_panel = _pit_align(balance, "totalShareholdersEquity", panel["close"])
+        profit = profit.sort_values(["code", "pubDate"]).copy()
+        profit["_netProfit"] = pd.to_numeric(profit["netProfit"], errors="coerce")
+        profit["_roeAvg"] = pd.to_numeric(profit["roeAvg"], errors="coerce")
+        positive_roe = profit["_roeAvg"].where(profit["_roeAvg"] > 1e-9)
+        profit["_equity_implied"] = (profit["_netProfit"] / positive_roe).where(
+            lambda s: s > 0
+        )
+
+        equity_panel = _pit_align(profit, "_equity_implied", panel["close"])
+        shares_panel = _pit_align(profit, "totalShare", panel["close"])
 
         pb = panel["close"] * shares_panel / equity_panel
         return pb.where((equity_panel > 0) & shares_panel.notna())
