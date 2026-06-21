@@ -22,8 +22,12 @@ __all__ = [
     "rank",
     "ts_argmax",
     "ts_argmin",
+    "ts_max",
+    "ts_mean",
+    "ts_min",
     "ts_rank",
     "ts_std",
+    "ts_sum",
 ]
 
 
@@ -31,6 +35,26 @@ def _min_periods(d: int) -> int:
     """Relax min_periods to 60% of the window so that mask-induced NaN
     runs don't kill a whole factor. ``max(1, ...)`` defends against d<2."""
     return max(1, int(d * 0.6))
+
+
+def ts_sum(x: pd.DataFrame, d: int) -> pd.DataFrame:
+    """Rolling sum with relaxed min_periods (= max(1, int(d*0.6)))."""
+    return x.rolling(d, min_periods=_min_periods(d)).sum()
+
+
+def ts_mean(x: pd.DataFrame, d: int) -> pd.DataFrame:
+    """Rolling mean with relaxed min_periods (= max(1, int(d*0.6)))."""
+    return x.rolling(d, min_periods=_min_periods(d)).mean()
+
+
+def ts_min(x: pd.DataFrame, d: int) -> pd.DataFrame:
+    """Rolling min with strict min_periods = d."""
+    return x.rolling(d, min_periods=d).min()
+
+
+def ts_max(x: pd.DataFrame, d: int) -> pd.DataFrame:
+    """Rolling max with strict min_periods = d."""
+    return x.rolling(d, min_periods=d).max()
 
 
 def ts_std(x: pd.DataFrame, d: int) -> pd.DataFrame:

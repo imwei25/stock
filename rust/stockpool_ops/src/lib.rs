@@ -78,6 +78,42 @@ fn correlation_py<'py>(
     out.to_pyarray_bound(py)
 }
 
+/// Rolling sum. NaN/inf-skip; min_periods = max(1, int(d*0.6)).
+#[pyfunction]
+#[pyo3(name = "ts_sum")]
+fn ts_sum_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -> Bound<'py, PyArray2<f64>> {
+    let view = x.as_array();
+    let out = py.allow_threads(|| rolling::ts_sum(view, d));
+    out.to_pyarray_bound(py)
+}
+
+/// Rolling mean. NaN/inf-skip; min_periods = max(1, int(d*0.6)).
+#[pyfunction]
+#[pyo3(name = "ts_mean")]
+fn ts_mean_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -> Bound<'py, PyArray2<f64>> {
+    let view = x.as_array();
+    let out = py.allow_threads(|| rolling::ts_mean(view, d));
+    out.to_pyarray_bound(py)
+}
+
+/// Rolling min. Strict min_periods = d; any NaN/inf in window → NaN.
+#[pyfunction]
+#[pyo3(name = "ts_min")]
+fn ts_min_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -> Bound<'py, PyArray2<f64>> {
+    let view = x.as_array();
+    let out = py.allow_threads(|| rolling::ts_min(view, d));
+    out.to_pyarray_bound(py)
+}
+
+/// Rolling max. Strict min_periods = d; any NaN/inf in window → NaN.
+#[pyfunction]
+#[pyo3(name = "ts_max")]
+fn ts_max_py<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>, d: usize) -> Bound<'py, PyArray2<f64>> {
+    let view = x.as_array();
+    let out = py.allow_threads(|| rolling::ts_max(view, d));
+    out.to_pyarray_bound(py)
+}
+
 /// Linearly-weighted moving average. Weights 1..=d (oldest -> newest);
 /// NaN positions drop from numerator + denominator; min_periods = max(1, int(d*0.6)).
 #[pyfunction]
@@ -114,6 +150,10 @@ fn stockpool_ops_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ts_argmax_py, m)?)?;
     m.add_function(wrap_pyfunction!(ts_argmin_py, m)?)?;
     m.add_function(wrap_pyfunction!(ts_rank_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_sum_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_mean_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_min_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_max_py, m)?)?;
     m.add_function(wrap_pyfunction!(correlation_py, m)?)?;
     m.add_function(wrap_pyfunction!(decay_linear_py, m)?)?;
     m.add_function(wrap_pyfunction!(indneutralize_py, m)?)?;

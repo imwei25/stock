@@ -321,3 +321,228 @@ def test_indneutralize_single_member_group():
     rust_out = _rust.indneutralize(np.ascontiguousarray(arr), sector_ids)
     py_out = _ops_py.indneutralize(pd.DataFrame(arr, columns=codes), sector_map).values
     np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ts_sum — Rust impl in rust/stockpool_ops/src/rolling.rs.
+# NaN/inf-skip; min_periods = max(1, int(d*0.6)).
+#
+# NOTE: ops.py does NOT dispatch ts_sum to Rust (same deferral as
+# correlation): pandas' Cython rolling.sum path differs from Rust's
+# per-window summation by ~1 ULP (~2e-13), which when fed through
+# downstream rank() flips rank order for nearly-equal stocks. Tests
+# here call _rust.ts_sum directly against _ops_py.ts_sum to validate
+# the Rust impl within rtol=1e-7 / atol=1e-9 (which passes); the ops.py
+# dispatcher intentionally stays on the pandas oracle to preserve the
+# snapshot contract.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("T,N,d", [
+    (50, 20, 5),
+    (30, 50, 10),
+    (10, 5, 3),
+])
+def test_ts_sum_happy(T, N, d):
+    rng = np.random.default_rng(42)
+    arr = rng.standard_normal((T, N))
+    df = _frame(arr)
+    rust_out = _rust.ts_sum(np.ascontiguousarray(arr), d)
+    py_out = _ops_py.ts_sum(df, d).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_ts_sum_scattered_nan():
+    rng = np.random.default_rng(7)
+    arr = rng.standard_normal((30, 10))
+    nan_mask = rng.random((30, 10)) < 0.1
+    arr[nan_mask] = np.nan
+    df = _frame(arr)
+    rust_out = _rust.ts_sum(np.ascontiguousarray(arr), 5)
+    py_out = _ops_py.ts_sum(df, 5).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_ts_sum_constant_input():
+    arr = np.full((10, 3), 2.5)
+    df = _frame(arr)
+    rust_out = _rust.ts_sum(np.ascontiguousarray(arr), 4)
+    py_out = _ops_py.ts_sum(df, 4).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_ts_sum_all_nan_window():
+    """All-NaN window: both Rust and pandas return NaN (n_finite < mp)."""
+    arr = np.full((8, 2), np.nan)
+    arr[5:, :] = 1.0
+    df = _frame(arr)
+    rust_out = _rust.ts_sum(np.ascontiguousarray(arr), 4)
+    py_out = _ops_py.ts_sum(df, 4).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ts_mean — Rust impl in rust/stockpool_ops/src/rolling.rs.
+# NaN/inf-skip; min_periods = max(1, int(d*0.6)).
+# Same deferral note as ts_sum: ops.py uses pandas oracle; tests here
+# call _rust.ts_mean directly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("T,N,d", [
+    (50, 20, 5),
+    (30, 50, 10),
+    (10, 5, 3),
+])
+def test_ts_mean_happy(T, N, d):
+    rng = np.random.default_rng(99)
+    arr = rng.standard_normal((T, N))
+    df = _frame(arr)
+    rust_out = _rust.ts_mean(np.ascontiguousarray(arr), d)
+    py_out = _ops_py.ts_mean(df, d).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_ts_mean_scattered_nan():
+    rng = np.random.default_rng(11)
+    arr = rng.standard_normal((30, 10))
+    nan_mask = rng.random((30, 10)) < 0.1
+    arr[nan_mask] = np.nan
+    df = _frame(arr)
+    rust_out = _rust.ts_mean(np.ascontiguousarray(arr), 5)
+    py_out = _ops_py.ts_mean(df, 5).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_ts_mean_constant_input():
+    arr = np.full((10, 3), 7.0)
+    df = _frame(arr)
+    rust_out = _rust.ts_mean(np.ascontiguousarray(arr), 3)
+    py_out = _ops_py.ts_mean(df, 3).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+def test_ts_mean_all_nan_window():
+    arr = np.full((6, 2), np.nan)
+    arr[4:, :] = 3.0
+    df = _frame(arr)
+    rust_out = _rust.ts_mean(np.ascontiguousarray(arr), 3)
+    py_out = _ops_py.ts_mean(df, 3).values
+    np.testing.assert_allclose(rust_out, py_out, rtol=1e-7, atol=1e-9, equal_nan=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ts_min — Rust impl in rust/stockpool_ops/src/rolling.rs.
+# Strict min_periods = d: any NaN/inf in window → NaN.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("T,N,d", [
+    (50, 20, 5),
+    (30, 50, 10),
+    (10, 5, 3),
+])
+def test_ts_min_happy(T, N, d):
+    rng = np.random.default_rng(200)
+    arr = rng.standard_normal((T, N))
+    df = _frame(arr)
+    rust_out = ops.ts_min(df, d)
+    py_out = _ops_py.ts_min(df, d)
+    np.testing.assert_allclose(
+        rust_out.values, py_out.values, rtol=1e-7, atol=1e-9, equal_nan=True,
+    )
+
+
+def test_ts_min_scattered_nan():
+    rng = np.random.default_rng(22)
+    arr = rng.standard_normal((30, 10))
+    nan_mask = rng.random((30, 10)) < 0.1
+    arr[nan_mask] = np.nan
+    df = _frame(arr)
+    rust_out = ops.ts_min(df, 5)
+    py_out = _ops_py.ts_min(df, 5)
+    np.testing.assert_allclose(
+        rust_out.values, py_out.values, rtol=1e-7, atol=1e-9, equal_nan=True,
+    )
+
+
+def test_ts_min_constant_input():
+    arr = np.full((10, 3), 4.0)
+    df = _frame(arr)
+    rust_out = ops.ts_min(df, 3)
+    py_out = _ops_py.ts_min(df, 3)
+    np.testing.assert_allclose(
+        rust_out.values, py_out.values, rtol=1e-7, atol=1e-9, equal_nan=True,
+    )
+
+
+def test_ts_min_nan_in_window_yields_nan():
+    """Any NaN in the strict-d window → output NaN (ts_min uses strict mp=d)."""
+    arr = np.array([[1.0, np.nan, 3.0, 4.0, 5.0]], dtype=np.float64).T.copy()
+    df = _frame(arr)
+    rust_out = ops.ts_min(df, 3)
+    py_out = _ops_py.ts_min(df, 3)
+    # Windows containing the NaN at t=1 (i.e. t=1,2,3) must all be NaN
+    for t in range(1, 4):
+        assert np.isnan(rust_out.iloc[t, 0]), f"t={t} should be NaN for ts_min"
+    np.testing.assert_allclose(
+        rust_out.values, py_out.values, rtol=1e-7, atol=1e-9, equal_nan=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ts_max — Rust impl in rust/stockpool_ops/src/rolling.rs.
+# Strict min_periods = d: any NaN/inf in window → NaN.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("T,N,d", [
+    (50, 20, 5),
+    (30, 50, 10),
+    (10, 5, 3),
+])
+def test_ts_max_happy(T, N, d):
+    rng = np.random.default_rng(300)
+    arr = rng.standard_normal((T, N))
+    df = _frame(arr)
+    rust_out = ops.ts_max(df, d)
+    py_out = _ops_py.ts_max(df, d)
+    np.testing.assert_allclose(
+        rust_out.values, py_out.values, rtol=1e-7, atol=1e-9, equal_nan=True,
+    )
+
+
+def test_ts_max_scattered_nan():
+    rng = np.random.default_rng(33)
+    arr = rng.standard_normal((30, 10))
+    nan_mask = rng.random((30, 10)) < 0.1
+    arr[nan_mask] = np.nan
+    df = _frame(arr)
+    rust_out = ops.ts_max(df, 5)
+    py_out = _ops_py.ts_max(df, 5)
+    np.testing.assert_allclose(
+        rust_out.values, py_out.values, rtol=1e-7, atol=1e-9, equal_nan=True,
+    )
+
+
+def test_ts_max_constant_input():
+    arr = np.full((10, 3), -2.5)
+    df = _frame(arr)
+    rust_out = ops.ts_max(df, 4)
+    py_out = _ops_py.ts_max(df, 4)
+    np.testing.assert_allclose(
+        rust_out.values, py_out.values, rtol=1e-7, atol=1e-9, equal_nan=True,
+    )
+
+
+def test_ts_max_nan_in_window_yields_nan():
+    """Any NaN in the strict-d window → output NaN (ts_max uses strict mp=d)."""
+    arr = np.array([[1.0, np.nan, 3.0, 4.0, 5.0]], dtype=np.float64).T.copy()
+    df = _frame(arr)
+    rust_out = ops.ts_max(df, 3)
+    py_out = _ops_py.ts_max(df, 3)
+    for t in range(1, 4):
+        assert np.isnan(rust_out.iloc[t, 0]), f"t={t} should be NaN for ts_max"
+    np.testing.assert_allclose(
+        rust_out.values, py_out.values, rtol=1e-7, atol=1e-9, equal_nan=True,
+    )

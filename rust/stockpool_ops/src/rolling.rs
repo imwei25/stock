@@ -116,6 +116,80 @@ pub fn ts_rank(x: ArrayView2<f64>, d: usize) -> Array2<f64> {
     })
 }
 
+/// Rolling sum. NaN/inf-skip (same semantics as pandas rolling.sum):
+/// finite values are summed; NaN/inf positions are excluded from the sum.
+/// min_periods = max(1, int(d * 0.6)) — relaxed, matching ts_sum oracle.
+///
+/// Uses per-window recomputation (not an online accumulator) to match
+/// pandas' exact FP path: pandas rolling.sum internally calls numpy sum
+/// over each window slice, which gives window-recomputed results rather
+/// than the slightly different running add/subtract path.
+pub fn ts_sum(x: ArrayView2<f64>, d: usize) -> Array2<f64> {
+    let mp = min_periods(d);
+    rolling_apply_col(x, d, mp, false, |window: &[f64]| {
+        // Sum only the finite values (NaN/inf are skipped, matching pandas).
+        // rolling_apply_col has already checked n_finite >= mp.
+        window.iter().filter(|v| v.is_finite()).sum()
+    })
+}
+
+/// Rolling mean. NaN/inf-skip; min_periods = max(1, int(d*0.6)).
+/// When n_finite >= mp, emit sum/n_finite; all-NaN window → NaN.
+///
+/// Uses per-window recomputation to match pandas' FP path (same reasoning
+/// as ts_sum — avoids online accumulator FP drift).
+pub fn ts_mean(x: ArrayView2<f64>, d: usize) -> Array2<f64> {
+    let mp = min_periods(d);
+    rolling_apply_col(x, d, mp, false, |window: &[f64]| {
+        let mut sum = 0.0_f64;
+        let mut cnt = 0usize;
+        for &v in window.iter() {
+            if v.is_finite() {
+                sum += v;
+                cnt += 1;
+            }
+        }
+        // n_finite >= mp is already guaranteed by rolling_apply_col.
+        if cnt == 0 { f64::NAN } else { sum / (cnt as f64) }
+    })
+}
+
+/// Rolling min. Strict min_periods = d: requires d finite values in window.
+/// Any NaN or inf in window means n_finite < d → NaN output.
+/// (Matches pandas rolling(d, min_periods=d).min() which treats NaN/inf as missing.)
+pub fn ts_min(x: ArrayView2<f64>, d: usize) -> Array2<f64> {
+    // Use rolling_apply_col with strict_d=true. The closure only runs when
+    // n_finite >= mp (= d), so every cell in the window is finite.
+    rolling_apply_col(x, d, d, true, |window: &[f64]| {
+        // When strict_d=true and mp=d, rolling_apply_col ensures n_finite >= d,
+        // which means ALL d cells are finite (window length = d when strict).
+        // But we still need to handle any inf that may have passed the is_finite check.
+        // Actually util.rs counts `is_finite()` for n_valid, and inf.is_finite()=false,
+        // so inf is already excluded. Just find the min.
+        let mut m = f64::INFINITY;
+        for &v in window.iter() {
+            if v < m {
+                m = v;
+            }
+        }
+        if m.is_infinite() { f64::NAN } else { m }
+    })
+}
+
+/// Rolling max. Strict min_periods = d: requires d finite values in window.
+/// Any NaN or inf in window → NaN output.
+pub fn ts_max(x: ArrayView2<f64>, d: usize) -> Array2<f64> {
+    rolling_apply_col(x, d, d, true, |window: &[f64]| {
+        let mut m = f64::NEG_INFINITY;
+        for &v in window.iter() {
+            if v > m {
+                m = v;
+            }
+        }
+        if m.is_infinite() { f64::NAN } else { m }
+    })
+}
+
 /// Rolling Pearson correlation between paired columns of x and y.
 /// Pandas `x.rolling(d, min_periods=d).corr(y)` equivalent:
 ///   * strict min_periods=d
