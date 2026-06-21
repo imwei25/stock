@@ -55,6 +55,8 @@ python -m stockpool portfolio-backtest --config config.yaml [--refresh-scores]
 python -m stockpool portfolio-ab --config portfolio_ab.yaml
 # 单 arm 调试(stdout 只打印指标,不出 HTML)
 python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <arm_name>
+# 两 arm 并行(subprocess; opt-in,peak 内存 ~2× single-arm)
+python -m stockpool portfolio-ab --config portfolio_ab.yaml --parallel-arms
 
 # AB candidate pool — stratified ~100-stock pool for AB tests (static, manual rebuild)
 python -m stockpool ab-pool build [--refresh]
