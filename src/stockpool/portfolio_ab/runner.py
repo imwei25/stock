@@ -81,6 +81,36 @@ class ABResult:
         return list(self.arms)
 
 
+def _run_single_arm_in_subprocess(
+    arm_name, ab_cfg, base_cfg, override,
+    pool_data, sector_map, name_map,
+    refresh_scores, portfolio_pool_data, n_workers,
+):
+    """Top-level worker for ProcessPoolExecutor (must be picklable).
+
+    Replicates run_portfolio_ab's per-arm logic so the subprocess can
+    handle build_effective_cfg failures + run_single_arm in a single
+    submission.
+    """
+    from stockpool.portfolio_ab.config import build_effective_cfg  # noqa: PLC0415
+    try:
+        effective = build_effective_cfg(
+            base_cfg, override, use_ab_pool=ab_cfg.use_ab_pool,
+        )
+    except Exception as e:  # noqa: BLE001
+        return ArmResult(
+            name=arm_name, effective_cfg=None,
+            failed=True, error=f"merge failed: {e}",
+        )
+    return run_single_arm(
+        arm_name, effective,
+        pool_data=pool_data, sector_map=sector_map, name_map=name_map,
+        refresh_scores=refresh_scores,
+        portfolio_pool_data=portfolio_pool_data,
+        n_workers=n_workers,
+    )
+
+
 def run_single_arm(
     arm_name: str,
     effective_cfg: AppConfig,
@@ -224,15 +254,50 @@ def run_portfolio_ab(
     refresh_scores: bool = False,
     portfolio_pool_data: Mapping[str, pd.DataFrame] | None = None,
     n_workers: int | None = None,
+    parallel_arms: bool = False,
 ) -> ABResult:
-    """Run both arms in sequence; return ``ABResult`` with both outcomes.
+    """Run both arms in sequence (or concurrently); return ``ABResult`` with both outcomes.
 
     Each arm is independent — if arm A throws, arm B still runs and the
     report still renders with a red banner for the failed side.
 
     See ``run_single_arm`` for ``portfolio_pool_data`` and ``n_workers``
     semantics.
+
+    Args:
+        parallel_arms: when ``True`` and there are >1 arms, both arms are
+            submitted to a ``ProcessPoolExecutor`` and run concurrently.
+            **Peak memory ≈ 2× single-arm** (each subprocess gets a full
+            copy of ``pool_data`` via pickle).  On any subprocess error the
+            runner falls back to the serial path automatically.
     """
+    if parallel_arms and len(ab_cfg.arms) > 1:
+        import concurrent.futures
+        log.warning(
+            "[parallel-arms] both arms running concurrently; "
+            "peak memory ~= 2x single-arm. Disable with parallel_arms=False.",
+        )
+        try:
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=len(ab_cfg.arms),
+            ) as ex:
+                futures = {
+                    arm_name: ex.submit(
+                        _run_single_arm_in_subprocess,
+                        arm_name, ab_cfg, base_cfg, override,
+                        pool_data, sector_map, name_map,
+                        refresh_scores, portfolio_pool_data, n_workers,
+                    )
+                    for arm_name, override in ab_cfg.arms.items()
+                }
+                arms = {n: f.result() for n, f in futures.items()}
+            return ABResult(arms=arms)
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "parallel_arms failed (%s); fallback to serial", e,
+            )
+
+    # Serial path (default; also fallback when parallel_arms raises).
     arms: dict[str, ArmResult] = {}
     for arm_name, override in ab_cfg.arms.items():
         try:

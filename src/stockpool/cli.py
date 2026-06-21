@@ -789,6 +789,7 @@ def cmd_portfolio_ab(args: argparse.Namespace) -> int:
         refresh_scores=args.refresh_scores,
         portfolio_pool_data=portfolio_pool_data,
         n_workers=args.workers,
+        parallel_arms=args.parallel_arms,
     )
     out = render_portfolio_ab_report(result, run_date=run_date, output_dir=out_root)
     log.info("Portfolio AB report written: %s", out)
@@ -1207,6 +1208,10 @@ def _build_parser() -> argparse.ArgumentParser:
                             "training pool + factor_panel, so raising "
                             "this needs ~6 GB RAM headroom per worker). "
                             "Pass 1 to run serial (lowest memory).")
+    p_pab.add_argument(
+        "--parallel-arms", action="store_true",
+        help="Run the two arms concurrently in subprocess (peak memory ~2x single arm).",
+    )
     p_pab.set_defaults(func=cmd_portfolio_ab)
 
     p_fu = sub.add_parser(
