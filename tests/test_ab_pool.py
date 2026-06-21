@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -228,34 +227,43 @@ def test_stratified_output_columns():
 from stockpool.ab_pool import _fetch_circ_mv_snapshot, _compute_avg_amount_20d
 
 
-def test_fetch_circ_mv_snapshot_normalizes(monkeypatch):
-    """Mock akshare; verify shape: columns code/name/circ_mv (float, yuan)."""
-    fake_df = pd.DataFrame({
-        "代码": ["600519", "000001"],
-        "名称": ["贵州茅台", "平安银行"],
-        "流通市值": [2.1e12, 3.2e11],  # akshare already returns yuan
+def test_fetch_circ_mv_snapshot_computes_from_baostock(tmp_path):
+    """Builds fundamentals_profit.parquet + per-code daily caches under tmp;
+    verifies circ_mv = latest_liqaShare × latest_close, and that empty-string
+    liqaShare values coerce to NaN."""
+    cache_dir = tmp_path
+    # Profit table with 3 codes:
+    #   600519 has two rows; the later pubDate's liqaShare must win
+    #   000001 has one row with valid liqaShare
+    #   600000 has liqaShare == '' (coerce to NaN -> circ_mv NaN)
+    prof = pd.DataFrame({
+        "code": ["600519", "600519", "000001", "600000"],
+        "pubDate": pd.to_datetime(
+            ["2026-04-25", "2026-01-25", "2026-04-25", "2026-04-25"]
+        ),
+        "liqaShare": ["1000000", "999999", "2000000", ""],
     })
-    mock_ak = MagicMock()
-    mock_ak.stock_zh_a_spot_em.return_value = fake_df
-    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
+    prof.to_parquet(cache_dir / "fundamentals_profit.parquet")
+    # Daily caches: 600519 close=2100, 000001 close=10, 600000 close=5 (irrelevant)
+    for code, close in [("600519", 2100.0), ("000001", 10.0), ("600000", 5.0)]:
+        pd.DataFrame({
+            "date": pd.date_range("2026-01-01", periods=3, freq="B"),
+            "close": [close - 0.1, close - 0.05, close],
+        }).to_parquet(cache_dir / f"{code}_daily.parquet")
 
-    out = _fetch_circ_mv_snapshot()
+    out = _fetch_circ_mv_snapshot(cache_dir)
 
-    assert list(out.columns) == ["code", "name", "circ_mv"]
-    assert list(out["code"]) == ["600519", "000001"]
-    assert list(out["name"]) == ["贵州茅台", "平安银行"]
-    assert out["circ_mv"].dtype.kind == "f"
-    assert out["circ_mv"].iloc[0] == pytest.approx(2.1e12)
+    assert list(out.columns) == ["code", "circ_mv"]
+    by_code = out.set_index("code")["circ_mv"]
+    assert by_code["600519"] == pytest.approx(1_000_000 * 2100.0)  # latest pubDate wins
+    assert by_code["000001"] == pytest.approx(2_000_000 * 10.0)
+    assert pd.isna(by_code["600000"])  # empty-string liqaShare -> NaN circ_mv
 
 
-def test_fetch_circ_mv_snapshot_propagates_error(monkeypatch):
-    def raise_err():
-        raise RuntimeError("akshare timeout")
-    mock_ak = MagicMock()
-    mock_ak.stock_zh_a_spot_em.side_effect = raise_err
-    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
-    with pytest.raises(RuntimeError, match="akshare"):
-        _fetch_circ_mv_snapshot()
+def test_fetch_circ_mv_snapshot_missing_profile_raises(tmp_path):
+    """fundamentals_profit.parquet absent → clear error pointing to the fix."""
+    with pytest.raises(FileNotFoundError, match="fundamentals_profit"):
+        _fetch_circ_mv_snapshot(tmp_path)
 
 
 def test_compute_avg_amount_20d_basic(tmp_path: Path):
@@ -351,13 +359,14 @@ def test_build_basic(tmp_path, monkeypatch):
         ("600005", "Food1", "食品", 1e9),
         ("600006", "Food2", "食品", 1e9),
     ])
-    mock_ak = MagicMock()
-    mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame({
-        "代码": ["600001", "600002", "600003", "600004", "600005", "600006"],
-        "名称": ["Bank1", "Bank2", "Bank3", "Bank4", "Food1", "Food2"],
-        "流通市值": [9e10, 8e10, 7e10, 6e10, 5e10, 4e10],
+    fake_snapshot = pd.DataFrame({
+        "code": ["600001", "600002", "600003", "600004", "600005", "600006"],
+        "circ_mv": [9e10, 8e10, 7e10, 6e10, 5e10, 4e10],
     })
-    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
+    monkeypatch.setattr(
+        "stockpool.ab_pool._fetch_circ_mv_snapshot",
+        lambda *_a, **_k: fake_snapshot,
+    )
     monkeypatch.setattr("stockpool.ab_pool._load_industry_map",
                         lambda *_a, **_k: {"600001": "银行", "600002": "银行",
                                             "600003": "银行", "600004": "银行",
@@ -391,12 +400,13 @@ def test_build_refresh_overwrites(tmp_path, monkeypatch):
         ("600001", "Bank1", "银行", 1e9),
         ("600002", "Bank2", "银行", 1e9),
     ])
-    mock_ak = MagicMock()
-    mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame({
-        "代码": ["600001", "600002"], "名称": ["Bank1", "Bank2"],
-        "流通市值": [9e10, 8e10],
+    fake_snapshot = pd.DataFrame({
+        "code": ["600001", "600002"], "circ_mv": [9e10, 8e10],
     })
-    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
+    monkeypatch.setattr(
+        "stockpool.ab_pool._fetch_circ_mv_snapshot",
+        lambda *_a, **_k: fake_snapshot,
+    )
     monkeypatch.setattr("stockpool.ab_pool._load_industry_map",
                         lambda *_a, **_k: {"600001": "银行", "600002": "银行"})
     monkeypatch.setattr("stockpool.ab_pool._load_ipo_dates",
@@ -420,11 +430,13 @@ def test_build_universe_missing(tmp_path):
 def test_build_all_buckets_empty(tmp_path, monkeypatch):
     cfg = _stub_app_cfg(tmp_path)
     _seed_universe_and_daily(cfg, [("600001", "Only", "银行", 1e3)])  # below floor
-    mock_ak = MagicMock()
-    mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame({
-        "代码": ["600001"], "名称": ["Only"], "流通市值": [1e10],
+    fake_snapshot = pd.DataFrame({
+        "code": ["600001"], "circ_mv": [1e10],
     })
-    monkeypatch.setattr("stockpool.ab_pool._import_akshare", lambda: mock_ak)
+    monkeypatch.setattr(
+        "stockpool.ab_pool._fetch_circ_mv_snapshot",
+        lambda *_a, **_k: fake_snapshot,
+    )
     monkeypatch.setattr("stockpool.ab_pool._load_industry_map",
                         lambda *_a, **_k: {"600001": "银行"})
     monkeypatch.setattr("stockpool.ab_pool._load_ipo_dates",

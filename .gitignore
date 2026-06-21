@@ -37,3 +37,12 @@ Thumbs.db
 # Claude Code 工作区
 .claude/
 .playwright-mcp/
+
+# Rust/PyO3 build artefacts. target/ + .pyd cover the maturin-produced
+# binaries; .so is already caught by the top-level *.so rule. Cargo.lock
+# for a library/PyO3-extension crate is conventionally not committed —
+# we build locally per-machine and don't ship a wheel.
+rust/**/target/
+rust/**/*.pyd
+rust/**/*.dll
+rust/**/Cargo.lock

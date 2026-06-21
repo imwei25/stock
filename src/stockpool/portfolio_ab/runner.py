@@ -89,6 +89,7 @@ def run_single_arm(
     name_map: Mapping[str, str],
     refresh_scores: bool = False,
     portfolio_pool_data: Mapping[str, pd.DataFrame] | None = None,
+    n_workers: int | None = None,
 ) -> ArmResult:
     """Execute one portfolio arm. Exceptions are caught and packed into ArmResult.
 
@@ -106,6 +107,10 @@ def run_single_arm(
             Setting this to a subset lets training stay on the full pool
             while portfolio top-K only picks from this subset (avoids
             OOM/segfault from precompute on full 4358-stock predict).
+        n_workers: forwarded to ``precompute_scores_from_legacy`` —
+            ``None`` keeps the helper's default (safe for memory), ``1``
+            forces serial, larger values parallelise but cost
+            ``~6 GB RAM per worker`` on Windows spawn.
     """
     if portfolio_pool_data is None:
         portfolio_pool_data = pool_data
@@ -147,7 +152,9 @@ def run_single_arm(
         else:
             log.info("[%s] precomputing score panel ...", arm_name)
             # Score only the portfolio universe (subset of training pool).
-            score_panel = precompute_scores_from_legacy(legacy, portfolio_pool_data)
+            score_panel = precompute_scores_from_legacy(
+                legacy, portfolio_pool_data, n_workers=n_workers,
+            )
             if score_panel.empty:
                 raise RuntimeError("score panel is empty — all stocks failed")
             score_panel.to_parquet(score_path)
@@ -208,14 +215,15 @@ def run_portfolio_ab(
     name_map: Mapping[str, str],
     refresh_scores: bool = False,
     portfolio_pool_data: Mapping[str, pd.DataFrame] | None = None,
+    n_workers: int | None = None,
 ) -> ABResult:
     """Run both arms in sequence; return ``ABResult`` with both outcomes.
 
     Each arm is independent — if arm A throws, arm B still runs and the
     report still renders with a red banner for the failed side.
 
-    See ``run_single_arm`` for ``portfolio_pool_data`` semantics
-    (training pool vs portfolio universe decoupling).
+    See ``run_single_arm`` for ``portfolio_pool_data`` and ``n_workers``
+    semantics.
     """
     arms: dict[str, ArmResult] = {}
     for arm_name, override in ab_cfg.arms.items():
@@ -233,5 +241,6 @@ def run_portfolio_ab(
             pool_data=pool_data, sector_map=sector_map, name_map=name_map,
             refresh_scores=refresh_scores,
             portfolio_pool_data=portfolio_pool_data,
+            n_workers=n_workers,
         )
     return ABResult(arms=arms)

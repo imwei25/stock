@@ -1,8 +1,10 @@
 """AB candidate pool — stratified ~100-stock pool for AB tests.
 
 Build: industry-stratified top-2-mcap + top-2-liquidity selection from
-universe.parquet, with akshare 流通市值 snapshot. Persisted to
-data/ab_pool.parquet; static unless rebuilt by hand.
+universe.parquet. 流通市值 (free-float market cap) is computed locally
+as ``liqaShare × latest_close`` using the baostock profit table
+(``data/fundamentals_profit.parquet``) — no akshare network call.
+Persisted to ``data/ab_pool.parquet``; static unless rebuilt by hand.
 
 See docs/superpowers/specs/2026-06-06-ab-candidate-pool-design.md.
 """
@@ -119,26 +121,58 @@ def _stratified_select(df: pd.DataFrame, cfg: AbPoolConfig) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _import_akshare():
-    """Indirection seam for tests — mock this function, not `import akshare`."""
-    import akshare
-    return akshare
+def _fetch_circ_mv_snapshot(cache_dir: str | _Path = "data") -> pd.DataFrame:
+    """Compute 流通市值 (free-float market cap) entirely from local data.
 
+    Source: baostock profit table (``data/fundamentals_profit.parquet``) for
+    ``liqaShare`` (流通 A 股股数, point-in-time at each quarter's pubDate)
+    × the latest ``close`` from each stock's per-stock daily parquet.
 
-def _fetch_circ_mv_snapshot() -> pd.DataFrame:
-    """Pull 全 A 股流通市值 snapshot from akshare's stock_zh_a_spot_em.
+    Replaces a prior akshare ``stock_zh_a_spot_em`` snapshot. Same output
+    schema (``code``, ``circ_mv``) but offline and proxy-independent;
+    the trade-off is that ``liqaShare`` is updated quarterly rather than
+    intraday, which is more than enough resolution for ab-pool's
+    industry-stratified top-2 mcap selection.
 
-    Returns columns: code (str, 6-digit zero-padded), name (str), circ_mv (yuan).
-    Raises on akshare failure — caller decides exit semantics.
+    Stocks missing from the profit table OR with no daily cache get
+    ``circ_mv = NaN`` (caller filters via ``_apply_hard_filters``).
     """
-    ak = _import_akshare()
-    raw = ak.stock_zh_a_spot_em()
-    out = pd.DataFrame({
-        "code": raw["代码"].astype(str).str.zfill(6),
-        "name": raw["名称"].astype(str),
-        "circ_mv": pd.to_numeric(raw["流通市值"], errors="coerce"),
-    })
-    return out
+    cache_dir = _Path(cache_dir)
+    prof_path = cache_dir / "fundamentals_profit.parquet"
+    if not prof_path.exists():
+        raise FileNotFoundError(
+            f"{prof_path} not found. Run baostock fundamentals fetch first "
+            f"(e.g. `python -m stockpool run --refresh-fundamentals`)."
+        )
+    prof = pd.read_parquet(prof_path)
+    prof["code"] = prof["code"].astype(str).str.zfill(6)
+    # Most-recent liqaShare per code (max pubDate per group).
+    prof = prof.sort_values(["code", "pubDate"]).drop_duplicates(
+        "code", keep="last",
+    )
+    prof = prof[["code", "liqaShare"]].copy()
+
+    rows: list[dict] = []
+    for code in prof["code"]:
+        path = cache_dir / f"{code}_daily.parquet"
+        if not path.exists():
+            rows.append({"code": code, "close": float("nan")})
+            continue
+        try:
+            df = pd.read_parquet(path, columns=["close"])
+            close = float(df["close"].iloc[-1]) if len(df) else float("nan")
+        except Exception as e:
+            log.warning("ab_pool: latest close read failed for %s (%s)", code, e)
+            close = float("nan")
+        rows.append({"code": code, "close": close})
+    closes_df = pd.DataFrame(rows)
+
+    merged = prof.merge(closes_df, on="code", how="left")
+    # baostock returns empty string for missing/uninitialised liqaShare
+    # in some rows — coerce to NaN instead of raising in astype.
+    merged["liqaShare"] = pd.to_numeric(merged["liqaShare"], errors="coerce")
+    merged["circ_mv"] = merged["liqaShare"] * merged["close"]
+    return merged[["code", "circ_mv"]]
 
 
 def _compute_avg_amount_20d(
@@ -208,21 +242,18 @@ def build_ab_pool(cfg: "AppConfig", refresh: bool = False) -> _Path:
     universe = pd.read_parquet(universe_path)
     universe["code"] = universe["code"].astype(str).str.zfill(6)
 
-    snapshot = _fetch_circ_mv_snapshot()
+    snapshot = _fetch_circ_mv_snapshot(cache_dir)
     industry = _load_industry_map(cache_dir, cfg.ab_pool.industry_source)
     ipo_dates = _load_ipo_dates(cache_dir)
     liq = _compute_avg_amount_20d(list(universe["code"]), cache_dir)
 
     # Assemble candidate table — left-join universe ← snapshot ← industry ← ipo ← liq
+    # Snapshot is now baostock-based and carries only ``code, circ_mv``;
+    # names come from universe.parquet (mootdx) — stale ST-rename within
+    # one update cycle is acceptable for ab-pool's coarse stratification.
     candidates = universe[["code", "name"]].merge(
-        snapshot[["code", "circ_mv", "name"]].rename(
-            columns={"name": "snapshot_name"}
-        ),
-        on="code", how="left",
+        snapshot[["code", "circ_mv"]], on="code", how="left",
     )
-    # Prefer akshare name when present (more authoritative for ST tagging)
-    candidates["name"] = candidates["snapshot_name"].fillna(candidates["name"])
-    candidates = candidates.drop(columns=["snapshot_name"])
     candidates["industry"] = candidates["code"].map(industry).fillna("未知")
     candidates["ipo_date"] = candidates["code"].map(
         lambda c: ipo_dates.get(c, pd.Timestamp("1900-01-01"))

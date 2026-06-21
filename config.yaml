@@ -132,6 +132,22 @@ recommend_pool:
   # 注:mootdx 的 block_hy.dat 在 TDX 服务器返回 0 字节,无法用于行业映射
   industry_source: auto
 
+
+# Portfolio-level backtest: top-K equal-weight + periodic rebalance.
+# Off by default (per-stock backtests don't need this); flip enabled=true
+# to opt in. portfolio_ab.yaml inherits this section.
+portfolio_backtest:
+  enabled: true
+  portfolio:
+    top_k: 20
+    rebalance_n_days: 5
+    max_per_industry: 5
+    initial_cash: 1.0
+  eligibility:
+    min_avg_amount_20d: 5.0e7
+    exclude_st: true
+    min_history_bars: 60
+
 # === 策略选择 ===
 # name: composite_verdict (默认, 原综合评级) | ml_factor (Lasso + IC 两步法)
 strategy:
