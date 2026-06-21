@@ -10,10 +10,17 @@ NaN 安全:窗口期不足或除零返回 NaN。
 
 WQ101 论文里 ``rank(x)`` 默认就是横截面 (每天对所有股票打分),与本库一致。
 
-实现拆分:9 个 hot op(correlation / ts_rank / decay_linear / ts_std /
-ts_argmax / ts_argmin / rank / indneutralize + PR-T1.2 新增的
-decay_linear + indneutralize Rust dispatcher)的 pandas oracle 在
-``_ops_py.py`` —— Rust 加速通过 dispatcher 透明接入,本模块的公开 API 不变。
+实现拆分:hot op 的 pandas oracle 在 ``_ops_py.py`` ——
+Rust 加速通过 dispatcher 透明接入,本模块的公开 API 不变。
+
+当前 Rust dispatch 状态:
+  - rank / ts_std / ts_argmax / ts_argmin / ts_rank: Rust (PR-T1.1)
+  - decay_linear / indneutralize: Rust (PR-T1.2)
+  - ts_min / ts_max: Rust (PR-B2); bit-exact with pandas oracle
+  - ts_sum / ts_mean: pandas oracle only — ~1 ULP FP diff in Rust
+    cascades through downstream rank() into O(1) divergence in
+    composed factors. Same deferral precedent as correlation.
+  - correlation: pandas oracle only (PR-3 deferral; see note below)
 """
 from __future__ import annotations
 
@@ -158,15 +165,19 @@ def correlation(x, y, d):
 
 
 __all__ = [
-    # hot ops (delegated to _ops_py)
+    # hot ops (delegated to _ops_py; Rust dispatch when available)
     "correlation",
     "decay_linear",
     "indneutralize",
     "rank",
     "ts_argmax",
     "ts_argmin",
+    "ts_max",
+    "ts_mean",
+    "ts_min",
     "ts_rank",
     "ts_std",
+    "ts_sum",
     # light ops (defined inline below)
     "adv",
     "covariance",
@@ -178,11 +189,7 @@ __all__ = [
     "scale",
     "signedpower",
     "stddev",
-    "ts_max",
-    "ts_mean",
-    "ts_min",
     "ts_product",
-    "ts_sum",
     "vwap",
 ]
 
@@ -211,19 +218,52 @@ def delta(x: pd.DataFrame, d: int) -> pd.DataFrame:
 
 
 def ts_sum(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=_min_periods(d)).sum()
+    """Rolling sum. NaN/inf-skip; min_periods = max(1, int(d*0.6)).
+
+    NOTE: Always uses the pandas oracle path, even when Rust is available.
+    The Rust per-window recomputation and pandas' internal Cython path
+    differ by ~1 ULP (~2e-13) for windows of large values (e.g. price *
+    3-field average ~70-80). This tiny diff, when fed through a downstream
+    rank() call, can flip the rank order of nearly-equal stocks by exactly
+    1/N ≈ 0.01-0.02, producing O(1) divergence in composed factors
+    (alpha_005, alpha_023, alpha_024, alpha_045, alpha_083). The snapshot
+    test was generated against the pandas oracle so Rust dispatch requires
+    regenerating the snapshot — same scope issue as correlation. Deferred
+    to a follow-up (same precedent as the correlation dispatcher).
+    """
+    return _py_ops.ts_sum(x, d)
 
 
 def ts_mean(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=_min_periods(d)).mean()
+    """Rolling mean. NaN/inf-skip; min_periods = max(1, int(d*0.6)).
+
+    NOTE: Always uses the pandas oracle (same FP-cascade reasoning as
+    ts_sum — ts_mean = ts_sum / n_finite, so the FP diff propagates
+    identically into downstream rank() operations).
+    """
+    return _py_ops.ts_mean(x, d)
 
 
 def ts_min(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=d).min()
+    """Rolling min. Strict min_periods = d; any NaN/inf in window → NaN."""
+    if _USE_RUST:
+        import numpy as _np
+        import pandas as _pd
+        arr = _np.ascontiguousarray(x.to_numpy(), dtype=_np.float64)
+        out_arr = _rust.ts_min(arr, int(d))
+        return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
+    return _py_ops.ts_min(x, d)
 
 
 def ts_max(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    return x.rolling(d, min_periods=d).max()
+    """Rolling max. Strict min_periods = d; any NaN/inf in window → NaN."""
+    if _USE_RUST:
+        import numpy as _np
+        import pandas as _pd
+        arr = _np.ascontiguousarray(x.to_numpy(), dtype=_np.float64)
+        out_arr = _rust.ts_max(arr, int(d))
+        return _pd.DataFrame(out_arr, index=x.index, columns=x.columns)
+    return _py_ops.ts_max(x, d)
 
 
 def ts_product(x: pd.DataFrame, d: int) -> pd.DataFrame:

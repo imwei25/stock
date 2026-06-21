@@ -118,6 +118,25 @@
 
 ---
 
+## #7 — B2 light ops Rust:`ts_sum` / `ts_mean` 留 pandas(同 #1 correlation 性质)
+
+- **日期**:2026-06-21
+- **Task**:Tier 2 B2 / T3.1(commit `79284e7`,branch `feat/light-ops-rust`)
+- **Spec 原意**:把 4 个轻量 rolling op(`ts_sum` / `ts_mean` / `ts_min` / `ts_max`)全部上 Rust dispatcher。
+- **实际选择**:
+  - **`ts_min` / `ts_max` → Rust 已 dispatch**(bit-exact,real panel 上 max diff = 0.0)
+  - **`ts_sum` / `ts_mean` → 保留 pandas oracle**(Rust 实现存在 + Layer A 单测通过,但未接入 `ops.py` dispatcher)
+- **理由**:Pandas 的 Cython `rolling.sum()` 用了一个内部累加路径(不是 naive forward sum、不是 online、不是 Kahan、不是 pairwise),与任何标准算法都有 ~1 ULP(~2e-13)的差。该差在 100 票截面 + `rank()` 后翻转 2/N=0.02 的 rank,导致 5 个 WQ alpha(alpha_005/023/024/045/083)snapshot 漂移超出容差。同 #1 correlation 同 root cause(pandas C 层 FP 路径不可逆向对齐)。
+- **后续可行修复**:
+  - 重新生成 `tests/fixtures/ops_snapshot.parquet`(把当前 Rust dispatch 当 truth)
+  - 或者把 `ts_sum`/`ts_mean` 切到 Kahan/pairwise summation,再观察是否消除 cascade
+  - 都不在本 PR 范围
+- **副作用**:Rust 二进制里有 2 个未被调用的函数(`stockpool_ops_rs.ts_sum/ts_mean`,可直接调,不通过 ops.py)。无 size 开销显著差异。
+- **验收**:`tests/test_ops_snapshot.py` 167/167 通过,未扩白名单;`STOCKPOOL_USE_PYTHON_OPS=1` rollback PASS;Layer A 24 个新测试全过。
+- **审计**:符合用户验收"结果没变或者只有精度内的改变"。本日志条目存档。
+
+---
+
 ## 决策原则备忘
 
 - **战术偏差**(FP / 库选型 / 容差):recommender 选好就执行,写入本日志即可。
