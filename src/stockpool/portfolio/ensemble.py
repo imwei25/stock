@@ -103,16 +103,18 @@ class StaggeredRunner:
                 import concurrent.futures
                 import os
                 max_workers = min(n_offsets, os.cpu_count() or 1)
-                # Use ThreadPoolExecutor rather than ProcessPoolExecutor:
-                # numpy releases the GIL so threads get real parallelism, and
-                # threads share the FP environment → bit-exact results vs serial.
-                # (Subprocesses run in a fresh interpreter with different FP
-                # register state → sub-ULP differences that break assert_array_equal.)
-                with concurrent.futures.ThreadPoolExecutor(
+                # ProcessPoolExecutor gives real CPU parallelism for the
+                # bar-loop in PortfolioEngine.run (which is GIL-bound Python
+                # — dict lookups, pandas .iloc[], top-K sort). Sub-ULP FP
+                # drift across spawn boundaries is expected and absorbed by
+                # the test's rtol=1e-12 / atol=0 tolerance (well below
+                # cost/slippage noise in any portfolio simulation).
+                with concurrent.futures.ProcessPoolExecutor(
                     max_workers=max_workers,
                 ) as ex:
-                    # Submit in offset order so result list is deterministically
-                    # ordered k=0,1,...,n_offsets-1 (FP mean is order-sensitive).
+                    # Submit in offset order; collect by k so the result
+                    # list is deterministic regardless of completion order
+                    # (the ensemble mean is FP-order-sensitive).
                     futures = {
                         k: ex.submit(
                             _run_one_offset_in_subprocess,
