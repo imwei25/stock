@@ -493,3 +493,55 @@ def test_analyze_factors_winsorize_none_skips_winsorize_panel(monkeypatch):
 
     analyze_factors(panel, ["momentum_20"], horizon=2, winsorize=(0.01, 0.99))
     assert calls["n"] >= 1, "winsorize=(lo,hi) must call winsorize_panel"
+
+
+def test_analyze_factors_marks_degenerate_days_nan():
+    """Days where factor cross-section is near-constant produce NaN IC."""
+    import numpy as np
+    import pandas as pd
+    from stockpool.factors_analysis import analyze_factors
+    from stockpool.factors.registry import _REGISTRY, FactorSpec
+    from stockpool.factors.base import Factor
+
+    dates = pd.date_range("2024-01-01", periods=40, freq="B")
+    codes = [f"S{i:03d}" for i in range(100)]
+    rng = np.random.default_rng(0)
+    close = pd.DataFrame(
+        np.cumprod(1 + rng.normal(0, 0.01, (40, 100)), axis=0),
+        index=dates, columns=codes,
+    )
+    panel = {"open": close, "high": close, "low": close, "close": close,
+             "volume": pd.DataFrame(1.0, index=dates, columns=codes)}
+
+    class _DegenerateFactor(Factor):
+        sources = ("test",); types = ("cross_sectional",)
+        description = "factor that is constant on first 20 days, varied after"
+        @property
+        def name(self): return "degenerate_test"
+        def compute(self, panel):
+            out = pd.DataFrame(7.0, index=panel["close"].index,
+                               columns=panel["close"].columns)
+            # vary the last 20 days only
+            for i in range(20, len(out)):
+                out.iloc[i] = panel["close"].iloc[i].rank()
+            return out
+
+    _REGISTRY["degenerate_test"] = FactorSpec(
+        base_name="degenerate_test", cls=_DegenerateFactor,
+        sources=("test",), types=("cross_sectional",), description="",
+    )
+
+    r = analyze_factors(
+        panel, ["degenerate_test"], horizon=2,
+        winsorize=None,
+        degenerate_day_unique_ratio_threshold=0.01,
+    )
+    ic = r.daily_ic["degenerate_test"]
+    # first 20 days have nunique=1 → flagged → NaN
+    assert ic.iloc[:20].isna().all(), "constant days must have NaN IC"
+    # at least some of the last 20 should be non-NaN
+    assert ic.iloc[20:].notna().sum() > 5, "varied days should produce IC"
+    # ratio recorded on the result
+    assert hasattr(r, "degenerate_day_ratio")
+    ratio = r.degenerate_day_ratio["degenerate_test"]
+    assert 0.4 < ratio <= 0.55, f"expected ~50% degenerate, got {ratio}"

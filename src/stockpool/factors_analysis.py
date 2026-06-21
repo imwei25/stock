@@ -55,6 +55,7 @@ class FactorAnalysisResult:
     n_days: int
     start_date: pd.Timestamp
     end_date: pd.Timestamp
+    degenerate_day_ratio: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
 
     def to_dict(self) -> dict:
         return {
@@ -84,6 +85,7 @@ class FactorAnalysisResult:
             "n_days": self.n_days,
             "start_date": self.start_date.isoformat(),
             "end_date": self.end_date.isoformat(),
+            "degenerate_day_ratio": _series_to_json_dict(self.degenerate_day_ratio),
         }
 
     def to_json(self, path: str | Path) -> None:
@@ -122,6 +124,7 @@ class FactorAnalysisResult:
             n_days=int(d["n_days"]),
             start_date=pd.Timestamp(d["start_date"]),
             end_date=pd.Timestamp(d["end_date"]),
+            degenerate_day_ratio=_series_from_json_dict(d.get("degenerate_day_ratio", {})),
         )
 
     @classmethod
@@ -242,6 +245,7 @@ def analyze_factors(
     regime_index_close: pd.Series | None = None,
     method: Literal["spearman", "pearson"] = "spearman",
     winsorize: tuple[float, float] | None = (0.01, 0.99),
+    degenerate_day_unique_ratio_threshold: float = 0.01,
 ) -> FactorAnalysisResult:
     """End-to-end factor analysis on a panel.
 
@@ -259,6 +263,14 @@ def analyze_factors(
                      factor wide-frame before IC; pass ``None`` to disable.
                      Default ``(0.01, 0.99)`` matches the ML training
                      pipeline so IC numbers are comparable.
+        degenerate_day_unique_ratio_threshold: days where
+                     ``nunique / n_valid <= threshold`` are marked NaN in
+                     daily IC and counted in ``degenerate_day_ratio``.
+                     Default ``0.01`` (≤ 1% of stocks have unique ranks).
+                     Defends against discrete-output factors like
+                     ``ts_argmax`` whose cross-section is dominated by
+                     ties and would otherwise drive Spearman rank IC to
+                     spurious ±1.0.
 
     Returns:
         ``FactorAnalysisResult`` with per-factor metrics and pairwise IC correlation.
@@ -281,6 +293,7 @@ def analyze_factors(
     # which can OOM C extensions even when raw RAM looks fine (ACCESS_VIOLATION
     # on Windows). daily_ic alone is a T-length Series per factor (~4 KB).
     daily_ic: dict[str, pd.Series] = {}
+    degenerate_day_ratio_d: dict[str, float] = {}
     try:
         from tqdm import tqdm
         factor_iter = tqdm(
@@ -300,6 +313,19 @@ def analyze_factors(
         if winsorize is not None:
             fp_one = winsorize_panel(fp_one, wlo, whi)
         daily_ic[name] = compute_daily_ic(fp_one, fwd, method=method)
+        # Detect degenerate (near-constant) days on the post-winsorize panel.
+        n_valid = fp_one.notna().sum(axis=1)
+        unique_counts = fp_one.apply(lambda row: row.dropna().nunique(), axis=1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio_per_day = unique_counts / n_valid.replace(0, np.nan)
+        degenerate = (ratio_per_day <= degenerate_day_unique_ratio_threshold)
+        if degenerate.any():
+            daily_ic[name].loc[degenerate[degenerate].index] = float("nan")
+        valid_days = daily_ic[name].notna() | degenerate
+        denom = int(valid_days.sum())
+        degenerate_day_ratio_d[name] = (
+            float(degenerate.sum()) / denom if denom > 0 else float("nan")
+        )
         del fp_one
 
     mean_ic = pd.Series(
@@ -346,6 +372,9 @@ def analyze_factors(
             )
 
     valid_dates = ic_corr_df.dropna(how="all").index
+    degenerate_day_ratio = pd.Series(
+        degenerate_day_ratio_d, name="degenerate_day_ratio",
+    )
     return FactorAnalysisResult(
         factor_names=factor_names,
         daily_ic=daily_ic,
@@ -361,6 +390,7 @@ def analyze_factors(
         n_days=panel["close"].shape[0],
         start_date=valid_dates.min() if len(valid_dates) else panel["close"].index.min(),
         end_date=valid_dates.max() if len(valid_dates) else panel["close"].index.max(),
+        degenerate_day_ratio=degenerate_day_ratio,
     )
 
 

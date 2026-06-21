@@ -37,22 +37,65 @@ def _summary_html(result: FactorAnalysisResult) -> str:
 
 
 def _ranking_table_html(result: FactorAnalysisResult) -> str:
+    has_degenerate = (
+        isinstance(result.degenerate_day_ratio, pd.Series)
+        and len(result.degenerate_day_ratio) > 0
+    )
     rows = []
     for n in result.factor_names:
-        rows.append({
+        row = {
             "factor": n,
             "mean_ic": float(result.mean_ic[n]),
             "ic_ir": float(result.ic_ir[n]),
             "abs_ic_mean": float(result.abs_ic_mean[n]),
             "half_life": float(result.half_life[n]),
-        })
+        }
+        if has_degenerate:
+            row["degenerate"] = float(result.degenerate_day_ratio.get(n, float("nan")))
+        rows.append(row)
     df = pd.DataFrame(rows).sort_values("ic_ir", key=lambda s: s.abs(), ascending=False)
-    return (
-        '<h3 style="font-family:sans-serif">因子排名 (按 |IC IR| 降序)</h3>'
-        + df.to_html(
+    if not has_degenerate:
+        body = df.to_html(
             index=False, float_format="%.4f", border=0,
             classes="ranking-table",
         )
+    else:
+        # Render manually so we can apply a .warn class to the degenerate cell
+        # when ratio > 0.20 (red text via CSS).
+        cols = ["factor", "mean_ic", "ic_ir", "abs_ic_mean", "half_life", "degenerate"]
+        header_labels = {
+            "factor": "factor", "mean_ic": "mean_ic", "ic_ir": "ic_ir",
+            "abs_ic_mean": "abs_ic_mean", "half_life": "half_life",
+            "degenerate": "degenerate %",
+        }
+        thead = "".join(f"<th>{header_labels[c]}</th>" for c in cols)
+        body_rows = []
+        for _, r in df.iterrows():
+            cells = []
+            for c in cols:
+                v = r[c]
+                if c == "factor":
+                    cells.append(f"<td>{v}</td>")
+                elif c == "degenerate":
+                    if pd.isna(v):
+                        cells.append('<td>nan</td>')
+                    else:
+                        cls = ' class="warn"' if v > 0.20 else ""
+                        cells.append(f'<td{cls}>{v * 100:.2f}%</td>')
+                else:
+                    cells.append(
+                        f"<td>nan</td>" if pd.isna(v) else f"<td>{v:.4f}</td>"
+                    )
+            body_rows.append("<tr>" + "".join(cells) + "</tr>")
+        body = (
+            '<table border="0" class="ranking-table">'
+            f"<thead><tr>{thead}</tr></thead>"
+            f"<tbody>{''.join(body_rows)}</tbody>"
+            "</table>"
+        )
+    return (
+        '<h3 style="font-family:sans-serif">因子排名 (按 |IC IR| 降序)</h3>'
+        + body
     )
 
 
@@ -156,6 +199,7 @@ def render_factor_analysis_report(
         'table{border-collapse:collapse;font-size:13px;margin:8px 0 24px;}'
         'th{background:#f0f3f7;padding:6px 10px;text-align:left;}'
         'td{padding:4px 10px;border-bottom:1px solid #e6e9ed;}'
+        'td.warn{color:#c4463a;font-weight:600;}'
         '</style></head><body>'
     )
     out_path.write_text(
