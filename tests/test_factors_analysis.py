@@ -390,3 +390,76 @@ def test_analyze_factors_with_industry_neutral_factor():
     assert "industry_relative_strength_20" in result.daily_ic
     assert result.daily_ic["industry_relative_strength_20"].notna().any()
     set_sector_map({})  # cleanup
+
+
+def test_analyze_factors_applies_winsorize(monkeypatch):
+    """winsorize=(lo,hi) clips factor cross-section before IC."""
+    import numpy as np
+    import pandas as pd
+    from stockpool.factors_analysis import analyze_factors
+    from stockpool.factors.registry import _REGISTRY, register
+    from stockpool.factors.base import Factor
+
+    dates = pd.date_range("2024-01-01", periods=40, freq="B")
+    codes = [f"S{i:03d}" for i in range(20)]
+    rng = np.random.default_rng(0)
+    close = pd.DataFrame(
+        np.cumprod(1 + rng.normal(0, 0.01, (40, 20)), axis=0),
+        index=dates, columns=codes,
+    )
+    panel = {"open": close, "high": close, "low": close, "close": close,
+             "volume": pd.DataFrame(1.0, index=dates, columns=codes)}
+
+    class _SpikeFactor(Factor):
+        sources = ("test",); types = ("cross_sectional",)
+        description = "factor with one giant outlier per day"
+        @property
+        def name(self): return "spike_test"
+        def compute(self, panel):
+            base = panel["close"].rank(axis=1)
+            base.iloc[:, 0] = 1e6  # huge outlier in column 0 every day
+            return base
+
+    monkeypatch.setitem(_REGISTRY, "spike_test",
+        type(_REGISTRY[list(_REGISTRY)[0]])(
+            base_name="spike_test", cls=_SpikeFactor,
+            sources=("test",), types=("cross_sectional",), description="",
+        ))
+
+    # NOTE: use method="pearson" here because Spearman is rank-invariant: clipping
+    # a single outlier still leaves its column as the row-max so rank IC is
+    # unchanged. Pearson IC responds to the actual clipped values, which is what
+    # we need to prove the winsorize plumbing actually runs.
+    r_winsorized = analyze_factors(panel, ["spike_test"], horizon=2,
+                                   winsorize=(0.05, 0.95), method="pearson")
+    r_raw = analyze_factors(panel, ["spike_test"], horizon=2,
+                            winsorize=None, method="pearson")
+    # With winsorize on, the outlier column is clipped → IC shape differs from raw.
+    assert r_raw.daily_ic["spike_test"].std() > 0
+    assert r_winsorized.daily_ic["spike_test"].std() > 0
+    assert not r_winsorized.daily_ic["spike_test"].equals(
+        r_raw.daily_ic["spike_test"]
+    ), "winsorize=(0.05,0.95) must change daily IC vs winsorize=None"
+
+
+def test_analyze_factors_winsorize_default_is_lenient():
+    """Default winsorize=(0.01, 0.99) should NOT change healthy-factor IC by much."""
+    import numpy as np
+    import pandas as pd
+    from stockpool.factors_analysis import analyze_factors
+
+    dates = pd.date_range("2024-01-01", periods=80, freq="B")
+    codes = [f"S{i:03d}" for i in range(50)]
+    rng = np.random.default_rng(1)
+    close = pd.DataFrame(
+        np.cumprod(1 + rng.normal(0, 0.01, (80, 50)), axis=0),
+        index=dates, columns=codes,
+    )
+    panel = {"open": close, "high": close, "low": close, "close": close,
+             "volume": pd.DataFrame(1.0, index=dates, columns=codes)}
+
+    r_default = analyze_factors(panel, ["momentum_20"], horizon=3)
+    r_none = analyze_factors(panel, ["momentum_20"], horizon=3, winsorize=None)
+    diff = (r_default.abs_ic_mean["momentum_20"]
+            - r_none.abs_ic_mean["momentum_20"])
+    assert abs(diff) < 0.02, f"winsorize=(0.01,0.99) shifted abs_ic by {diff:.4f}"

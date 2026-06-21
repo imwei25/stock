@@ -241,6 +241,7 @@ def analyze_factors(
     ic_window: int = 252,
     regime_index_close: pd.Series | None = None,
     method: Literal["spearman", "pearson"] = "spearman",
+    winsorize: tuple[float, float] | None = (0.01, 0.99),
 ) -> FactorAnalysisResult:
     """End-to-end factor analysis on a panel.
 
@@ -254,6 +255,10 @@ def analyze_factors(
         regime_index_close: optional pd.Series of an index close (e.g. sh000001)
                      to split daily IC into bull/bear/sideways regimes.
         method:      "spearman" (rank IC, default) or "pearson".
+        winsorize:   ``(lo, hi)`` per-day quantile clip applied to each
+                     factor wide-frame before IC; pass ``None`` to disable.
+                     Default ``(0.01, 0.99)`` matches the ML training
+                     pipeline so IC numbers are comparable.
 
     Returns:
         ``FactorAnalysisResult`` with per-factor metrics and pairwise IC correlation.
@@ -284,11 +289,16 @@ def analyze_factors(
         )
     except ImportError:
         factor_iter = factor_names
+    if winsorize is not None:
+        from stockpool.ml.preprocess import winsorize_panel
+        wlo, whi = winsorize
     for name in factor_iter:
         if hasattr(factor_iter, "set_postfix_str"):
             factor_iter.set_postfix_str(name)
         f = make_factor(name)
         fp_one = f.compute(panel)
+        if winsorize is not None:
+            fp_one = winsorize_panel(fp_one, wlo, whi)
         daily_ic[name] = compute_daily_ic(fp_one, fwd, method=method)
         del fp_one
 
