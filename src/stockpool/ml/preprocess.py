@@ -274,6 +274,67 @@ def industry_neutralize_panel(
     return out
 
 
+def _industry_neutralize_per_day_loop(
+    df: pd.DataFrame,
+    sector_map: Mapping[str, str],
+    log_mcap: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """LEGACY per-day OLS loop. Kept ONLY as a test oracle (see
+    tests/test_ml_preprocess_mcap.py::test_industry_log_mcap_batch_matches_legacy).
+    Not used in production after PR-T1.1."""
+    if not sector_map:
+        raise ValueError("sector_map is empty; cannot industry-neutralize")
+
+    if log_mcap is None:
+        # Legacy fast path — group demean (bit-for-bit unchanged).
+        industries = pd.Series(
+            {c: sector_map.get(c, "_unknown_") for c in df.columns},
+            name="industry",
+        )
+        transposed = df.T.copy()
+        transposed["__industry__"] = industries
+        date_cols = [c for c in transposed.columns if c != "__industry__"]
+        demeaned = transposed.groupby("__industry__")[date_cols].transform(
+            lambda s: s - s.mean()
+        )
+        return demeaned.T
+
+    # OLS path: build one-hot industry dummies (drop first to avoid singularity)
+    industries = pd.Series(
+        {c: sector_map.get(c, "_unknown_") for c in df.columns},
+    )
+    dummies = pd.get_dummies(industries, prefix="ind", drop_first=True, dtype=float)
+    # dummies index = codes; columns = ind_<label> minus reference
+
+    log_mcap_aligned = log_mcap.reindex(index=df.index, columns=df.columns)
+    out = df.astype(float).copy()
+    fallback_days = 0
+
+    # Pre-compute group-demean output once for fallback rows
+    legacy_fallback = industry_neutralize_panel(df, sector_map, log_mcap=None)
+
+    for date in df.index:
+        y = df.loc[date]
+        m = log_mcap_aligned.loc[date]
+        X = dummies.copy()
+        X["intercept"] = 1.0
+        X["log_mcap"] = m.values
+        resid, used_ols = _per_day_ols_residual(y, X)
+        if used_ols:
+            out.loc[date] = resid
+        else:
+            out.loc[date] = legacy_fallback.loc[date]
+            fallback_days += 1
+
+    if fallback_days:
+        log.warning(
+            "industry_neutralize_panel(log_mcap=...): OLS fallback on %d / %d days "
+            "(degenerate cross-section); used group demean for those days",
+            fallback_days, len(df.index),
+        )
+    return out
+
+
 def _is_all_off(cfg: "PreprocessConfig") -> bool:
     """True when every step is disabled (cfg semantically a no-op)."""
     return (
