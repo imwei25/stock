@@ -12,7 +12,7 @@ from stockpool.cli import main
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _seed_cache(cache_dir: Path, codes, n=200):
+def _seed_cache(cache_dir: Path, codes, n=80):
     rng = np.random.default_rng(7)
     for code in codes:
         returns = rng.normal(0.0005, 0.02, n)
@@ -32,9 +32,12 @@ def _seed_cache(cache_dir: Path, codes, n=200):
 def ab_setup(tmp_path, monkeypatch):
     cache_dir = tmp_path / "data"
     cache_dir.mkdir()
-    codes = ["605589", "000001", "000002", "000003"]
+    # Tiny fixture: 3 stocks × 80 days. Smaller pool keeps the CLI smoke
+    # path under the n_workers=20-stock parallel-mode threshold (see
+    # portfolio.scoring) so each test doesn't spawn a Pool needlessly.
+    codes = ["605589", "000001", "000002"]
     _seed_cache(cache_dir, codes)
-    cache_last = pd.date_range("2024-01-02", periods=200, freq="B")[-1]
+    cache_last = pd.date_range("2024-01-02", periods=80, freq="B")[-1]
     monkeypatch.setattr(
         "stockpool.fetcher._today",
         lambda: pd.Timestamp(cache_last) + pd.Timedelta(days=1),

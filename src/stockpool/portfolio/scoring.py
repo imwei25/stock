@@ -124,6 +124,17 @@ def precompute_scores_from_legacy(
         # users can raise via the --workers CLI flag if they have headroom.
         n_workers = max(1, min(3, (os.cpu_count() or 1) - 1))
 
+    # Short-circuit: tiny workloads where Pool spawn overhead would dwarf
+    # any parallelism gain. Threshold 20 covers CLI smoke tests
+    # (typically 3-8 synthetic stocks) and avoids spawning 3 worker
+    # processes each pickling the full strategy just to score 4 stocks.
+    if 0 < len(panel_data) < 20 and n_workers > 1:
+        log.info(
+            "precompute_scores: tiny workload (%d stocks < 20) — forcing serial",
+            len(panel_data),
+        )
+        n_workers = 1
+
     tasks = [(code, daily, score_field) for code, daily in panel_data.items()]
 
     try:
