@@ -397,7 +397,7 @@ def test_analyze_factors_applies_winsorize(monkeypatch):
     import numpy as np
     import pandas as pd
     from stockpool.factors_analysis import analyze_factors
-    from stockpool.factors.registry import _REGISTRY, register
+    from stockpool.factors.registry import _REGISTRY, FactorSpec
     from stockpool.factors.base import Factor
 
     dates = pd.date_range("2024-01-01", periods=40, freq="B")
@@ -420,11 +420,10 @@ def test_analyze_factors_applies_winsorize(monkeypatch):
             base.iloc[:, 0] = 1e6  # huge outlier in column 0 every day
             return base
 
-    monkeypatch.setitem(_REGISTRY, "spike_test",
-        type(_REGISTRY[list(_REGISTRY)[0]])(
-            base_name="spike_test", cls=_SpikeFactor,
-            sources=("test",), types=("cross_sectional",), description="",
-        ))
+    monkeypatch.setitem(_REGISTRY, "spike_test", FactorSpec(
+        base_name="spike_test", cls=_SpikeFactor,
+        sources=("test",), types=("cross_sectional",), description="",
+    ))
 
     # NOTE: use method="pearson" here because Spearman is rank-invariant: clipping
     # a single outlier still leaves its column as the row-max so rank IC is
@@ -463,3 +462,34 @@ def test_analyze_factors_winsorize_default_is_lenient():
     diff = (r_default.abs_ic_mean["momentum_20"]
             - r_none.abs_ic_mean["momentum_20"])
     assert abs(diff) < 0.02, f"winsorize=(0.01,0.99) shifted abs_ic by {diff:.4f}"
+
+
+def test_analyze_factors_winsorize_none_skips_winsorize_panel(monkeypatch):
+    """winsorize=None must not invoke winsorize_panel."""
+    import numpy as np
+    import pandas as pd
+    from stockpool.factors_analysis import analyze_factors
+    from stockpool.ml import preprocess as _preprocess
+
+    dates = pd.date_range("2024-01-01", periods=30, freq="B")
+    codes = [f"S{i:03d}" for i in range(20)]
+    rng = np.random.default_rng(2)
+    close = pd.DataFrame(
+        np.cumprod(1 + rng.normal(0, 0.01, (30, 20)), axis=0),
+        index=dates, columns=codes,
+    )
+    panel = {"open": close, "high": close, "low": close, "close": close,
+             "volume": pd.DataFrame(1.0, index=dates, columns=codes)}
+
+    calls = {"n": 0}
+    real_winsorize = _preprocess.winsorize_panel
+    def _spy(df, lo, hi):
+        calls["n"] += 1
+        return real_winsorize(df, lo, hi)
+    monkeypatch.setattr(_preprocess, "winsorize_panel", _spy)
+
+    analyze_factors(panel, ["momentum_20"], horizon=2, winsorize=None)
+    assert calls["n"] == 0, "winsorize=None must skip winsorize_panel entirely"
+
+    analyze_factors(panel, ["momentum_20"], horizon=2, winsorize=(0.01, 0.99))
+    assert calls["n"] >= 1, "winsorize=(lo,hi) must call winsorize_panel"
