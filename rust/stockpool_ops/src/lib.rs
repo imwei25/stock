@@ -8,12 +8,13 @@
 //! computation via py.allow_threads, so rayon's per-row parallelism actually
 //! runs in parallel.
 
-use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2, ToPyArray};
+use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, ToPyArray};
 use pyo3::prelude::*;
 
 mod cs;
 mod decay;
 mod rolling;
+mod stack;
 mod util;
 
 /// Cross-sectional pct-rank per row.
@@ -143,6 +144,23 @@ fn indneutralize_py<'py>(
     out.to_pyarray_bound(py)
 }
 
+/// Stack a (F, T, N) factor panel into long-form (T*N, F).
+///
+/// Equivalent to per-factor `panel.ravel(order='F')` column-stacked.
+/// `output[stock * T + date, f] = panels[f, date, stock]`
+///
+/// panels must be a contiguous C-order float64 array of shape (F, T, N).
+#[pyfunction]
+#[pyo3(name = "stack_factors_long")]
+fn stack_factors_long_py<'py>(
+    py: Python<'py>,
+    panels: PyReadonlyArray3<'py, f64>,
+) -> Bound<'py, PyArray2<f64>> {
+    let view = panels.as_array();
+    let out = py.allow_threads(|| stack::stack_factors_long(view));
+    out.to_pyarray_bound(py)
+}
+
 #[pymodule]
 fn stockpool_ops_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rank, m)?)?;
@@ -157,5 +175,6 @@ fn stockpool_ops_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(correlation_py, m)?)?;
     m.add_function(wrap_pyfunction!(decay_linear_py, m)?)?;
     m.add_function(wrap_pyfunction!(indneutralize_py, m)?)?;
+    m.add_function(wrap_pyfunction!(stack_factors_long_py, m)?)?;
     Ok(())
 }
