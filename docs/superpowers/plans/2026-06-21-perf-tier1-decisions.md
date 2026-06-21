@@ -87,6 +87,37 @@
 
 ---
 
+## #6 — B1 prewarm:host 选择 + walk 路径 + 本地 pipeline sync(3 处协同修正)
+
+- **日期**:2026-06-21
+- **Task**:Tier 2 B1 / T2.1(commit `84e2ee9` → 修正于 `8108642`)
+- **背景**:`precompute_scores` 在 n_workers>1 时,每个 worker 独立计算 ~12 个月度 Lasso fit(总 n_workers × 12 次)。优化目标:主进程预算一次,workers 通过 pickle 继承。
+- **第一版 implementer 决策**:host 选 `max(panel_data, key=len)`(最长历史)。Verify 脚本只对比"prewarm=True 两次跑结果一致"——**循环验证,没真测到与 serial 等价**。
+- **暴露的问题**:跟 serial 模式(`for code, daily in panel_data.items()` 顺序处理,**第一只**触发 cache miss)选不同 host → 同一 `(sig, year, month)` 键值实际 fit 用了不同 host 的 `current_bar/label_end` → score 数值非 FP 级别差异。违反用户验收标准"结果没变或者只有精度内的改变"。
+- **三段修正**(commit `8108642`):
+
+  | 修正点 | 文件 | 说明 |
+  |---|---|---|
+  | 1. host 选择 | `scoring.py` | `max(len)` → `next(iter(panel_data))`,跟 serial 模式 dict iteration 一致 |
+  | 2. walk 机制 | `scoring.py` | 手写 `for i in range(0, n, refit_every)` 漏掉了 `need_month_fit` 月边界触发(refit cadence 没到、但月跨界了)。改为直接 `warmup_strat.generate_signals(daily)`,复用线上完整 trigger 逻辑 |
+  | 3. 本地 pipeline sync | `strategies.py` `generate_signals` | prewarm 把月度 fit 全装进 cache 后,worker 走 `generate_signals` 时 `need_month_fit=False`(已 cache),refit cadence 又没到 → 本地 `pipeline` 变量停在上一个月。新增 elif 分支:`shared_key_i in cache AND 本地 pipeline 对应的 key != shared_key_i` 时,从 cache 同步过来 |
+
+- **新 invariant**(verify_prewarm_monthly_fits.py 严格验证):
+
+  ```
+  precompute_scores(legacy, panel, n_workers=1, prewarm=False)
+  ==
+  precompute_scores(legacy, panel, n_workers=2, prewarm=True)
+  ```
+
+  bit-exact 在 rtol=1e-12 / atol=0 容差内。
+
+- **副作用**:`strategies.py:generate_signals` 加了 ~20 行,影响所有 ml_factor 调用路径(daily report / per-stock backtest / portfolio-backtest 等)。在非 prewarm 场景下 elif 条件不触发,无副作用。
+- **预期收益**:n_workers=3 时省 ~24 个冗余 Lasso fit。
+- **审计**:本日志条目 + 用户已知"behavior unchanged"是新 invariant 的依据。
+
+---
+
 ## 决策原则备忘
 
 - **战术偏差**(FP / 库选型 / 容差):recommender 选好就执行,写入本日志即可。
