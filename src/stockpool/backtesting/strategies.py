@@ -546,6 +546,14 @@ class MLFactorStrategy(Strategy):
         return build_factor_matrix(daily_df, self.cfg.factors)
 
     def generate_signals(self, daily_df: pd.DataFrame) -> pd.DataFrame:
+        import os
+        # Allow env-var toggle so verify_batch_predict.py can A/B compare the
+        # two paths without touching the class.  Read inside the method body so
+        # the toggle takes effect immediately when the env var changes between
+        # calls (important for the verify script which flips the env var between
+        # two successive calls in the same process).
+        use_batch = os.environ.get("STOCKPOOL_DISABLE_BATCH_PREDICT") != "1"
+
         cfg = self.cfg
         # ``final_score`` mirrors ``score`` and is consumed by the portfolio
         # scoring layer (``precompute_scores_from_legacy`` expects this column,
@@ -568,6 +576,14 @@ class MLFactorStrategy(Strategy):
         last_fit_bar = -10**9
         current_month_key: tuple | None = None  # shared_key for the active pipeline
 
+        # Batch-predict state: when a new pipeline becomes active we
+        # pre-compute predictions for the interval [batch_start, batch_end).
+        # Per-bar look-ups are then O(1) array indexing instead of one
+        # pipeline.predict(single_row) call per bar.
+        batch_preds: pd.Series | None = None  # indexed 0..batch_end-batch_start-1
+        batch_start: int = 0
+        batch_end: int = 0
+
         rows: list[dict] = []
         for i in range(n):
             date_i = daily_df["date"].iloc[i]
@@ -582,6 +598,8 @@ class MLFactorStrategy(Strategy):
                 and self._shared_cache is not None
                 and shared_key_i not in self._shared_cache
             )
+
+            pipeline_changed = False
             if (
                 (pipeline is None or (i - last_fit_bar) >= cfg.refit_every or need_month_fit)
                 and i - cfg.horizon >= cfg.min_train_samples
@@ -591,6 +609,7 @@ class MLFactorStrategy(Strategy):
                     pipeline, quantiles = fitted
                     last_fit_bar = i
                     current_month_key = shared_key_i
+                    pipeline_changed = True
             elif (
                 shared_key_i is not None
                 and shared_key_i != current_month_key
@@ -609,17 +628,50 @@ class MLFactorStrategy(Strategy):
                     pipeline, quantiles = cached_month
                     last_fit_bar = i
                     current_month_key = shared_key_i
+                    pipeline_changed = True
 
             signal = "neutral"
             score_value: float = float("nan")
             if pipeline is not None and quantiles is not None:
-                xi_row = X_full.iloc[[i]]
-                # Partial NaN tolerance — see predict_latest for rationale.
-                if bool(xi_row.notna().any(axis=1).iloc[0]):
-                    xi_row = xi_row.fillna(0.0)
-                    pred = float(pipeline.predict(xi_row).iloc[0])
-                    score_value = pred
-                    signal = _classify_by_quantile(pred, quantiles)
+                if use_batch:
+                    # ── Batch-predict path ─────────────────────────────────
+                    # On pipeline change (new fit or cache-sync): pre-compute
+                    # predictions for [i, next_refit_boundary).  Also extend
+                    # the batch if we've somehow walked past batch_end without
+                    # a new pipeline (shouldn't normally happen, but handled
+                    # for safety).
+                    if pipeline_changed or i >= batch_end:
+                        batch_start = i
+                        batch_end = min(i + cfg.refit_every, n)
+                        X_batch = X_full.iloc[batch_start:batch_end]
+                        has_valid = X_batch.notna().any(axis=1)
+                        # fillna(0.0) is safe here: 0.0 is the neutral value
+                        # after cross-sectional z-scoring.  Rows that were
+                        # entirely NaN will be masked out below via has_valid.
+                        X_filled = X_batch.fillna(0.0)
+                        raw_preds = pipeline.predict(X_filled)
+                        # Build a plain positional Series so iloc look-ups in
+                        # the per-bar step below are O(1) and index-independent.
+                        batch_preds = pd.Series(
+                            raw_preds.values, dtype=float,
+                        ).where(has_valid.values)
+
+                    # Per-bar look-up from cached batch.
+                    local_idx = i - batch_start
+                    if batch_preds is not None and 0 <= local_idx < len(batch_preds):
+                        pred = batch_preds.iloc[local_idx]
+                        if pd.notna(pred):
+                            score_value = float(pred)
+                            signal = _classify_by_quantile(score_value, quantiles)
+                else:
+                    # ── Per-bar path (reference / fallback) ───────────────
+                    xi_row = X_full.iloc[[i]]
+                    # Partial NaN tolerance — see predict_latest for rationale.
+                    if bool(xi_row.notna().any(axis=1).iloc[0]):
+                        xi_row = xi_row.fillna(0.0)
+                        pred = float(pipeline.predict(xi_row).iloc[0])
+                        score_value = pred
+                        signal = _classify_by_quantile(pred, quantiles)
 
             rows.append({
                 "date": date_i, "open": open_i, "close": close_i,
