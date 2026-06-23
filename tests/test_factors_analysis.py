@@ -296,7 +296,7 @@ def test_analyze_factors_ic_correlation_diagonal_is_one():
     assert np.allclose(diag, 1.0, atol=1e-9)
 
 
-def _build_pick_fixture(factor_names, ir_values, corr_pairs=None):
+def _build_pick_fixture(factor_names, ir_values, corr_pairs=None, degen_values=None):
     """Build a minimal FactorAnalysisResult for pick_top_factors tests."""
     n = len(factor_names)
     corr = pd.DataFrame(
@@ -306,6 +306,7 @@ def _build_pick_fixture(factor_names, ir_values, corr_pairs=None):
         corr.loc[a, b] = v
         corr.loc[b, a] = v
     dates = pd.date_range("2024-01-02", periods=10, freq="B")
+    degen = degen_values if degen_values is not None else [0.0] * n
     return FactorAnalysisResult(
         factor_names=list(factor_names),
         daily_ic={n: pd.Series([0.0] * 10, index=dates) for n in factor_names},
@@ -317,6 +318,7 @@ def _build_pick_fixture(factor_names, ir_values, corr_pairs=None):
         regime_ic={},
         horizon=3, ic_window=60, n_stocks=5, n_days=10,
         start_date=dates[0], end_date=dates[-1],
+        degenerate_day_ratio=pd.Series(dict(zip(factor_names, degen))),
     )
 
 
@@ -356,6 +358,25 @@ def test_pick_top_factors_returns_empty_when_all_below_threshold():
     )
     picked = pick_top_factors(res, top_n=5, max_correlation=0.6, min_ir=0.1)
     assert picked == []
+
+
+def test_pick_top_factors_drops_high_degenerate_ratio():
+    """Coverage gate: a high-IR factor that is degenerate on most days (its IC
+    rests on a noise-contaminated minority of days) must be excluded."""
+    res = _build_pick_fixture(
+        factor_names=["a", "b", "c"],
+        ir_values=[0.6, 0.5, 0.4],          # b has the 2nd-best IR ...
+        degen_values=[0.0, 0.7, 0.1],       # ... but 70% of its days are degenerate
+    )
+    picked = pick_top_factors(
+        res, top_n=3, max_correlation=0.99, min_ir=0.0, max_degenerate_ratio=0.5,
+    )
+    assert picked == ["a", "c"]             # b dropped by the coverage gate
+    # Relaxing the gate lets b back in (proves the gate, not IR, dropped it).
+    picked_relaxed = pick_top_factors(
+        res, top_n=3, max_correlation=0.99, min_ir=0.0, max_degenerate_ratio=0.9,
+    )
+    assert picked_relaxed == ["a", "b", "c"]
 
 
 def test_analyze_factors_with_industry_neutral_factor():

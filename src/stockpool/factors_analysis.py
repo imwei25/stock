@@ -426,16 +426,23 @@ def pick_top_factors(
     max_correlation: float = 0.6,
     min_ir: float = 0.05,
     score_by: Literal["ir", "mean_ic", "abs_ic"] = "ir",
+    max_degenerate_ratio: float = 0.5,
 ) -> list[str]:
     """Greedy de-correlation selection on a FactorAnalysisResult.
 
     Algorithm:
       1. Score = |result.ic_ir|  (or |mean_ic|, or abs_ic_mean — picked by ``score_by``).
       2. Drop factors with |ic_ir| < min_ir up front.
-      3. Sort survivors by score descending.
-      4. Walk the list; accept a factor iff its absolute IC-correlation with
+      3. Drop factors whose ``degenerate_day_ratio`` > ``max_degenerate_ratio``
+         — their IC is computed on a minority of days (the rest were NaN'd for
+         low coverage or ties), so the metric is unreliable noise. This is the
+         coverage gate: it stops e.g. alpha_048 (51% degenerate days) being
+         picked on a thin, noise-contaminated IC. Fully-uncomputable factors
+         already drop out at step 1 (NaN score); this catches the partial ones.
+      4. Sort survivors by score descending.
+      5. Walk the list; accept a factor iff its absolute IC-correlation with
          every already-accepted factor is < max_correlation.
-      5. Stop when ``top_n`` factors accepted.
+      6. Stop when ``top_n`` factors accepted.
 
     Returns the picked factor names in selection order (highest-scored first).
     """
@@ -443,6 +450,9 @@ def pick_top_factors(
         raise ValueError(f"top_n must be > 0, got {top_n}")
     if not (0 < max_correlation <= 1):
         raise ValueError(f"max_correlation must be in (0, 1], got {max_correlation}")
+    if not (0 < max_degenerate_ratio <= 1):
+        raise ValueError(
+            f"max_degenerate_ratio must be in (0, 1], got {max_degenerate_ratio}")
     if score_by == "ir":
         score = result.ic_ir.abs()
     elif score_by == "mean_ic":
@@ -452,9 +462,19 @@ def pick_top_factors(
     else:
         raise ValueError(f"unknown score_by: {score_by!r}")
 
+    degen = result.degenerate_day_ratio
+
+    def _coverage_ok(n: str) -> bool:
+        # NaN degenerate_ratio (no usable-day denominator) only co-occurs with a
+        # NaN score, which step 1 already drops; treat NaN here as "don't gate".
+        d = degen.get(n, 0.0) if hasattr(degen, "get") else 0.0
+        return pd.isna(d) or float(d) <= max_degenerate_ratio
+
     eligible = [
         n for n in result.factor_names
-        if not pd.isna(score[n]) and abs(result.ic_ir.get(n, 0.0)) >= min_ir
+        if not pd.isna(score[n])
+        and abs(result.ic_ir.get(n, 0.0)) >= min_ir
+        and _coverage_ok(n)
     ]
     eligible.sort(key=lambda n: float(score[n]), reverse=True)
 

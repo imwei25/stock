@@ -1008,6 +1008,7 @@ def cmd_factors_pick_by_ic(args: argparse.Namespace) -> int:
         max_correlation=args.max_corr,
         min_ir=args.min_ir,
         score_by=args.score_by,
+        max_degenerate_ratio=args.max_degenerate_ratio,
     )
 
     output_path = Path(args.output)
@@ -1381,6 +1382,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_pick_ic.add_argument("--top-n", type=int, default=20)
     p_pick_ic.add_argument("--max-corr", type=float, default=0.6)
     p_pick_ic.add_argument("--min-ir", type=float, default=0.05)
+    p_pick_ic.add_argument(
+        "--max-degenerate-ratio", type=float, default=0.5,
+        help="Drop factors whose degenerate_day_ratio exceeds this (default "
+             "0.5). Coverage gate: a factor NaN'd on >half its days has an "
+             "unreliable, noise-contaminated IC. Lower it (e.g. 0.3) to be stricter.",
+    )
     p_pick_ic.add_argument(
         "--score-by", choices=["ir", "mean_ic", "abs_ic"], default="ir",
     )
