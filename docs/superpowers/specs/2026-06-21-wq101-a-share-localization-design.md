@@ -304,6 +304,40 @@ python -m stockpool ab --config ab/wq101_localized.yaml
 
 ---
 
-## 14. 复盘(实施后填)
+## 14. 复盘(2026-06-24 执行)
 
-待 Phase 7 完成时填入。
+**结论:Round 1 窗口本土化 = 证伪(null);但 Phase 0 暴露并修复了一个影响生产的真 bug。**
+
+### Phase 0 修了一个 spec 设计错误(覆盖度盲点)
+spec §3 的退化日诊断只用 `nunique/n_valid`,只能抓"并列"(离散因子),抓不到"横截面
+太小"(稀疏因子)。实测 `alpha_096` 在 4597 股全市场每天仅中位 **3 只**股票有值
+(深层嵌套 adv60+多重 correlation 吃光覆盖),3 只票的 rank-IC ≈ ±1 噪声 → abs_ic
+虚高 **0.40(全场第 1**,真实上限 ~0.17),而其 ratio 3/2=0.67"看着健康" → 旧检测
+零触发。**修复**:`analyze_factors` 加 `min_coverage_frac`(默认 0.05,按因子覆盖/
+当日可投票数;用比例而非绝对数以兼容小 `--universe pool`)。commit `0e6cd62`。
+清洗后 **23/101 wq101 alpha 被判幻象(abs_ic→NaN,排除)**。
+
+### Round 1 结果(Phase 3/4)
+- 干净基线重跑 → top-30 存活 wq101 alpha × 3 窗口规则 = 90 变体;walk-forward 两半段。
+- **Winner = 0**(spec §7.2 gate 要求 ≥6)。诊断:全 top-30 × 2 半段 **60 个 instance 中,
+  无一变体 abs_ic 提升 ≥0.01**(最佳 alpha_088 `_rev_short` +0.009);多数规则对该 alpha
+  是 no-op(窗口不落在规则区间),少数边际为负。
+- **判定**:规则化窗口缩放对 top-30(已不错的)wq101 alpha 无实质 IC 增益。
+  `selection_wq101_localized.json` == `selection.json`(0 swap)。
+- **采纳决策**:**不修改生产 `selection.json`**;Phase 5 AB **跳过**(两臂相同 = 无信息,
+  且本分支无 ab_pool)。功能(变体生成器/coverage floor/picker)全部保留。
+
+### 衍生发现(高价值,待用户决策)
+现役 `reports/selection.json`(30 因子,用**修复前 buggy IC** 选)中:
+- **4 个纯幻象**(`alpha_027/059/061/095`,clean 基线 degen_ratio=1.0,纯噪声);
+- **7 个部分退化**(≥10% 噪声日,如 `alpha_048` 51%/abs_ic 0.032、`alpha_032` 47%);
+- 合计 **~11/30(37%)覆盖受损**。
+用 clean 基线重跑 `pick-by-ic`(top-30/max-corr0.6,参数为假设)得候选
+`reports/selection_clean_rebuild_candidate.json`,与现役差 **15/30**。
+**建议**:用确认的原始参数在 clean 基线上重建 `selection.json` 并 AB 验证 —— 这是本次
+最可能提升生产的动作,但替换生产选择是用户决策(spec §8.4),故仅产出候选、未替换。
+
+### 与项目大主题的关系
+窗口本土化属于"改因子本体"(正路),但 Round 1 在 top-30 上证伪;真正的增量来自
+**修掉幻象因子**(数据质量),而非窗口调参。Round 2(bottom-30,§9)鉴于 Round 1 干净
+null,**建议不再投入**窗口规则方向。
