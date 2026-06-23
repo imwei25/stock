@@ -50,3 +50,5 @@ rust/**/Cargo.lock
 # Local dev utility scripts (per-machine, not project logic)
 scripts/_*.ps1
 scripts/probe_*.py
+reports/factor_analysis/wq101_round1_h1/
+reports/factor_analysis/wq101_round1_h2/
