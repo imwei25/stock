@@ -201,6 +201,12 @@ bug**(因子分析的覆盖度盲点),这才是本次的真正收获。
 4. 还有件事:本地 `feat/composite-backtest` 的轮15/16 WIP 仍在 `stash@{0}`,记得择机处理。
 
 ## 遗留/已知
-- 期间有**外部进程反复回退**我对 `factors_analysis.py`/`cli.py`/测试的编辑(疑似编辑器
-  format-on-save),已重新应用并提交锁定;若早上看到这些文件异常请知会。
-- 全部测试在触及套件绿(analysis/cli/factors/wq101/picker 共 68+ passed)。
+- 期间有**外部进程反复 `git stash` 走我的工作树编辑**(疑似编辑器/并发工具的 format-on-save
+  或 auto-stash),表现为"文件被回退";已逐次重新应用并 commit 锁定。所有交付都在 HEAD。
+- **两个 stash,都未动(决策 D7:保守不 drop)**:
+  - `stash@{1}` = **你的轮15/16 WIP**(sign_align+monotone,来自 feat/composite-backtest)。**保留**,
+    恢复:`git switch feat/composite-backtest && git stash pop stash@{1}`。
+  - `stash@{0}` = 外部进程自动创建的**垃圾回退快照**:含我已被 HEAD 取代的旧 min_valid_count 版,
+    外加把 `strategies.py`/`portfolio/eligibility.py` 两处**性能优化反向撤销**(HEAD 里是正确优化版)。
+    **无任何独有想要的内容,可安全 `git stash drop stash@{0}`**;我没动它以防万一。
+- 全部测试在触及套件绿(analysis/cli/factors/wq101/picker 共 68+ passed);工作树干净。
