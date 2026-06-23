@@ -385,6 +385,7 @@ def test_analyze_factors_with_industry_neutral_factor():
         factor_names=["industry_relative_strength_20", "momentum_5"],
         horizon=3,
         ic_window=20,
+        min_coverage_frac=0.0,  # tiny synthetic universe: opt out of coverage floor
     )
     # Both factors should produce *some* finite daily IC values
     assert "industry_relative_strength_20" in result.daily_ic
@@ -430,9 +431,11 @@ def test_analyze_factors_applies_winsorize(monkeypatch):
     # unchanged. Pearson IC responds to the actual clipped values, which is what
     # we need to prove the winsorize plumbing actually runs.
     r_winsorized = analyze_factors(panel, ["spike_test"], horizon=2,
-                                   winsorize=(0.05, 0.95), method="pearson")
+                                   winsorize=(0.05, 0.95), method="pearson",
+                                   min_coverage_frac=0.0)
     r_raw = analyze_factors(panel, ["spike_test"], horizon=2,
-                            winsorize=None, method="pearson")
+                            winsorize=None, method="pearson",
+                            min_coverage_frac=0.0)
     # With winsorize on, the outlier column is clipped → IC shape differs from raw.
     assert r_raw.daily_ic["spike_test"].std() > 0
     assert r_winsorized.daily_ic["spike_test"].std() > 0
@@ -581,6 +584,58 @@ def test_analyze_factors_all_degenerate_ratio_one(monkeypatch):
     r = analyze_factors(panel, ["all_const_test"], horizon=2, winsorize=None)
     assert r.daily_ic["all_const_test"].isna().all()
     assert r.degenerate_day_ratio["all_const_test"] == 1.0
+
+
+def test_analyze_factors_min_coverage_frac_flags_sparse_factor(monkeypatch):
+    """A factor covering too small a fraction of the cross-section is flagged by
+    the coverage floor, even though its nunique/n_valid ratio looks healthy
+    (regression for the alpha_096 phantom-IC bug: ~3 of ~4000 stocks/day →
+    spurious ±1 rank IC). Here: 4 valid of 100 investable ⇒ coverage 0.04."""
+    import numpy as np
+    import pandas as pd
+    from stockpool.factors_analysis import analyze_factors
+    from stockpool.factors.registry import _REGISTRY, FactorSpec
+    from stockpool.factors.base import Factor
+
+    dates = pd.date_range("2024-01-01", periods=40, freq="B")
+    codes = [f"S{i:03d}" for i in range(100)]
+    rng = np.random.default_rng(3)
+    close = pd.DataFrame(
+        np.cumprod(1 + rng.normal(0, 0.01, (40, 100)), axis=0),
+        index=dates, columns=codes,
+    )
+    panel = {"open": close, "high": close, "low": close, "close": close,
+             "volume": pd.DataFrame(1.0, index=dates, columns=codes)}
+
+    class _SparseFactor(Factor):
+        sources = ("test",); types = ("cross_sectional",)
+        description = "valid on only 4 distinct stocks per day"
+        @property
+        def name(self): return "sparse_test"
+        def compute(self, panel):
+            out = pd.DataFrame(np.nan, index=panel["close"].index,
+                               columns=panel["close"].columns)
+            # 4 valid of 100 ⇒ ratio 4/4=1.0 (looks healthy) but coverage
+            # 4/100=0.04 < default 0.05 floor.
+            out.iloc[:, :4] = panel["close"].iloc[:, :4].rank(axis=1)
+            return out
+
+    monkeypatch.setitem(_REGISTRY, "sparse_test", FactorSpec(
+        base_name="sparse_test", cls=_SparseFactor,
+        sources=("test",), types=("cross_sectional",), description="",
+    ))
+
+    # Coverage floor ON (default 0.05): all days flagged → all-NaN IC, ratio 1.0.
+    r_floor = analyze_factors(panel, ["sparse_test"], horizon=2, winsorize=None)
+    assert r_floor.daily_ic["sparse_test"].isna().all()
+    assert r_floor.degenerate_day_ratio["sparse_test"] == 1.0
+
+    # Coverage floor OFF: the unique-ratio test alone (4/4=1.0) does NOT flag,
+    # so the noisy 4-stock IC leaks through — proving the floor is what catches it.
+    r_nofloor = analyze_factors(panel, ["sparse_test"], horizon=2,
+                                winsorize=None, min_coverage_frac=0.0)
+    assert r_nofloor.daily_ic["sparse_test"].notna().any()
+    assert r_nofloor.degenerate_day_ratio["sparse_test"] == 0.0
 
 
 def test_analyze_factors_zero_degenerate_ratio(monkeypatch):

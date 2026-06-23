@@ -246,6 +246,7 @@ def analyze_factors(
     method: Literal["spearman", "pearson"] = "spearman",
     winsorize: tuple[float, float] | None = (0.01, 0.99),
     degenerate_day_unique_ratio_threshold: float = 0.01,
+    min_coverage_frac: float = 0.05,
 ) -> FactorAnalysisResult:
     """End-to-end factor analysis on a panel.
 
@@ -271,6 +272,19 @@ def analyze_factors(
                      ``ts_argmax`` whose cross-section is dominated by
                      ties and would otherwise drive Spearman rank IC to
                      spurious ±1.0.
+        min_coverage_frac: days where the factor covers less than this fraction
+                     of the *investable* cross-section (stocks with a valid
+                     close that day) are marked NaN in daily IC and counted in
+                     ``degenerate_day_ratio``. Default ``0.05``. Catches *sparse*
+                     factors (distinct from the tie mode above): deeply-nested
+                     long-window alphas (e.g. ``alpha_096``, ~3 of ~4000 stocks
+                     /day on A-share ⇒ coverage ~0.1%) yield a rank IC over a
+                     handful of names that is pure sampling noise (±1) and
+                     inflates ``abs_ic_mean``; the unique-ratio test misses them
+                     (3 valid / 2 unique ⇒ ratio 0.67, "healthy"). Expressed as
+                     a *fraction* (not an absolute count) so a deliberately
+                     small ``--universe pool`` run — where full coverage is only
+                     ~16 stocks — is not wholesale flagged.
 
     Returns:
         ``FactorAnalysisResult`` with per-factor metrics and pairwise IC correlation.
@@ -318,7 +332,19 @@ def analyze_factors(
         unique_counts = fp_one.nunique(axis=1, dropna=True)
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio_per_day = unique_counts / n_valid.replace(0, np.nan)
-        degenerate = (ratio_per_day <= degenerate_day_unique_ratio_threshold)
+        # Two degeneracy modes: (1) near-constant cross-section (nunique/n_valid
+        # <= ratio thr) catches discrete/tied factors; (2) low coverage relative
+        # to the investable universe that day catches *sparse* factors whose
+        # few-stock rank IC is sampling noise (±1) — e.g. alpha_096 (~3 of ~4000
+        # valid/day), whose ratio 3/2=0.67 looks healthy and slips past (1). A
+        # fraction (vs absolute count) keeps small --universe pool runs valid.
+        n_investable = panel["close"].reindex(fp_one.index).notna().sum(axis=1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            coverage_frac = n_valid / n_investable.replace(0, np.nan)
+        degenerate = (
+            (ratio_per_day <= degenerate_day_unique_ratio_threshold)
+            | (coverage_frac < min_coverage_frac)
+        )
         if degenerate.any():
             daily_ic[name].loc[degenerate[degenerate].index] = float("nan")
         valid_days = daily_ic[name].notna() | degenerate

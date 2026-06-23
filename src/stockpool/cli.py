@@ -971,6 +971,7 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
         regime_index_close=regime_close,
         winsorize=winsorize_arg,
         degenerate_day_unique_ratio_threshold=args.degenerate_threshold,
+        min_coverage_frac=args.min_coverage_frac,
     )
 
     out_dir = Path(args.output)
@@ -1355,6 +1356,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_analyze.add_argument(
         "--degenerate-threshold", type=float, default=0.01,
         help="Mark factor-day NaN if nunique/n_valid <= this (default 0.01).",
+    )
+    p_analyze.add_argument(
+        "--min-coverage-frac", type=float, default=0.05,
+        help="Mark factor-day NaN if the factor covers less than this fraction "
+             "of the investable cross-section that day (default 0.05). Defends "
+             "against sparse deeply-nested alphas whose few-stock rank IC is "
+             "pure noise; a fraction keeps small --universe pool runs valid.",
     )
     p_analyze.set_defaults(func=cmd_factors_analyze)
 
