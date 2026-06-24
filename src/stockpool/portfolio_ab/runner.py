@@ -26,7 +26,7 @@ from stockpool.portfolio.eligibility import EligibilityFilter
 from stockpool.portfolio.engine import PortfolioEngine
 from stockpool.portfolio.ensemble import EnsembleResult, StaggeredRunner
 from stockpool.portfolio.result import PortfolioBacktestResult
-from stockpool.portfolio.scoring import precompute_scores_from_legacy
+from stockpool.portfolio.scoring import precompute_scores_from_legacy, score_cache_key
 from stockpool.portfolio.strategy import PrecomputedScoreStrategy
 from stockpool.portfolio_ab.config import PortfolioABConfig, build_effective_cfg
 from stockpool.strategy_factory import build_strategy, load_or_build_factor_panel
@@ -171,11 +171,14 @@ def run_single_arm(
             shared_cache=shared_cache,
         )
 
-        # Per-arm score panel cache — keyed by the *arm's* content_hash so
-        # the two arms can't accidentally share / clobber each other.
+        # Score panel cache — keyed by a *scoring signature* (strategy + data +
+        # universe), NOT the full content_hash. Arms that differ only in
+        # portfolio_backtest params (top_k / rebalance / sector cap / staggered)
+        # produce identical scores → share one cached panel instead of
+        # recomputing the expensive walk-forward scores twice.
         score_dir = Path(effective_cfg.portfolio_backtest.score_cache_dir)
         score_dir.mkdir(parents=True, exist_ok=True)
-        score_path = score_dir / f"{effective_cfg.content_hash}.parquet"
+        score_path = score_dir / f"{score_cache_key(effective_cfg, portfolio_pool_data.keys())}.parquet"
         if score_path.exists() and not refresh_scores:
             log.info("[%s] cache hit: %s", arm_name, score_path)
             score_panel = pd.read_parquet(score_path)

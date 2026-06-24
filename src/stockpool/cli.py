@@ -442,7 +442,7 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     from stockpool.portfolio.eligibility import EligibilityFilter
     from stockpool.portfolio.engine import PortfolioEngine
     from stockpool.portfolio.report import render_portfolio_report
-    from stockpool.portfolio.scoring import precompute_scores_from_legacy
+    from stockpool.portfolio.scoring import precompute_scores_from_legacy, score_cache_key
     from stockpool.portfolio.strategy import PrecomputedScoreStrategy
     from stockpool._instrumentation import checkpoint, panel_size_mb, pool_data_size_mb
 
@@ -566,12 +566,13 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
     )
     checkpoint("build_strategy done")
 
-    # Score-panel cache: keyed by cfg.content_hash. Spec §6.5 accepts the
-    # known suboptimality that changing top_k also invalidates (no partial
-    # hash) — first version trades cache hit rate for simplicity.
+    # Score-panel cache: keyed by a scoring signature (strategy + data +
+    # universe), NOT the full content_hash — so changing only portfolio params
+    # (top_k / rebalance / sector cap) reuses the cached scores instead of
+    # recomputing the expensive walk-forward panel (was: §6.5 suboptimality).
     score_dir = Path(cfg.portfolio_backtest.score_cache_dir)
     score_dir.mkdir(parents=True, exist_ok=True)
-    score_path = score_dir / f"{cfg.content_hash}.parquet"
+    score_path = score_dir / f"{score_cache_key(cfg, portfolio_pool_data.keys())}.parquet"
     if score_path.exists() and not args.refresh_scores:
         log.info("Loading cached score panel: %s", score_path)
         score_panel = pd.read_parquet(score_path)

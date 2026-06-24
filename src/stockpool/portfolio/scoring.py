@@ -23,13 +23,50 @@ accordingly.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
-from typing import Mapping
+from typing import Iterable, Mapping
 
 import pandas as pd
 
 log = logging.getLogger("stockpool")
+
+
+# Config sections that do NOT affect per-stock scores — excluded from the
+# score-panel cache key so arms / re-runs that differ only in these reuse the
+# same precomputed scores. The score panel is a pure function of strategy +
+# data (+ composite indicator/scoring) config and the universe scored.
+_NON_SCORING_CFG_KEYS = (
+    "portfolio_backtest",   # top_k / rebalance / sector cap / staggered / eligibility / costs
+    "report",
+    "recommend_pool",
+    "ab_pool",
+    "content_hash",
+)
+
+
+def score_cache_key(cfg, universe_codes: Iterable[str]) -> str:
+    """Stable cache key for a precomputed score panel.
+
+    Keyed by ONLY the inputs that change per-stock scores (strategy + data +
+    indicator/scoring config) and the universe scored — NOT ``portfolio_backtest``
+    (top_k / rebalance / sector cap / staggered / eligibility). This lets two
+    portfolio-AB arms (or repeated runs while tuning portfolio params) that
+    share the same scoring config hit the same cached panel instead of
+    recomputing the (expensive) walk-forward score panel from scratch.
+
+    Conservative by construction: only the listed non-scoring sections are
+    dropped, so a difference in any scoring-relevant field still forces a fresh
+    key (never a wrong share).
+    """
+    d = cfg.model_dump(mode="json")
+    for k in _NON_SCORING_CFG_KEYS:
+        d.pop(k, None)
+    blob = json.dumps(d, sort_keys=True, ensure_ascii=False, default=str)
+    codes = ",".join(sorted(map(str, universe_codes)))
+    return hashlib.sha256(f"{blob}|{codes}".encode("utf-8")).hexdigest()[:16]
 
 
 # Module-global populated by ``_worker_init`` inside each Pool worker so the
@@ -237,8 +274,11 @@ def precompute_scores_from_legacy(
         n_workers = 1
 
     # NEW: prewarm before tasks/Pool setup so the populated cache is what
-    # gets pickled into each worker.
-    if n_workers > 1 and prewarm:
+    # gets pickled into each worker. Only meaningful for strategies with a
+    # cross-stock fit cache (ml_factor's ``_shared_cache``); composite_verdict
+    # has none → skip (else AttributeError).
+    if (n_workers > 1 and prewarm
+            and getattr(legacy_strategy, "_shared_cache", None) is not None):
         checkpoint("before _prewarm_monthly_fits")
         _prewarm_monthly_fits(legacy_strategy, panel_data)
         checkpoint("after _prewarm_monthly_fits", extra={
