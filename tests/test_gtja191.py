@@ -9,17 +9,17 @@ from stockpool.factors import list_factors, make_factor
 from stockpool.factors import ops
 
 
-EXPECTED = [
-    "gtja_001", "gtja_002", "gtja_005", "gtja_006", "gtja_007", "gtja_008",
-    "gtja_009", "gtja_011", "gtja_012", "gtja_013", "gtja_014", "gtja_015",
-    "gtja_016", "gtja_018", "gtja_020", "gtja_024", "gtja_025", "gtja_026",
-    "gtja_029", "gtja_031", "gtja_032", "gtja_033", "gtja_034", "gtja_037",
-    "gtja_040",
-]
-# Factors whose longest window <= ~30 → must have healthy tail coverage on a
-# 300-day panel. The long-window ones (025:250, 026:230, 033:240) are excluded
-# from the coverage assertion (they legitimately need a long warmup).
-SHORT_WINDOW = [n for n in EXPECTED if n not in ("gtja_025", "gtja_026", "gtja_033")]
+# Derived from the registry so adding GTJA factors doesn't require editing the
+# list. A floor guards against accidental mass de-registration.
+EXPECTED = sorted(f for f in list_factors() if f.startswith("gtja_"))
+# Long-warmup factors: their longest window needs >~150-250 days, so the tail of
+# a 300-day synthetic panel can be thin — excluded from the coverage assertion.
+LONG_WINDOW = {"gtja_025", "gtja_026", "gtja_033", "gtja_045"}
+SHORT_WINDOW = [n for n in EXPECTED if n not in LONG_WINDOW]
+
+
+def test_gtja_family_minimum_count():
+    assert len(EXPECTED) >= 50, f"expected >=50 gtja factors, got {len(EXPECTED)}"
 
 
 def _synth_panel(n_days=300, n_stocks=60, seed=0):
@@ -58,6 +58,16 @@ def test_sma_matches_recursive_definition():
         expected.append(prev)
     got = ops.sma(pd.DataFrame({"a": xs}), 3, 1)["a"].tolist()
     assert got == pytest.approx(expected)
+
+
+def test_count_counts_true_in_window():
+    """ops.count(cond, d) = rolling count of True over trailing d (strict)."""
+    c = pd.DataFrame({"a": [1.0, 2.0, 1.5, 3.0, 2.0]})
+    cond = c > c.shift(1)  # pandas: cmp with NaN -> False, so [F,T,F,T,F] = [0,1,0,1,0]
+    out = ops.count(cond, 3)["a"].tolist()
+    # rolling(3, min_periods=3).sum(): idx0,1 -> NaN; idx2=[0,1,0]=1; idx3=[1,0,1]=2; idx4=[0,1,0]=1
+    assert np.isnan(out[0]) and np.isnan(out[1])
+    assert out[2] == 1.0 and out[3] == 2.0 and out[4] == 1.0
 
 
 def test_sma_rejects_bad_params():

@@ -181,6 +181,7 @@ __all__ = [
     # light ops (defined inline below)
     "adv",
     "sma",
+    "count",
     "covariance",
     "cs_demean",
     "delay",
@@ -326,6 +327,15 @@ def returns(close: pd.DataFrame) -> pd.DataFrame:
 def adv(volume: pd.DataFrame, d: int) -> pd.DataFrame:
     """平均日成交量 (Average Daily Volume) over d days。WQ101 的 ``adv{d}``。"""
     return volume.rolling(d, min_periods=d).mean()
+
+
+def count(cond: pd.DataFrame, d: int) -> pd.DataFrame:
+    """GTJA191 ``COUNT(cond, d)``: 过去 d 期内条件为真的天数(逐列)。
+
+    ``cond`` 是布尔/0-1 DataFrame;返回浮点计数。strict ``min_periods=d``
+    (窗口不足 d 天返回 NaN,与 GTJA 语义一致)。
+    """
+    return cond.astype(float).rolling(d, min_periods=d).sum()
 
 
 def sma(x: pd.DataFrame, n: int, m: int) -> pd.DataFrame:

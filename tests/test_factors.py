@@ -167,7 +167,7 @@ def test_factor_count_in_expected_range():
         文件存在才注册,故计数会在 ~192(无变体)与 ~282(有变体)间浮动)。"""
     from stockpool.factors import list_specs
     n = len(list_specs())
-    assert 140 <= n <= 320, f"factor count={n} outside expected [140, 320]"
+    assert 140 <= n <= 400, f"factor count={n} outside expected [140, 400]"
 
 
 def test_new_type_fundamental_registered():
