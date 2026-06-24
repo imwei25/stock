@@ -182,6 +182,9 @@ __all__ = [
     "adv",
     "sma",
     "count",
+    "highday",
+    "lowday",
+    "regslope",
     "covariance",
     "cs_demean",
     "delay",
@@ -336,6 +339,57 @@ def count(cond: pd.DataFrame, d: int) -> pd.DataFrame:
     (窗口不足 d 天返回 NaN,与 GTJA 语义一致)。
     """
     return cond.astype(float).rolling(d, min_periods=d).sum()
+
+
+def highday(x: pd.DataFrame, d: int) -> pd.DataFrame:
+    """GTJA191 ``HIGHDAY(x, d)``: 距前 d 期内最高值的天数(0 = 今天即最高)。
+
+    向量化滑窗 argmax;窗口含 NaN 或不足 d → NaN。
+    """
+    arr = x.to_numpy(dtype=float)
+    T, N = arr.shape
+    out = np.full((T, N), np.nan)
+    if T >= d:
+        sw = np.lib.stride_tricks.sliding_window_view(arr, d, axis=0)  # (T-d+1, N, d)
+        nanmask = np.isnan(sw).any(axis=2)
+        hd = (d - 1) - np.argmax(sw, axis=2).astype(float)
+        hd[nanmask] = np.nan
+        out[d - 1:] = hd
+    return pd.DataFrame(out, index=x.index, columns=x.columns)
+
+
+def lowday(x: pd.DataFrame, d: int) -> pd.DataFrame:
+    """GTJA191 ``LOWDAY(x, d)``: 距前 d 期内最低值的天数(0 = 今天即最低)。"""
+    arr = x.to_numpy(dtype=float)
+    T, N = arr.shape
+    out = np.full((T, N), np.nan)
+    if T >= d:
+        sw = np.lib.stride_tricks.sliding_window_view(arr, d, axis=0)
+        nanmask = np.isnan(sw).any(axis=2)
+        ld = (d - 1) - np.argmin(sw, axis=2).astype(float)
+        ld[nanmask] = np.nan
+        out[d - 1:] = ld
+    return pd.DataFrame(out, index=x.index, columns=x.columns)
+
+
+def regslope(x: pd.DataFrame, d: int) -> pd.DataFrame:
+    """GTJA191 ``REGBETA(x, SEQUENCE(d))``: x 对时间索引 0..d-1 的滚动回归斜率。
+
+    斜率 = Σ(t-t̄)(x-x̄) / Σ(t-t̄)² ;时间权重固定,向量化滑窗点积。窗口含 NaN → NaN。
+    """
+    arr = x.to_numpy(dtype=float)
+    T, N = arr.shape
+    out = np.full((T, N), np.nan)
+    if T >= d:
+        t = np.arange(d, dtype=float)
+        w = t - t.mean()
+        denom = float((w * w).sum())
+        sw = np.lib.stride_tricks.sliding_window_view(arr, d, axis=0)
+        nanmask = np.isnan(sw).any(axis=2)
+        slope = (sw * w).sum(axis=2) / denom
+        slope[nanmask] = np.nan
+        out[d - 1:] = slope
+    return pd.DataFrame(out, index=x.index, columns=x.columns)
 
 
 def sma(x: pd.DataFrame, n: int, m: int) -> pd.DataFrame:

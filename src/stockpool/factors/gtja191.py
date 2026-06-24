@@ -580,3 +580,481 @@ class Gtja090(GtjaAlpha):
     def compute(self, panel):
         vw, vol = ops.vwap(panel), panel["volume"]
         return ops.rank(ops.correlation(ops.rank(vw), ops.rank(vol), 5)) * -1.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 第三批(alpha 91-191 子集,2026-06-24)。新增算子 ops.highday / lowday / regslope。
+# 仍只收录逐字核对、可忠实移植的;跳过 AMOUNT(无成交额字段)外的 SELF/SUMAC/FILTER/
+# benchmark/DMI(TR-LD-HD)/残缺公式。AMOUNT 出现处用 close*volume 代理(IC 对常数尺度不变)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _tr(panel):
+    """真实波幅 TR = max(high-low, |昨收-high|, |昨收-low|)。"""
+    high, low, close = panel["high"], panel["low"], panel["close"]
+    pc = ops.delay(close, 1)
+    return np.maximum(np.maximum(high - low, (pc - high).abs()), (pc - low).abs())
+
+
+@_gtja(91, ("cross_sectional", "volume"),
+       "收盘距 5 日高点秩 × 40 日均量与低价 5 日相关性秩,取负。")
+class Gtja091(GtjaAlpha):
+    def compute(self, panel):
+        close, low, vol = panel["close"], panel["low"], panel["volume"]
+        return (ops.rank(close - ops.ts_max(close, 5))
+                * ops.rank(ops.correlation(ops.ts_mean(vol, 40), low, 5))) * -1.0
+
+
+@_gtja(93, ("time_series", "momentum"),
+       "20 日开盘下行缺口动量累加。")
+class Gtja093(GtjaAlpha):
+    def compute(self, panel):
+        open_, low = panel["open"], panel["low"]
+        po = ops.delay(open_, 1)
+        val = np.maximum(open_ - low, open_ - po)
+        x = val.where(open_ < po, 0.0).where(open_.notna() & po.notna())
+        return ops.ts_sum(x, 20)
+
+
+@_gtja(94, ("time_series", "volume"),
+       "30 日按涨跌方向带符号成交量累加。")
+class Gtja094(GtjaAlpha):
+    def compute(self, panel):
+        return ops.ts_sum(_signed_vol(panel["close"], panel["volume"]), 30)
+
+
+@_gtja(96, ("time_series", "reversal"),
+       "9 日 Stochastic %K 的双重 SMA(3,1) 平滑(KDJ D 值)。")
+class Gtja096(GtjaAlpha):
+    def compute(self, panel):
+        high, low, close = panel["high"], panel["low"], panel["close"]
+        ll = ops.ts_min(low, 9)
+        k = _safe(close - ll, ops.ts_max(high, 9) - ll) * 100.0
+        return ops.sma(ops.sma(k, 3, 1), 3, 1)
+
+
+@_gtja(97, ("time_series", "volume"),
+       "10 日成交量波动率。")
+class Gtja097(GtjaAlpha):
+    def compute(self, panel):
+        return ops.stddev(panel["volume"], 10)
+
+
+@_gtja(99, ("cross_sectional", "volume"),
+       "收盘秩与量秩 5 日协方差的截面秩取负。")
+class Gtja099(GtjaAlpha):
+    def compute(self, panel):
+        return -1.0 * ops.rank(ops.covariance(
+            ops.rank(panel["close"]), ops.rank(panel["volume"]), 5))
+
+
+@_gtja(100, ("time_series", "volume"),
+       "20 日成交量波动率。")
+class Gtja100(GtjaAlpha):
+    def compute(self, panel):
+        return ops.stddev(panel["volume"], 20)
+
+
+@_gtja(102, ("time_series", "volume"),
+       "成交量 6 日 RSI(量能上行强度)。")
+class Gtja102(GtjaAlpha):
+    def compute(self, panel):
+        v = panel["volume"]
+        ch = v - ops.delay(v, 1)
+        return _safe(ops.sma(ch.clip(lower=0.0), 6, 1), ops.sma(ch.abs(), 6, 1)) * 100.0
+
+
+@_gtja(103, ("time_series", "reversal"),
+       "20 日内最低价出现的近期度(LOWDAY)。")
+class Gtja103(GtjaAlpha):
+    def compute(self, panel):
+        return (20 - ops.lowday(panel["low"], 20)) / 20.0 * 100.0
+
+
+@_gtja(104, ("cross_sectional", "volume"),
+       "高量相关性 5 日变化 × 收盘 20 日波动率秩,取负。")
+class Gtja104(GtjaAlpha):
+    def compute(self, panel):
+        high, vol, close = panel["high"], panel["volume"], panel["close"]
+        return -1.0 * (ops.delta(ops.correlation(high, vol, 5), 5)
+                       * ops.rank(ops.stddev(close, 20)))
+
+
+@_gtja(105, ("cross_sectional", "volume"),
+       "开盘秩与量秩 10 日相关性取负。")
+class Gtja105(GtjaAlpha):
+    def compute(self, panel):
+        return -1.0 * ops.correlation(
+            ops.rank(panel["open"]), ops.rank(panel["volume"]), 10)
+
+
+@_gtja(106, ("time_series", "momentum"),
+       "收盘 20 日绝对变化。")
+class Gtja106(GtjaAlpha):
+    def compute(self, panel):
+        c = panel["close"]
+        return c - ops.delay(c, 20)
+
+
+@_gtja(107, ("cross_sectional", "reversal"),
+       "开盘相对昨高/昨收/昨低三个跳空秩之积,取负。")
+class Gtja107(GtjaAlpha):
+    def compute(self, panel):
+        open_, high, low, close = panel["open"], panel["high"], panel["low"], panel["close"]
+        return ((-1.0 * ops.rank(open_ - ops.delay(high, 1)))
+                * ops.rank(open_ - ops.delay(close, 1))
+                * ops.rank(open_ - ops.delay(low, 1)))
+
+
+@_gtja(109, ("time_series",),
+       "10 日振幅 SMA 相对其再平滑的比值。")
+class Gtja109(GtjaAlpha):
+    def compute(self, panel):
+        hl = panel["high"] - panel["low"]
+        s = ops.sma(hl, 10, 2)
+        return _safe(s, ops.sma(s, 10, 2))
+
+
+@_gtja(110, ("time_series", "momentum"),
+       "20 日上行幅度和 / 下行幅度和(相对昨收):多空动能比。")
+class Gtja110(GtjaAlpha):
+    def compute(self, panel):
+        high, low, close = panel["high"], panel["low"], panel["close"]
+        pc = ops.delay(close, 1)
+        up = (high - pc).clip(lower=0.0)
+        dn = (pc - low).clip(lower=0.0)
+        return _safe(ops.ts_sum(up, 20), ops.ts_sum(dn, 20)) * 100.0
+
+
+@_gtja(111, ("time_series", "volume"),
+       "量能加权收盘位置的 SMA(11,2) 与 SMA(4,2) 之差。")
+class Gtja111(GtjaAlpha):
+    def compute(self, panel):
+        high, low, close, vol = panel["high"], panel["low"], panel["close"], panel["volume"]
+        x = vol * _safe((close - low) - (high - close), high - low)
+        return ops.sma(x, 11, 2) - ops.sma(x, 4, 2)
+
+
+@_gtja(112, ("time_series", "momentum"),
+       "12 日上行幅度和与下行幅度和的相对强弱(百分比)。")
+class Gtja112(GtjaAlpha):
+    def compute(self, panel):
+        c = panel["close"]
+        ch = c - ops.delay(c, 1)
+        up = ops.ts_sum(ch.clip(lower=0.0), 12)
+        dn = ops.ts_sum((-ch).clip(lower=0.0), 12)
+        return _safe(up - dn, up + dn) * 100.0
+
+
+@_gtja(116, ("time_series", "momentum"),
+       "收盘对时间 20 日回归斜率(趋势强度)。")
+class Gtja116(GtjaAlpha):
+    def compute(self, panel):
+        return ops.regslope(panel["close"], 20)
+
+
+@_gtja(118, ("time_series",),
+       "20 日上影和 / 下影和(百分比):多空影线比。")
+class Gtja118(GtjaAlpha):
+    def compute(self, panel):
+        high, low, open_ = panel["high"], panel["low"], panel["open"]
+        return _safe(ops.ts_sum(high - open_, 20), ops.ts_sum(open_ - low, 20)) * 100.0
+
+
+@_gtja(120, ("cross_sectional",),
+       "VWAP 与收盘之差秩 / 其和秩。")
+class Gtja120(GtjaAlpha):
+    def compute(self, panel):
+        vw, close = ops.vwap(panel), panel["close"]
+        return _safe(ops.rank(vw - close), ops.rank(vw + close))
+
+
+@_gtja(126, ("time_series",),
+       "典型价 (C+H+L)/3。")
+class Gtja126(GtjaAlpha):
+    def compute(self, panel):
+        return (panel["close"] + panel["high"] + panel["low"]) / 3.0
+
+
+@_gtja(128, ("time_series", "volume"),
+       "14 日资金流量指标 MFI(典型价×量的上下行比)。")
+class Gtja128(GtjaAlpha):
+    def compute(self, panel):
+        typ = _typ(panel)
+        m = typ * panel["volume"]
+        prev = ops.delay(typ, 1)
+        up = ops.ts_sum(m.where(typ > prev, 0.0), 14)
+        dn = ops.ts_sum(m.where(typ < prev, 0.0), 14)
+        return 100.0 - _safe(100.0, 1.0 + _safe(up, dn))
+
+
+@_gtja(129, ("time_series", "reversal"),
+       "12 日下行幅度累加。")
+class Gtja129(GtjaAlpha):
+    def compute(self, panel):
+        c = panel["close"]
+        ch = c - ops.delay(c, 1)
+        return ops.ts_sum((-ch).clip(lower=0.0), 12)
+
+
+@_gtja(133, ("time_series", "reversal"),
+       "20 日高点近期度 - 低点近期度(HIGHDAY/LOWDAY 差)。")
+class Gtja133(GtjaAlpha):
+    def compute(self, panel):
+        hd = (20 - ops.highday(panel["high"], 20)) / 20.0 * 100.0
+        ld = (20 - ops.lowday(panel["low"], 20)) / 20.0 * 100.0
+        return hd - ld
+
+
+@_gtja(134, ("time_series", "volume"),
+       "收盘 12 日变化率 × 成交量。")
+class Gtja134(GtjaAlpha):
+    def compute(self, panel):
+        c, v = panel["close"], panel["volume"]
+        return _safe(c - ops.delay(c, 12), ops.delay(c, 12)) * v
+
+
+@_gtja(135, ("time_series", "momentum"),
+       "20 日收益的滞后 SMA(20,1) 平滑。")
+class Gtja135(GtjaAlpha):
+    def compute(self, panel):
+        c = panel["close"]
+        return ops.sma(ops.delay(_safe(c, ops.delay(c, 20)), 1), 20, 1)
+
+
+@_gtja(136, ("cross_sectional", "volume"),
+       "收益 3 日变化秩 × 开量 10 日相关性,取负。")
+class Gtja136(GtjaAlpha):
+    def compute(self, panel):
+        return (-1.0 * ops.rank(ops.delta(ops.returns(panel["close"]), 3))
+                * ops.correlation(panel["open"], panel["volume"], 10))
+
+
+@_gtja(139, ("cross_sectional", "volume"),
+       "开盘与量 10 日相关性取负。")
+class Gtja139(GtjaAlpha):
+    def compute(self, panel):
+        return -1.0 * ops.correlation(panel["open"], panel["volume"], 10)
+
+
+@_gtja(141, ("cross_sectional", "volume"),
+       "高价秩与 15 日均量秩 9 日相关性的截面秩取负。")
+class Gtja141(GtjaAlpha):
+    def compute(self, panel):
+        high, vol = panel["high"], panel["volume"]
+        return ops.rank(ops.correlation(
+            ops.rank(high), ops.rank(ops.ts_mean(vol, 15)), 9)) * -1.0
+
+
+@_gtja(142, ("cross_sectional", "volume"),
+       "收盘时序秩 × 二阶动量秩 × 量比时序秩,取负。")
+class Gtja142(GtjaAlpha):
+    def compute(self, panel):
+        close, vol = panel["close"], panel["volume"]
+        return (-1.0 * ops.rank(ops.ts_rank(close, 10))
+                * ops.rank(ops.delta(ops.delta(close, 1), 1))
+                * ops.rank(ops.ts_rank(_safe(vol, ops.ts_mean(vol, 20)), 5)))
+
+
+@_gtja(145, ("time_series", "volume"),
+       "量能均线差(9-26)/12 日均量(百分比):量能趋势。")
+class Gtja145(GtjaAlpha):
+    def compute(self, panel):
+        v = panel["volume"]
+        return _safe(ops.ts_mean(v, 9) - ops.ts_mean(v, 26), ops.ts_mean(v, 12)) * 100.0
+
+
+@_gtja(147, ("time_series", "momentum"),
+       "12 日均线对时间 12 日回归斜率(趋势)。")
+class Gtja147(GtjaAlpha):
+    def compute(self, panel):
+        return ops.regslope(ops.ts_mean(panel["close"], 12), 12)
+
+
+@_gtja(150, ("time_series", "volume"),
+       "典型价 × 成交量(资金流强度)。")
+class Gtja150(GtjaAlpha):
+    def compute(self, panel):
+        return _typ(panel) * panel["volume"]
+
+
+@_gtja(151, ("time_series", "momentum"),
+       "收盘 20 日变化的 SMA(20,1) 平滑。")
+class Gtja151(GtjaAlpha):
+    def compute(self, panel):
+        c = panel["close"]
+        return ops.sma(c - ops.delay(c, 20), 20, 1)
+
+
+@_gtja(153, ("time_series", "reversal"),
+       "3/6/12/24 日均价均值(多周期均线)。")
+class Gtja153(GtjaAlpha):
+    def compute(self, panel):
+        c = panel["close"]
+        return (ops.ts_mean(c, 3) + ops.ts_mean(c, 6)
+                + ops.ts_mean(c, 12) + ops.ts_mean(c, 24)) / 4.0
+
+
+@_gtja(155, ("time_series", "volume"),
+       "成交量 SMA-MACD 柱(13/27/10)。")
+class Gtja155(GtjaAlpha):
+    def compute(self, panel):
+        v = panel["volume"]
+        dif = ops.sma(v, 13, 2) - ops.sma(v, 27, 2)
+        return dif - ops.sma(dif, 10, 2)
+
+
+@_gtja(158, ("time_series",),
+       "高低相对 SMA(15,2) 均线的展开度 / 收盘。")
+class Gtja158(GtjaAlpha):
+    def compute(self, panel):
+        high, low, close = panel["high"], panel["low"], panel["close"]
+        ma = ops.sma(close, 15, 2)
+        return _safe((high - ma) - (low - ma), close)
+
+
+@_gtja(161, ("time_series",),
+       "12 日平均真实波幅(ATR)。")
+class Gtja161(GtjaAlpha):
+    def compute(self, panel):
+        return ops.ts_mean(_tr(panel), 12)
+
+
+@_gtja(167, ("time_series", "momentum"),
+       "12 日上行幅度累加。")
+class Gtja167(GtjaAlpha):
+    def compute(self, panel):
+        c = panel["close"]
+        return ops.ts_sum((c - ops.delay(c, 1)).clip(lower=0.0), 12)
+
+
+@_gtja(168, ("time_series", "volume"),
+       "当日量相对 20 日均量比,取负(放量反向)。")
+class Gtja168(GtjaAlpha):
+    def compute(self, panel):
+        v = panel["volume"]
+        return -1.0 * _safe(v, ops.ts_mean(v, 20))
+
+
+@_gtja(171, ("time_series",),
+       "下影×开盘^5 / 上影×收盘^5,取负:日内多空结构。")
+class Gtja171(GtjaAlpha):
+    def compute(self, panel):
+        open_, high, low, close = panel["open"], panel["high"], panel["low"], panel["close"]
+        num = -1.0 * ((low - close) * (open_ ** 5))
+        return _safe(num, (close - high) * (close ** 5))
+
+
+@_gtja(173, ("time_series", "momentum"),
+       "三重 SMA 平滑趋势合成(TRIX 型)。")
+class Gtja173(GtjaAlpha):
+    def compute(self, panel):
+        c = panel["close"]
+        s1 = ops.sma(c, 13, 2)
+        return (3.0 * s1 - 2.0 * ops.sma(s1, 13, 2)
+                + ops.sma(ops.sma(ops.sma(np.log(c), 13, 2), 13, 2), 13, 2))
+
+
+@_gtja(175, ("time_series",),
+       "6 日平均真实波幅。")
+class Gtja175(GtjaAlpha):
+    def compute(self, panel):
+        return ops.ts_mean(_tr(panel), 6)
+
+
+@_gtja(176, ("cross_sectional", "volume"),
+       "12 日 Stochastic 位置秩与量秩 6 日相关性。")
+class Gtja176(GtjaAlpha):
+    def compute(self, panel):
+        high, low, close, vol = panel["high"], panel["low"], panel["close"], panel["volume"]
+        ll = ops.ts_min(low, 12)
+        stoch = _safe(close - ll, ops.ts_max(high, 12) - ll)
+        return ops.correlation(ops.rank(stoch), ops.rank(vol), 6)
+
+
+@_gtja(177, ("time_series", "reversal"),
+       "20 日最高价出现的近期度(HIGHDAY)。")
+class Gtja177(GtjaAlpha):
+    def compute(self, panel):
+        return (20 - ops.highday(panel["high"], 20)) / 20.0 * 100.0
+
+
+@_gtja(178, ("time_series", "volume"),
+       "日收益 × 成交量(量能加权动量)。")
+class Gtja178(GtjaAlpha):
+    def compute(self, panel):
+        c, v = panel["close"], panel["volume"]
+        return _safe(c - ops.delay(c, 1), ops.delay(c, 1)) * v
+
+
+@_gtja(179, ("cross_sectional", "volume"),
+       "VWAP-量 4 日相关性秩 × 低价秩-50 日均量秩 12 日相关性秩。")
+class Gtja179(GtjaAlpha):
+    def compute(self, panel):
+        vw, vol, low = ops.vwap(panel), panel["volume"], panel["low"]
+        return (ops.rank(ops.correlation(vw, vol, 4))
+                * ops.rank(ops.correlation(ops.rank(low), ops.rank(ops.ts_mean(vol, 50)), 12)))
+
+
+@_gtja(180, ("time_series", "volume"),
+       "放量时按 7 日动量反向定价,缩量时按量反向。")
+class Gtja180(GtjaAlpha):
+    def compute(self, panel):
+        close, vol = panel["close"], panel["volume"]
+        cond = ops.ts_mean(vol, 20) < vol
+        active = (-1.0 * ops.ts_rank(ops.delta(close, 7).abs(), 60)
+                  * np.sign(ops.delta(close, 7)))
+        return active.where(cond, -1.0 * vol)
+
+
+@_gtja(184, ("cross_sectional", "reversal"),
+       "昨日开收差与收盘 200 日相关性秩 + 当日开收差秩。")
+class Gtja184(GtjaAlpha):
+    def compute(self, panel):
+        open_, close = panel["open"], panel["close"]
+        return (ops.rank(ops.correlation(ops.delay(open_ - close, 1), close, 200))
+                + ops.rank(open_ - close))
+
+
+@_gtja(185, ("cross_sectional", "reversal"),
+       "开收比偏离平方的截面秩取负。")
+class Gtja185(GtjaAlpha):
+    def compute(self, panel):
+        open_, close = panel["open"], panel["close"]
+        return ops.rank(-1.0 * (1.0 - _safe(open_, close)) ** 2)
+
+
+@_gtja(187, ("time_series", "momentum"),
+       "20 日开盘上行缺口动量累加。")
+class Gtja187(GtjaAlpha):
+    def compute(self, panel):
+        open_, high = panel["open"], panel["high"]
+        po = ops.delay(open_, 1)
+        val = np.maximum(high - open_, open_ - po)
+        x = val.where(open_ > po, 0.0).where(open_.notna() & po.notna())
+        return ops.ts_sum(x, 20)
+
+
+@_gtja(188, ("time_series",),
+       "振幅相对 SMA(11,2) 均线的偏离(百分比)。")
+class Gtja188(GtjaAlpha):
+    def compute(self, panel):
+        hl = panel["high"] - panel["low"]
+        ma = ops.sma(hl, 11, 2)
+        return _safe(hl - ma, ma) * 100.0
+
+
+@_gtja(189, ("time_series",),
+       "收盘相对 6 日均线的 6 日平均绝对偏离。")
+class Gtja189(GtjaAlpha):
+    def compute(self, panel):
+        c = panel["close"]
+        return ops.ts_mean((c - ops.ts_mean(c, 6)).abs(), 6)
+
+
+@_gtja(191, ("cross_sectional", "volume"),
+       "20 日均量与低价 5 日相关性 + 中价 - 收盘。")
+class Gtja191(GtjaAlpha):
+    def compute(self, panel):
+        high, low, close, vol = panel["high"], panel["low"], panel["close"], panel["volume"]
+        return (ops.correlation(ops.ts_mean(vol, 20), low, 5)
+                + (high + low) / 2.0 - close)
