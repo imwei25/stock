@@ -18,8 +18,15 @@ class _FactorContext:
 
     Set via ``set_sector_map`` at the strategy / analysis entry point;
     factors read via ``get_sector_map`` (returns a copy).
+
+    ``mcap_panel`` holds an optional T×N ``log(total_market_cap)`` wide-frame
+    used by the Size factor (``factors/size.py``) and the
+    ``market_cap_neutralize`` preprocess step. It is set by the pool-prep /
+    analysis entry points (``maybe_inject_mcap_panel``) and read by the
+    ``log_mcap`` factor / ``build_factor_panel``.
     """
     sector_map: ClassVar[dict[str, str]] = {}
+    mcap_panel: ClassVar[pd.DataFrame | None] = None
 
 
 def set_sector_map(mapping: Mapping[str, str]) -> None:
@@ -30,6 +37,21 @@ def set_sector_map(mapping: Mapping[str, str]) -> None:
 def get_sector_map() -> dict[str, str]:
     """Return a snapshot of the current sector_map (empty if unset)."""
     return dict(_FactorContext.sector_map)
+
+
+def set_mcap_panel(panel: "pd.DataFrame | None") -> None:
+    """Inject a T×N ``log(total_market_cap)`` panel for the Size factor /
+    market-cap neutralize.
+
+    Pass ``None`` to clear. Stored by reference (read-only consumer); callers
+    should not mutate the frame after injecting it.
+    """
+    _FactorContext.mcap_panel = panel
+
+
+def get_mcap_panel() -> "pd.DataFrame | None":
+    """Return the current log-mcap panel (``None`` if unset)."""
+    return _FactorContext.mcap_panel
 
 
 def indneutralize_with_context(x: pd.DataFrame) -> pd.DataFrame:

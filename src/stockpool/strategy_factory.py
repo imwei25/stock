@@ -177,6 +177,20 @@ def build_factor_panel(
         "ohlcv_mb": panel_size_mb(panel),
     })
 
+    # Size factor (log_mcap) reads a log(market_cap) panel from factor context.
+    # Build + inject it when the factor set contains log_mcap, mirroring the
+    # sector_map injection done by the pool-prep entry points. Without this,
+    # the Size factor would degrade to all-NaN. No-op otherwise (avoids the
+    # profit-table read). market_cap_neutralize uses its own panel below.
+    if "log_mcap" in factor_names:
+        from stockpool.factors.context import set_mcap_panel
+        from stockpool.ml.mcap import build_log_mcap_panel
+        try:
+            set_mcap_panel(build_log_mcap_panel(panel, cache_dir=cache_dir))
+        except Exception as e:  # noqa: BLE001 — degrade to NaN, don't crash build
+            log.warning("log_mcap panel build failed (%s); log_mcap will be NaN", e)
+            set_mcap_panel(None)
+
     raw = compute_factor_panel(panel, factor_names)
     checkpoint("build_factor_panel: compute_factor_panel done", extra={
         "n_factors_built": len(raw),

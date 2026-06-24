@@ -949,6 +949,19 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
 
     panel = build_panel_from_cache(codes, cfg.data.history_days, cache_dir)
 
+    # Size factor (log_mcap) reads a log(market_cap) panel from factor context.
+    # Build + inject it when the analyzed factor set contains log_mcap, mirroring
+    # the sector_map injection above (no-op otherwise to avoid the profit-table
+    # read when not needed).
+    if "log_mcap" in factor_names:
+        from stockpool.factors.context import set_mcap_panel
+        from stockpool.ml.mcap import build_log_mcap_panel
+        try:
+            set_mcap_panel(build_log_mcap_panel(panel, cache_dir=cache_dir))
+        except Exception as e:  # noqa: BLE001 — degrade to NaN, don't crash analyze
+            log.warning("log_mcap panel build failed (%s); log_mcap will be NaN", e)
+            set_mcap_panel(None)
+
     regime_close = None
     if not args.no_regime:
         idx_code = cfg.context.indices[0].code if cfg.context.indices else None

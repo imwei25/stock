@@ -70,6 +70,7 @@ from stockpool.factors import liquidity  # noqa: F401
 from stockpool.factors import extreme  # noqa: F401
 from stockpool.factors import return_moments  # noqa: F401
 from stockpool.factors import long_horizon  # noqa: F401
+from stockpool.factors import size  # noqa: F401
 
 __all__ = [
     "Factor",

@@ -205,3 +205,107 @@ def test_market_cap_factor_has_size_tag():
     from stockpool.factors.registry import list_specs
     spec = next(s for s in list_specs() if s.base_name == "market_cap")
     assert "size" in spec.types
+
+
+# ── ported from composite-backtest 2026-06-24: extended Barra fundamentals ──
+
+
+def test_pit_align_sparse_multicode_forward_fills_each_code():
+    """回归:两 code 在**不同** pubDate 披露,各自的值必须前向填充到全部后续交易日。
+
+    旧实现用 ``reindex(method='ffill')`` 在稀疏多 code pivot 上会塌成"只有自己
+    pubDate 当天有值"(全市场覆盖率 ~1%)。这里 A 报 01-15、B 报 02-15,断言
+    在 B 的披露日 A 仍保留自己的值(而非被 B 行的 NaN 覆盖)。
+    """
+    from stockpool.factors.fundamentals import _pit_align
+
+    raw = pd.DataFrame([
+        {"code": "A", "statDate": pd.Timestamp("2023-12-31"),
+         "pubDate": pd.Timestamp("2024-01-15"), "roeAvg": 0.10},
+        {"code": "B", "statDate": pd.Timestamp("2023-12-31"),
+         "pubDate": pd.Timestamp("2024-02-15"), "roeAvg": 0.20},
+    ])
+    dates = pd.bdate_range("2024-01-01", "2024-04-30")
+    close = pd.DataFrame(1.0, index=dates, columns=["A", "B"])
+    out = _pit_align(raw, "roeAvg", close, table="profit")
+
+    # A 在 02-20(B 披露之后)仍是 0.10,没被 B 的 pubDate 行覆盖成 NaN
+    assert out.loc[pd.Timestamp("2024-02-20"), "A"] == pytest.approx(0.10)
+    assert out.loc[pd.Timestamp("2024-02-20"), "B"] == pytest.approx(0.20)
+    # A 披露日前 NaN;披露后稠密填充(PIT 正确)
+    assert pd.isna(out.loc[pd.Timestamp("2024-01-10"), "A"])
+    a_after = out.loc[pd.Timestamp("2024-01-15"):, "A"]
+    assert a_after.notna().mean() > 0.95  # 几乎全填充,非 ~1%
+
+
+def test_pit_align_missing_field_fails_loud():
+    """表非空但缺请求字段 → raise KeyError(防字段名拼错被静默吞成全 NaN)。"""
+    from stockpool.factors.fundamentals import _pit_align
+
+    raw = pd.DataFrame([
+        {"code": "A", "statDate": pd.Timestamp("2023-12-31"),
+         "pubDate": pd.Timestamp("2024-01-15"), "roeAvg": 0.10},
+    ])
+    close = pd.DataFrame(1.0, index=pd.bdate_range("2024-01-01", periods=5),
+                         columns=["A"])
+    with pytest.raises(KeyError):
+        _pit_align(raw, "no_such_field", close, table="profit")
+
+
+def test_ep_uses_epsttm_over_close(monkeypatch, panel):
+    """EP = epsTTM/close;亏损(eps<0)时保留负值(不像 PE 返回 NaN)。"""
+    from stockpool import fundamentals_loader as fl
+    prof = pd.DataFrame([
+        {"code": "000001", "statDate": pd.Timestamp("2023-09-30"),
+         "pubDate": pd.Timestamp("2023-10-28"), "epsTTM": 2.0},
+        {"code": "600000", "statDate": pd.Timestamp("2023-09-30"),
+         "pubDate": pd.Timestamp("2023-10-28"), "epsTTM": -1.0},  # 亏损
+    ])
+    monkeypatch.setattr(
+        fl, "load_or_build_fundamentals",
+        lambda table, **kw: prof if table == "profit" else pd.DataFrame())
+    out = make_factor("ep").compute(panel)
+    # close ≈ 100;EP(盈利) > 0,EP(亏损) < 0
+    assert (out["000001"].dropna() > 0).all()
+    assert (out["600000"].dropna() < 0).all()
+
+
+def test_scalar_fundamentals_pit(monkeypatch, panel):
+    """balance / growth / cash_flow 标量因子按 pubDate PIT 对齐。"""
+    from stockpool import fundamentals_loader as fl
+
+    def _mk(field, val):
+        return pd.DataFrame([
+            {"code": "000001", "statDate": pd.Timestamp("2023-12-31"),
+             "pubDate": pd.Timestamp("2024-03-15"), field: val},
+        ])
+
+    tables = {
+        "balance": _mk("liabilityToAsset", 0.45),
+        "growth": _mk("YOYAsset", 0.12).assign(YOYEPSBasic=0.08, YOYNI=0.30),
+        "cash_flow": _mk("CFOToNP", 1.3),
+    }
+    monkeypatch.setattr(
+        fl, "load_or_build_fundamentals",
+        lambda table, **kw: tables.get(table, pd.DataFrame()))
+
+    checks = {
+        "debt_to_asset": 0.45, "asset_yoy": 0.12,
+        "eps_yoy": 0.08, "cfo_to_np": 1.3, "netprofit_yoy": 0.30,
+    }
+    for name, expected in checks.items():
+        out = make_factor(name).compute(panel)
+        # pubDate 2024-03-15 之前 NaN,之后取值
+        before = pd.Timestamp("2024-03-14")
+        after = pd.Timestamp("2024-03-15")
+        if before in out.index:
+            assert pd.isna(out.loc[before, "000001"])
+        if after in out.index:
+            assert out.loc[after, "000001"] == pytest.approx(expected)
+
+
+def test_new_fundamental_specs_registered():
+    for name in ("netprofit_yoy", "ep", "bp", "debt_to_asset",
+                 "asset_yoy", "eps_yoy", "cfo_to_np"):
+        spec = get_spec(name)
+        assert spec is not None
