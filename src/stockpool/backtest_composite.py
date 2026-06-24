@@ -165,6 +165,7 @@ def simulate_equity_curve(
     position_size: float | None = None,
     lot_sizer: LotSizer | None = None,
     max_concurrent_lots: int | None = None,
+    limit_pct: float | None = None,
 ) -> EquityResult:
     """Simulate the composite strategy for each holding-day cap in the list.
 
@@ -197,6 +198,7 @@ def simulate_equity_curve(
             VerdictExecution(),
             costs=costs,
             risk_free_rate=risk_free_rate,
+            limit_pct=limit_pct,
         )
     elif engine == "multi_lot":
         if lot_sizer is None:
@@ -212,6 +214,7 @@ def simulate_equity_curve(
             costs=costs,
             risk_free_rate=risk_free_rate,
             max_concurrent_lots=max_concurrent_lots,
+            limit_pct=limit_pct,
         )
     else:
         raise ValueError(f"engine must be 'single' or 'multi_lot', got {engine!r}")

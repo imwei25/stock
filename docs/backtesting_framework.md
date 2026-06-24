@@ -90,8 +90,14 @@ daily_df ─► Strategy.generate_signals ─► signals (date, close, signal, .
 ### `BacktestEngine`
 
 ```python
-BacktestEngine(strategy, costs=TradeCosts(), risk_free_rate=0.02)
+BacktestEngine(strategy, costs=TradeCosts(), risk_free_rate=0.02, limit_pct=None)
 ```
+
+**涨跌停拒单(`limit_pct`)**:`None`(默认)= 不检查(单测夹具/非 A 股数据,保留旧行为)。
+传入幅度(如 `0.10`)后,开盘价触及涨停价的 bar **买不进**(信号顺延次日重试)、触及跌停价的 bar
+**卖不出**(继续持仓,次日重试)。判定在比值空间(`open/prev_close`),对 hfq 复权缩放不敏感。
+生产路径(`backtest_runner`)用 `limits.infer_limit_pct(code)` 按代码前缀注入幅度
+(300/301/688 → 20%、北交所 82/83/87/43 → 30%、ST → 5%、其余 → 10%)。两个引擎都支持。
 
 **方法**:
 
@@ -110,6 +116,7 @@ MultiLotBacktestEngine(
     costs=TradeCosts(),
     risk_free_rate=0.02,
     max_concurrent_lots=None,      # None = uncapped (cash自然封顶)
+    limit_pct=None,                # 涨跌停拒单幅度;见 BacktestEngine
 )
 ```
 

@@ -124,6 +124,10 @@ def backtest_stocks(
     failed: list[tuple[str, str]] = []
     needs_pool = pool_data is not None
 
+    # P1-3: 涨跌停拒单按代码前缀推断幅度(板块阈值;ST 名单未在 main 提供,
+    # ST 股回退到默认 10% —— 保守)。
+    from stockpool.backtesting.limits import infer_limit_pct
+
     for s in stocks:
         log.info("Backtesting %s (%s)...", s.code, s.name)
         try:
@@ -159,6 +163,7 @@ def backtest_stocks(
                     engine=cfg.backtest.engine,
                     lot_sizer=build_lot_sizer(cfg.backtest.sizing),
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
+                    limit_pct=infer_limit_pct(s.code),
                 )
             else:
                 strategy = build_strategy(
@@ -179,6 +184,7 @@ def backtest_stocks(
                     engine=cfg.backtest.engine,
                     lot_sizer=build_lot_sizer(cfg.backtest.sizing),
                     max_concurrent_lots=cfg.backtest.max_concurrent_lots,
+                    limit_pct=infer_limit_pct(s.code),
                 )
             per_stock.append((s.code, s.name, result))
         except Exception as e:
