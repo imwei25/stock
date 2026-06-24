@@ -452,9 +452,22 @@ def simulate_strategy_equity_curve(
         bh_curve = bh.curve[["date", "equity"]].reset_index(drop=True)
         bh_metrics = bh.metrics
 
+    # Surface per-day score for the A/B cross-sectional rank-IC (ab.score_ic);
+    # open/close merged from daily_df by date. Non-scoring signals (no
+    # final_score column) → score_frame stays None.
+    score_frame = None
+    if {"date", "final_score"}.issubset(signals.columns) and {
+        "date", "open", "close",
+    }.issubset(daily_df.columns):
+        sf = signals[["date", "final_score"]].merge(
+            daily_df[["date", "open", "close"]], on="date", how="left",
+        )
+        score_frame = sf[["date", "open", "close", "final_score"]].reset_index(drop=True)
+
     return EquityResult(
         curves=curves,
         metrics=metrics,
         buy_and_hold=bh_curve,
         buy_and_hold_metrics=bh_metrics,
+        score_frame=score_frame,
     )

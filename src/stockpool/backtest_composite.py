@@ -149,6 +149,9 @@ class EquityResult:
     metrics: dict[int, dict]
     buy_and_hold: pd.DataFrame | None = None
     buy_and_hold_metrics: dict | None = None
+    # Per-day [date, open, close, final_score] frame, surfaced for the A/B
+    # cross-sectional score rank-IC (ab.score_ic). None for non-scoring strategies.
+    score_frame: pd.DataFrame | None = None
 
 
 def simulate_equity_curve(

@@ -237,6 +237,26 @@ def _half_life_from_acf(series: pd.Series, max_half_life: float = 252.0) -> floa
     return min(hl, max_half_life)
 
 
+def _newey_west_std(series: pd.Series, lag: int) -> float:
+    """Newey-West 自相关稳健 σ(Bartlett 核):σ² = γ0 + 2·Σ w_l·γ_l。
+
+    重叠标签(horizon>1 的逐日 forward return)让日 IC 序列带机械正自相关,
+    朴素 std 低估波动 ~√h 倍 → ic_ir 虚高。lag 取重叠窗口长度(label_lag − 1)。
+    """
+    s = series.dropna().to_numpy(dtype=float)
+    n = len(s)
+    if n < 3:
+        return float("nan")
+    x = s - s.mean()
+    gamma0 = float((x * x).mean())
+    var = gamma0
+    for l in range(1, min(lag, n - 1) + 1):
+        w = 1.0 - l / (lag + 1.0)
+        gamma_l = float((x[l:] * x[:-l]).mean())
+        var += 2.0 * w * gamma_l
+    return float(np.sqrt(max(var, 0.0)))
+
+
 def analyze_factors(
     panel: Mapping[str, pd.DataFrame],
     factor_names: Sequence[str],

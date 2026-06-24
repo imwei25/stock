@@ -19,6 +19,7 @@ from pyecharts import options as opts
 from pyecharts.charts import Bar, Line, Scatter
 
 from stockpool.ab.runner import ABResult, ArmResult
+from stockpool.ab.score_ic import arm_score_ic
 from stockpool.backtest_composite import EquityResult
 from stockpool.backtest_report import _CSS
 
@@ -351,6 +352,52 @@ def _full_cfg_dump(ab_result: ABResult) -> str:
     )
 
 
+def _score_ic_section(arm_a: ArmResult, arm_b: ArmResult) -> str:
+    """final_score 横截面 rank-IC 表(两 arm × 各 holding-day horizon)。
+
+    衡量预测信号质量,**不含 sizing/成本/执行** —— 与 Sharpe 表互补。小样本下 IC
+    信噪比高于 Sharpe;因子侧改动以 IC 为主判据,执行/sizing 侧改动看不出 IC 差。
+    """
+    horizons = sorted(set(arm_a.effective_cfg.backtest.equity_curve_holding_days)
+                      | set(arm_b.effective_cfg.backtest.equity_curve_holding_days))
+    ic_a = arm_score_ic(arm_a.per_stock, horizons)
+    ic_b = arm_score_ic(arm_b.per_stock, horizons)
+
+    def _num(v, fmt="{:+.4f}"):
+        return fmt.format(v) if v is not None else "—"
+
+    rows = []
+    for h in horizons:
+        a, b = ic_a.get(h, {}), ic_b.get(h, {})
+        a_ic, b_ic = a.get("mean_ic"), b.get("mean_ic")
+        d_ic = (b_ic - a_ic) if (a_ic is not None and b_ic is not None) else None
+        rows.append(
+            f"<tr><td>h={h}</td>"
+            f"<td>{_num(a_ic)}</td><td>{_num(a.get('ic_ir'), '{:+.3f}')}</td>"
+            f"<td>{_num(a.get('abs_ic_mean'), '{:.4f}')}</td>"
+            f"<td>{_num(b_ic)}</td><td>{_num(b.get('ic_ir'), '{:+.3f}')}</td>"
+            f"<td>{_num(b.get('abs_ic_mean'), '{:.4f}')}</td>"
+            f"<td><strong>{_num(d_ic)}</strong></td>"
+            f"<td>{a.get('n_days', 0)}/{a.get('n_stocks', 0)}</td></tr>"
+        )
+    header = (
+        f"<tr><th>Horizon</th>"
+        f"<th>{arm_a.name} IC</th><th>{arm_a.name} ICIR</th><th>{arm_a.name} |IC|</th>"
+        f"<th>{arm_b.name} IC</th><th>{arm_b.name} ICIR</th><th>{arm_b.name} |IC|</th>"
+        f"<th>Δ IC (B−A)</th><th>days/stocks</th></tr>"
+    )
+    note = (
+        "<p class='meta'>横截面 rank-IC(Spearman)of <code>final_score</code> vs "
+        "前瞻 h 日收盘到收盘收益(ICIR 带 Newey-West 修正)。衡量预测力,不含 "
+        "sizing/成本/执行 —— 与 Sharpe 互补;小样本下比 Sharpe 更可靠,但执行/sizing "
+        "侧改动不改 score、IC 看不出差异。</p>"
+    )
+    return (
+        f"{note}<table><thead>{header}</thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
 def render_ab_report(ab_result: ABResult, output_dir: str | Path) -> Path:
     """Render the full A/B HTML report. Writes <date>.html and latest.html."""
     output_dir = Path(output_dir)
@@ -363,6 +410,7 @@ def render_ab_report(ab_result: ABResult, output_dir: str | Path) -> Path:
     scatter = _sharpe_scatter(ab_result.arm_a, ab_result.arm_b)
     histogram = _diff_histogram(ab_result.arm_a, ab_result.arm_b)
     cards = _per_stock_cards(ab_result.arm_a, ab_result.arm_b)
+    score_ic_html = _score_ic_section(ab_result.arm_a, ab_result.arm_b)
     failures = _failure_detail(ab_result)
     cfg_dump = _full_cfg_dump(ab_result)
 
@@ -378,6 +426,8 @@ def render_ab_report(ab_result: ABResult, output_dir: str | Path) -> Path:
   {banner}
   <h2>Aggregate (over {table['common_stocks_count']} common stocks)</h2>
   {table_html}
+  <h2>Predictive IC (cross-sectional rank-IC of final_score)</h2>
+  {score_ic_html}
   <h2>Sharpe scatter</h2>
   <div class='chart-wrap'>{scatter}</div>
   <h2>Sharpe diff distribution</h2>
