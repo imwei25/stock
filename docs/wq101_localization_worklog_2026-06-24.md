@@ -372,6 +372,31 @@ ep/bp/asset_yoy/eps_yoy/debt_to_asset/cfo_to_np/netprofit_yoy)。
 - ret_skew/ret_kurt/cfo_to_np/long_term_reversal/high_proximity 退化日比例偏高(0.04-0.74),
   覆盖率 gate 已正确处理。
 
+## A/B 验证:新因子是否提升回测(2026-06-24)
+配置 `configs/ab/ab_newfactors.yaml`(base_config 用 `../../config.yaml` —— ab 的 base_config
+相对 ab 文件目录解析)。两臂同 ml_factor 超参 + training_universe=all,唯一差异 = factors_file:
+- **base167**:从 296 clean analyze **排除 gtja+barra** 后 pick-by-ic top-30(原始池)。
+- **full296**:从全 296 pick-by-ic top-30(11 个名额给新因子:9 gtja + ret_skew_20 + ret_kurt_20,
+  替换 11 个原始因子)。
+两 selection 从**同一 analyze 派生**(共享因子 IC 一致),干净隔离"加新因子"这一变量。
+16 股 watchlist,Rust 加速,两臂各 16 股 0 失败,报告 `reports/ab/2026-06-24.html`。
+
+**结果(Aggregate over 16 stocks)**:
+| 指标 | base167 均值/中位 | full296 均值/中位 | Δ均值 | base:full 胜 |
+|---|---|---|---|---|
+| Total return | +8.21%/+10.67% | +5.26%/+10.00% | −2.96pp | 10:6 |
+| Sharpe | +0.367/+0.404 | +0.176/+0.410 | −0.191 | 11:5 |
+| 胜率 | 58.9% | 57.45% | −1.45% | 9:7 |
+| 单笔 | 1.41% | 1.01% | −0.40 | |
+
+**判定:中性偏负 → 不替换生产 selection.json**。中位 Sharpe 打平(0.404 vs 0.410),均值被几只差股
+拖累(base 11:5 胜)。⚠️ 本分支 **A/B 无 score rank-IC**(`ab/score_ic.py` 仅在 composite-backtest,
+本分支无;只有 .pyc 残留)→ 因子侧主判据缺失,只能看 Sharpe。
+**根因/边界**:① 新因子去相关后边际价值本就低(与现有 vol/size/value 共线);② **16 股窄池
+(半导体扎堆)是截面选股因子的不利测试场** —— 它们的主战场是**全市场 top-K 动态选股(Pool B/组合层)**,
+非固定窄池 per-stock。**建议**:若要真正检验 GTJA/Barra 价值,应在组合层(portfolio-ab + Pool B
+动态池)+ 把 `ab/score_ic.py` 从 composite-backtest 移过来恢复因子侧 IC 判据后再测。
+
 ## Sources(A股 correlation 研究)
 - DolphinDB GTJA191:https://docs.dolphindb.com/zh/modules/gtja191Alpha/191alpha.html
 - BigQuant Alpha101 复现:https://bigquant.com/wiki/doc/Gl3vglHyog

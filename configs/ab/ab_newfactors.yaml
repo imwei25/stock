@@ -1,0 +1,56 @@
+# A/B: 原始因子池 selection vs 含 GTJA191+Barra 新因子的 selection。
+# 两个 selection 都从同一个 296-因子 clean analyze(Rust)以相同 pick-by-ic 参数
+# (top-30 / max-corr 0.6 / 覆盖率 gate 0.5 / score-by ir)选出,唯一差异 =
+# 候选池是否含新因子。full296 里 11 个名额被新因子占据(9 gtja + ret_skew/ret_kurt),
+# 替换了 11 个原始因子。两臂 ml_factor 超参完全一致,training_universe=all 对齐生产。
+# 判据:final_score 截面 rank-IC(小样本更可靠)为主,Sharpe(holding=5)作变现确认。
+base_config: ../../config.yaml
+
+arms:
+  base167:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection_base167.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+    backtest:
+      equity_curve_holding_days: [5]
+
+  full296:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection_full296.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+    backtest:
+      equity_curve_holding_days: [5]
