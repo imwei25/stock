@@ -281,7 +281,19 @@ decay(已上 Rust);correlation 仅 196ms(瓶颈 1/25),且 ops.py 故意让它走
 **"耗时长的因子改用 rust" 通过构建扩展即达成,无需改任何源码**(dispatch 代码本就在,
 `_USE_RUST` 一真就生效)。`dist/` 与 `target/` 已 gitignore。
 
-**端到端实测**:GTJA 评估 analyze(192 因子全市场)从 ~55 min → **~4-5 min(约 10-15×)**。
+**端到端实测**:GTJA 评估 analyze(192 因子全市场)从 ~55 min → **4:48(约 11.5×)**。
+
+## GTJA191 评估结果(Rust 提速后跑,192 因子全市场 clean 基线)
+- **24/25 计算正常**;gtja_006(`rank(sign(...))`,sign 截面近常数)被退化 gate 正确剔除。
+- 最强一档 **排 #21-33/161**:gtja_034/031(0.1112,12 日均值回归)、gtja_020(0.108)、
+  gtja_018/013/014/024/008(0.10-0.107)。abs_ic ~0.10-0.11、|ir| 0.30-0.37、degen 0.01
+  —— **实打实可用的中档信号,但未进前 20**(顶部仍是 vol/range + 基本面)。
+- 几个高 |ir| 低 abs_ic(gtja_032=0.64/016=0.59/005=0.59/001=0.49)= 稳定但弱。
+- **pick-by-ic(带覆盖率 gate,top-30/max-corr0.6)选出 4 个 GTJA**(gtja_001/020/015/012)
+  进 de-correlated top-30 → **GTJA191 与现有池不冗余,带来真实新增信号**(候选
+  `reports/selection_with_gtja_candidate.json`,只读,未替换生产)。
+- **判定**:GTJA191(子集)在 A 股**有用、适度**——4/25 经去相关入选,可作为新信号源候选;
+  须 A/B 验证后再决定是否进生产。比起手修 correlation 算子(无用),这是"换因子集"正路的验证。
 
 ## Sources(A股 correlation 研究)
 - DolphinDB GTJA191:https://docs.dolphindb.com/zh/modules/gtja191Alpha/191alpha.html
