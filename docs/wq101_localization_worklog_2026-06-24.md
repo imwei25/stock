@@ -335,6 +335,30 @@ FILTER/benchmark(149/181/182)、DMI(172/186)、AMOUNT-only、残缺(98/127/146/1
 - **分支差异**:更全的 Barra 族(ep/bp/eps_yoy/asset_yoy/debt_to_asset/cfo_to_np)在
   `feat/composite-backtest` 分支有,本 `wq101-localization` 分支(基于 main)没有 → 需 cherry-pick/合并才能用。
 
+## 分支盘点与清理(2026-06-24,agent 协助)
+派 agent 只读盘点全部分支。结论:
+- **已删本地过时分支**:`feat/meta-labeling`、`feat/regime-gate`(均为 `feat/composite-backtest`
+  的祖先、0 独有提交,工作已并入,reflog 可恢复)。
+- **本地 main 更新**:`git branch -f main origin/main`(原落后 299 提交,无损快进)。
+- **保留**:`wq101-localization`(active)、`feat/composite-backtest`(Barra 源 + 11 未推提交 +
+  stash@{1} 轮15/16 WIP)。
+- **远端 prune 待用户手动**:`origin/feat/ab-candidate-pool` + `origin/feat/perf-tier1` 已全合入
+  origin/main,可删,但本环境 `git push` 无非交互认证(失败)→ 用户终端执行:
+  `git push origin --delete feat/ab-candidate-pool feat/perf-tier1`。
+- 两条线特性**完全不重叠**:wq101 独有 gtja191/wq101_variants;composite 独有 Barra/ensemble/
+  limits/meta/regime。
+
+## Barra 因子族移植到 wq101-localization(2026-06-24)
+从 `feat/composite-backtest` 移植(其 Barra 全在巨型混合 commit ee49844 里,故不 cherry-pick,
+改文件级手动移植):
+- **Tier A(commit `d6fa519`)**:5 个自包含文件 → beta/ivol/amihud/max_ret/min_ret/ret_skew/
+  ret_kurt/downside_vol/long_term_reversal/high_proximity(10 个),+ 24 测试。
+- **Tier B/C(commit `e53474e`,agent 完成)**:size.py→log_mcap(+ context set/get_mcap_panel +
+  strategy_factory/cli 的 mcap 面板注入 wiring);fundamentals.py 扩展 → ep/bp/asset_yoy/eps_yoy/
+  debt_to_asset/cfo_to_np/netprofit_yoy(7 个)。+ size/fundamentals 测试。112 测试绿。
+- **数据就绪**:本机有 fundamentals_balance/cash_flow parquet → ep/bp/debt_to_asset/cfo_to_np 可算。
+- 全套评估(296 因子,Rust)结果待回填。
+
 ## Sources(A股 correlation 研究)
 - DolphinDB GTJA191:https://docs.dolphindb.com/zh/modules/gtja191Alpha/191alpha.html
 - BigQuant Alpha101 复现:https://bigquant.com/wiki/doc/Gl3vglHyog
