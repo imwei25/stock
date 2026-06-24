@@ -32,7 +32,12 @@ def _panel(T: int = 300, N: int = 6, seed: int = 0):
 
 
 def _wq_specs():
-    return [s for s in list_specs() if "wq101" in s.sources]
+    # Base WQ101 alphas only — exclude the generated A-share-localized variants
+    # (they carry an extra "wq101_localized" source tag).
+    return [
+        s for s in list_specs()
+        if "wq101" in s.sources and "wq101_localized" not in s.sources
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

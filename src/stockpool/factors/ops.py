@@ -180,6 +180,7 @@ __all__ = [
     "ts_sum",
     # light ops (defined inline below)
     "adv",
+    "sma",
     "covariance",
     "cs_demean",
     "delay",
@@ -325,3 +326,15 @@ def returns(close: pd.DataFrame) -> pd.DataFrame:
 def adv(volume: pd.DataFrame, d: int) -> pd.DataFrame:
     """平均日成交量 (Average Daily Volume) over d days。WQ101 的 ``adv{d}``。"""
     return volume.rolling(d, min_periods=d).mean()
+
+
+def sma(x: pd.DataFrame, n: int, m: int) -> pd.DataFrame:
+    """GTJA191 ``SMA(X, n, m)``: 递归平滑 ``Y[t] = (X[t]*m + Y[t-1]*(n-m)) / n``。
+
+    等价于 ``ewm(alpha = m/n, adjust=False)`` 的指数加权移动平均(展开即得上式)。
+    GTJA 文档要求 ``0 < m <= n``(⇒ ``0 < alpha <= 1``)。NaN 安全:``ignore_na=False``
+    保留时间间距;前导 NaN 被跳过,直到首个有效值给递归播种。
+    """
+    if not (0 < m <= n):
+        raise ValueError(f"SMA requires 0 < m <= n, got n={n}, m={m}")
+    return x.ewm(alpha=m / n, adjust=False, ignore_na=False).mean()

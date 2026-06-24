@@ -63,6 +63,7 @@ from stockpool.factors import composite  # noqa: F401
 from stockpool.factors import rank_correlation  # noqa: F401
 from stockpool.factors import cross_sec_breadth  # noqa: F401
 from stockpool.factors import fundamentals  # noqa: F401
+from stockpool.factors import gtja191  # noqa: F401
 
 __all__ = [
     "Factor",

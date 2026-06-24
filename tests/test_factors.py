@@ -159,10 +159,15 @@ def test_factor_count_in_expected_range():
 
     Task 14 实测: 注册了 165 个基础因子名(builtin/wq101/custom + 11 个新族)。
     list_specs() 返回每个 @register 一条,不展开 variant 后缀。
-    range 取实测值 ± 缓冲,作为漏注册保护。"""
+    range 取实测值 ± 缓冲,作为漏注册保护。
+
+    2026-06-24: 上限放宽到 320 以容纳两批新增 ——
+      * GTJA191 A 股因子族(验证子集,25 个);
+      * 可选生成的 WQ101 本土化变体(``wq101_variants.py``,top-30×3=90 个,
+        文件存在才注册,故计数会在 ~192(无变体)与 ~282(有变体)间浮动)。"""
     from stockpool.factors import list_specs
     n = len(list_specs())
-    assert 140 <= n <= 220, f"factor count={n} outside expected [140, 220]"
+    assert 140 <= n <= 320, f"factor count={n} outside expected [140, 320]"
 
 
 def test_new_type_fundamental_registered():
