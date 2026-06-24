@@ -210,3 +210,44 @@ bug**(因子分析的覆盖度盲点),这才是本次的真正收获。
     外加把 `strategies.py`/`portfolio/eligibility.py` 两处**性能优化反向撤销**(HEAD 里是正确优化版)。
     **无任何独有想要的内容,可安全 `git stash drop stash@{0}`**;我没动它以防万一。
 - 全部测试在触及套件绿(analysis/cli/factors/wq101/picker 共 68+ passed);工作树干净。
+
+---
+
+# 后续(2026-06-24,A股 correlation 研究 → GTJA191 + 覆盖率 gate)
+
+## 研究结论:不修 correlation 算子,改用 GTJA191
+搜索业界(GTJA191/聚宽/DolphinDB/BigQuant + pandas/scipy issue):**常数输入的相关性
+无定义、返 NaN 是数学标准做法,没人在算子层"修" correlation**。A 股本土化发生在
+①预处理(dropna+截面 rank)②**因子集层 = 国泰君安 Alpha191**(为 A 股设计的另一套
+191 alpha)。且追踪显示修 correlation 也救不活 alpha_096(第二刀是 strict-min_periods
+算子连乘)。→ 决策:加 GTJA191 因子族,不动 correlation。来源见文末 Sources。
+
+## 决策 D8 — GTJA191 落地范围 = 验证子集(用户选)
+全 191 = 大工程(+~8 个新算子)且本环境无法可靠拿逐字源/golden value 校验。**用户选
+"先做验证过的子集"**。已实现(commit `bb28cce`):
+- `ops.sma(x,n,m)` = `ewm(alpha=m/n)`(GTJA SMA 递归展开),单测对拍递归式。
+- `factors/gtja191.py`:**25 个逐字核对的 alpha**(gtja_001/002/005/006/007/008/009/
+  011/012/013/014/015/016/018/020/024/025/026/029/031/032/033/034/037/040),只用现有
+  算子 + sma,跳过 WMA/REGBETA/REGRESI/SEQUENCE/SMEAN(未实现/歧义)。除零用 safe_div。
+- `factors/__init__` 自动导入;`sources=("gtja191",)`。5 个测试(sma 正确性/注册/
+  shape-no-inf/覆盖率)绿。
+- 文档:CLAUDE.md 记 gtja191 + 覆盖率 gate(commit `7dcb85b`)。
+
+## 覆盖率 gate(用户要求"检查 factor pick 的 nan 覆盖率")
+查 `pick_top_factors`:**原本只靠 NaN-score 排除全幻象,无部分退化检查**。已补
+(commit `165f86e`):新增 `max_degenerate_ratio`(默认 0.5,CLI `--max-degenerate-ratio`),
+剔 `degenerate_day_ratio` > 阈值的因子。**实跑验证**(现有基线):默认 0.5 对干净 IR-排名
+top-30 不误伤(符合安全网定位);收紧 0.3 剔除并替换 3 个部分退化因子(alpha_037/042/060)
+→ gate 在真实数据上工作正常。
+
+## 进行中
+全市场 analyze 评估 GTJA(后台 `bbdlfhd04`,192 因子 = 167 基础 + 25 gtja,跳过 90 冗余
+wq101 变体,~60 min)→ 完成后 pick-by-ic(带覆盖率 gate)看 **gtja 因子能否被选入** =
+GTJA191 在 A 股到底好不好用。结果待回填。
+
+## Sources(A股 correlation 研究)
+- DolphinDB GTJA191:https://docs.dolphindb.com/zh/modules/gtja191Alpha/191alpha.html
+- BigQuant Alpha101 复现:https://bigquant.com/wiki/doc/Gl3vglHyog
+- 聚宽 Alpha191 指南:https://iris.findtruman.io/ai/tool/ai-quantitative-trading/e/joinquant/alpha-191-factor-library-usage
+- GTJA191 公式(OFO wiki):https://github.com/ChannelCMT/OFO/wiki/Alpha191
+- pandas #24019 / scipy #3728(常数输入 corr = NaN 共识)
