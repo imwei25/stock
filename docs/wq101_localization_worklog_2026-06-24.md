@@ -312,6 +312,29 @@ factor-count 守卫放宽到 ≤400。
   `reports/selection_with_gtja_candidate.json`(只读,未替换生产)。
 - **后续可扩**:补 WMA/REGBETA/REGRESI/HIGHDAY/LOWDAY 算子后,可再移植 91-191 的一批。
 
+## GTJA191 扩展(批次3,2026-06-24)— 57 → 111 个,commit `8d153a1`
+从 91-191 逐字挑 54 个 + 新增 3 个向量化算子 `ops.highday/lowday/regslope`(滑窗 argmax/
+argmin 距离、REGBETA vs SEQUENCE 回归斜率)。覆盖 ATR、MFI、KDJ-D、TRIX、量能 RSI/MACD、
+HIGHDAY/LOWDAY 极值近期度、多窗口动量/反转、大量 rank/corr。跳过 SELF(143)、SUMAC(165/183)、
+FILTER/benchmark(149/181/182)、DMI(172/186)、AMOUNT-only、残缺(98/127/146/157/159/162/164/
+166/170/190)。测试 130 全绿(含 Rust 等价 58)。list_specs 368(<400 守卫)。
+
+**重评估(278 因子,Rust,7:16)**:
+- **gtja_187 #7/243(0.1516)**、gtja_161/175(ATR,#8/#13)、129/167/150/189 在 #14-18。
+  **全场 top-20 里 8 个 gtja、top-30 里 14、top-50 里 28**(注:ATR/range 类与现有 vol 因子同源,
+  abs_ic 高但部分冗余,真价值看去相关)。
+- 5 个被退化 gate 剔除:gtja_006(sign)、053/058(COUNT)、103/177(HIGHDAY/LOWDAY 离散整数)。
+- **pick-by-ic(覆盖率 gate)选出 10 个 GTJA**进去相关 top-30(趋势:25→4、57→6、111→10,
+  稳定递增)→ 扩展持续带来非冗余信号。本次去相关 top-30 基本面 0 个(基本面 abs_ic 高但 ir 偏低,
+  被量价挤出;按 abs_ic 排则会进)。
+
+## 基本面因子盘点(用户问)
+- **GTJA191 = 0 基本面**(设计上纯量价)。
+- 库内 **9 个基本面**(source=custom,type=fundamental):roe/roa/pe/pb/net_margin/gross_margin/
+  revenue_yoy/market_cap/log_market_cap;A 股表现强(pe #9、market_cap #7-8、pb 0.127)。
+- **分支差异**:更全的 Barra 族(ep/bp/eps_yoy/asset_yoy/debt_to_asset/cfo_to_np)在
+  `feat/composite-backtest` 分支有,本 `wq101-localization` 分支(基于 main)没有 → 需 cherry-pick/合并才能用。
+
 ## Sources(A股 correlation 研究)
 - DolphinDB GTJA191:https://docs.dolphindb.com/zh/modules/gtja191Alpha/191alpha.html
 - BigQuant Alpha101 复现:https://bigquant.com/wiki/doc/Gl3vglHyog
