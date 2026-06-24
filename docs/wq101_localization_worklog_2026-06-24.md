@@ -357,7 +357,20 @@ FILTER/benchmark(149/181/182)、DMI(172/186)、AMOUNT-only、残缺(98/127/146/1
   strategy_factory/cli 的 mcap 面板注入 wiring);fundamentals.py 扩展 → ep/bp/asset_yoy/eps_yoy/
   debt_to_asset/cfo_to_np/netprofit_yoy(7 个)。+ size/fundamentals 测试。112 测试绿。
 - **数据就绪**:本机有 fundamentals_balance/cash_flow parquet → ep/bp/debt_to_asset/cfo_to_np 可算。
-- 全套评估(296 因子,Rust)结果待回填。
+### 全套评估结果(296 因子,Rust)
+全部 18 个 Barra 因子正常计算(命名带默认后缀:beta_60/ivol_60/amihud_20/downside_vol_20/
+max_ret_20/min_ret_20/ret_skew_20/ret_kurt_20/long_term_reversal_240/high_proximity_240 + log_mcap/
+ep/bp/asset_yoy/eps_yoy/debt_to_asset/cfo_to_np/netprofit_yoy)。
+- **单因子 IC 很强**:`beta_60` **全场 #1(0.1727)**,downside_vol_20 #6、log_mcap #12、
+  ivol_60 #21、min_ret_20 #23、bp #26、max_ret_20 #29、ep #32、amihud_20 #36。
+- **但去相关后贡献有限**:pick-by-ic(max-corr0.6)top-30 中 Barra 仅 2(按 ir:ret_skew/ret_kurt)
+  / 1(按 abs_ic:high_proximity);beta_60/downside_vol/log_mcap/ivol 与现有 vol/size 因子
+  (ewma_vol/atr/market_cap)**高度共线被剔**,ep/bp 与 pe/pb 共线被剔。
+- **结论**:Barra 风险/估值因子在 A 股单看强,但**大多是现有因子的近似重复**,去相关后边际新增信号少
+  (1-2 个);**GTJA 仍是更大的新信号源**(top-30 占 6-9 个)。价值在于补齐了显式的 beta/size/value
+  /成长/杠杆/质量风格暴露(便于风格中性化/归因),而非额外 alpha。
+- ret_skew/ret_kurt/cfo_to_np/long_term_reversal/high_proximity 退化日比例偏高(0.04-0.74),
+  覆盖率 gate 已正确处理。
 
 ## Sources(A股 correlation 研究)
 - DolphinDB GTJA191:https://docs.dolphindb.com/zh/modules/gtja191Alpha/191alpha.html
