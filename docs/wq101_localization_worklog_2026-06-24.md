@@ -295,6 +295,23 @@ decay(已上 Rust);correlation 仅 196ms(瓶颈 1/25),且 ops.py 故意让它走
 - **判定**:GTJA191(子集)在 A 股**有用、适度**——4/25 经去相关入选,可作为新信号源候选;
   须 A/B 验证后再决定是否进生产。比起手修 correlation 算子(无用),这是"换因子集"正路的验证。
 
+## GTJA191 扩展(批次2,2026-06-24)— 25 → 57 个,commit `7b1a26e`
+从 alpha 41-90 逐字挑出 32 个忠实可移植的 + 新增 `ops.count`(RSI 6/12/24、KDJ %K、CCI、
+SMA-MACD、多窗口均值回归、上涨天数占比、带符号成交量、rank/corr 截面)。跳过 DTM/DBM、
+benchmark、WMA/REGBETA、残缺/歧义公式(54/55/62/73/74/75)。测试 7/7 + 72 相关绿;
+factor-count 守卫放宽到 ≤400。
+
+**重评估(224 因子,Rust,5:34)**:
+- **gtja_042 升到全场 #14/191(abs_ic 0.1288)**,与最强 wq101(alpha_040)并列——
+  `-rank(std(high,10))*corr(high,vol,10)`,真·强因子。gtja_088(#20)/071(#22)/046/052/
+  065/066/067 一簇在 #24-41。
+- 3 个被退化 gate 正确剔除:gtja_006(sign 截面常数)、gtja_053/058(COUNT/n×100 仅
+  13/21 个离散值,截面分辨率低)。
+- **pick-by-ic(覆盖率 gate)选出 6 个 GTJA**(gtja_001/080/081/020/015/012)进去相关
+  top-30(25 因子时为 4 个)→ 扩展带来更多非冗余信号。候选
+  `reports/selection_with_gtja_candidate.json`(只读,未替换生产)。
+- **后续可扩**:补 WMA/REGBETA/REGRESI/HIGHDAY/LOWDAY 算子后,可再移植 91-191 的一批。
+
 ## Sources(A股 correlation 研究)
 - DolphinDB GTJA191:https://docs.dolphindb.com/zh/modules/gtja191Alpha/191alpha.html
 - BigQuant Alpha101 复现:https://bigquant.com/wiki/doc/Gl3vglHyog
