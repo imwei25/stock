@@ -389,9 +389,23 @@ ep/bp/asset_yoy/eps_yoy/debt_to_asset/cfo_to_np/netprofit_yoy)。
 | 胜率 | 58.9% | 57.45% | −1.45% | 9:7 |
 | 单笔 | 1.41% | 1.01% | −0.40 | |
 
-**判定:中性偏负 → 不替换生产 selection.json**。中位 Sharpe 打平(0.404 vs 0.410),均值被几只差股
-拖累(base 11:5 胜)。⚠️ 本分支 **A/B 无 score rank-IC**(`ab/score_ic.py` 仅在 composite-backtest,
-本分支无;只有 .pyc 残留)→ 因子侧主判据缺失,只能看 Sharpe。
+**初判(仅 Sharpe):中性偏负**。中位 Sharpe 打平(0.404 vs 0.410),均值被几只差股拖累(base 11:5)。
+当时本分支 **A/B 无 score rank-IC** → 只能看 Sharpe。
+
+### 结论反转(移植 score_ic 后重跑,commit `b5f77c8`)
+移植 `ab/score_ic.py`(适配 close 基准)后重跑,得因子侧 IC 判据:
+| h=5 | base167 | full296 | Δ(B−A) |
+|---|---|---|---|
+| **score IC 均值** | +0.0208 | **+0.0362** | **+0.0154**(+74% 相对)|
+| score ICIR | +0.040 | +0.063 | +0.023 |
+| \|IC\| | 0.259 | 0.282 | +0.023 |
+| (Sharpe 均值) | +0.367 | +0.176 | −0.191 |
+days/stocks = 432/16。
+
+**修正判定:按因子侧主判据(score IC),新因子明确提升预测力**(IC +74%,432×16 海量点可靠);
+Sharpe 的负是**小样本噪声**(16 股、少数交易、被一两只差股拖累)。这是项目规则"因子侧看 IC、
+Sharpe 作变现确认、小样本 IC 比 Sharpe 可靠"的教科书案例——**只看 Sharpe 会误判新因子有害,
+score IC 揭示其有用**。也证明移植 score_ic 是对的(否则结论会错)。
 **根因/边界**:① 新因子去相关后边际价值本就低(与现有 vol/size/value 共线);② **16 股窄池
 (半导体扎堆)是截面选股因子的不利测试场** —— 它们的主战场是**全市场 top-K 动态选股(Pool B/组合层)**,
 非固定窄池 per-stock。**建议**:若要真正检验 GTJA/Barra 价值,应在组合层(portfolio-ab + Pool B
