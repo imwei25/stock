@@ -64,6 +64,12 @@ from stockpool.factors import rank_correlation  # noqa: F401
 from stockpool.factors import cross_sec_breadth  # noqa: F401
 from stockpool.factors import fundamentals  # noqa: F401
 from stockpool.factors import gtja191  # noqa: F401
+# Barra-style risk-factor families (ported from composite-backtest 2026-06-24).
+from stockpool.factors import beta  # noqa: F401
+from stockpool.factors import liquidity  # noqa: F401
+from stockpool.factors import extreme  # noqa: F401
+from stockpool.factors import return_moments  # noqa: F401
+from stockpool.factors import long_horizon  # noqa: F401
 
 __all__ = [
     "Factor",
