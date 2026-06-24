@@ -64,6 +64,9 @@ def _cfg(factors: list[str], train_window: int = 40) -> MLFactorConfig:
         factors=factors, horizon=3, train_window=train_window,
         min_train_samples=20, refit_every=10, panel_mode="pooled",
         embargo_days=0, share_pool_fit=True,
+        # 等价性用 legacy close 基准核对(本测试比 build_panel 默认 close 路径);
+        # open 基准的等价性由 test_label_basis.py + 相同代码路径覆盖。
+        label_basis="close",
         selector=SelectorConfig(type="lasso"),
         weighter=WeighterConfig(type="ic"),
     )
@@ -295,7 +298,7 @@ def test_fast_fallback_applies_mask_when_enabled():
     cfg = MLFactorConfig(
         factors=factors, horizon=3, train_window=40,
         min_train_samples=10, refit_every=10, panel_mode="pooled",
-        embargo_days=0, share_pool_fit=True,
+        embargo_days=0, share_pool_fit=True, label_basis="close",
         selector=SelectorConfig(type="lasso"),
         weighter=WeighterConfig(type="ic"),
         mask=MaskConfig(enabled=True, min_listing_days=0),
@@ -362,7 +365,7 @@ def test_legacy_matches_fast_when_share_pool_fit_false():
     cfg = MLFactorConfig(
         factors=factors, horizon=3, train_window=40,
         min_train_samples=10, refit_every=10, panel_mode="pooled",
-        embargo_days=0, share_pool_fit=False,
+        embargo_days=0, share_pool_fit=False, label_basis="close",
         selector=SelectorConfig(type="lasso"),
         weighter=WeighterConfig(type="ic"),
     )
@@ -423,7 +426,7 @@ def test_preprocess_applied_consistently_across_paths():
     cfg = MLFactorConfig(
         factors=factors, horizon=3, train_window=40,
         min_train_samples=10, refit_every=10, panel_mode="pooled",
-        embargo_days=0, share_pool_fit=True,
+        embargo_days=0, share_pool_fit=True, label_basis="close",
         preprocess=preprocess,
         selector=SelectorConfig(type="lasso"),
         weighter=WeighterConfig(type="ic"),

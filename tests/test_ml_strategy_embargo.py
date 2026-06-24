@@ -24,25 +24,26 @@ def _synthetic_daily(n_days: int = 300, seed: int = 0) -> pd.DataFrame:
 
 
 def test_embargoed_label_end_default_uses_horizon():
-    cfg = MLFactorConfig(horizon=3)
+    # 本文件验证 legacy close 基准的 embargo 数学;open 基准的 +1 见 test_label_basis.py
+    cfg = MLFactorConfig(horizon=3, label_basis="close")
     strat = MLFactorStrategy(cfg=cfg)
     assert strat._embargoed_label_end(100) == 94
 
 
 def test_embargoed_label_end_explicit_zero_matches_legacy():
-    cfg = MLFactorConfig(horizon=5, embargo_days=0)
+    cfg = MLFactorConfig(horizon=5, embargo_days=0, label_basis="close")
     strat = MLFactorStrategy(cfg=cfg)
     assert strat._embargoed_label_end(100) == 95
 
 
 def test_embargoed_label_end_explicit_positive_overrides_horizon():
-    cfg = MLFactorConfig(horizon=3, embargo_days=10)
+    cfg = MLFactorConfig(horizon=3, embargo_days=10, label_basis="close")
     strat = MLFactorStrategy(cfg=cfg)
     assert strat._embargoed_label_end(100) == 87
 
 
 def test_embargoed_label_end_can_go_negative_when_history_short():
-    cfg = MLFactorConfig(horizon=3, embargo_days=5)
+    cfg = MLFactorConfig(horizon=3, embargo_days=5, label_basis="close")
     strat = MLFactorStrategy(cfg=cfg)
     assert strat._embargoed_label_end(5) == 5 - 3 - 5
 
@@ -51,7 +52,7 @@ def test_refit_with_default_embargo_returns_none_when_insufficient_history():
     """Short history + default embargo + 20-bar factor warmup → _refit refuses."""
     cfg = MLFactorConfig(
         horizon=3, train_window=50, min_train_samples=20,
-        refit_every=10, panel_mode="per_stock",
+        refit_every=10, panel_mode="per_stock", label_basis="close",
         selector=SelectorConfig(type="lasso"),
         weighter=WeighterConfig(type="ic"),
     )
@@ -70,7 +71,7 @@ def test_refit_with_legacy_no_embargo_runs_to_completion():
     cfg = MLFactorConfig(
         horizon=3, train_window=120, min_train_samples=60,
         refit_every=20, panel_mode="per_stock",
-        embargo_days=0,
+        embargo_days=0, label_basis="close",
         selector=SelectorConfig(type="lasso"),
         weighter=WeighterConfig(type="ic"),
     )
@@ -90,7 +91,7 @@ def test_refit_with_default_embargo_long_history_also_runs_to_completion():
     """Sanity: with plenty of history, default auto-embargo still leaves enough samples."""
     cfg = MLFactorConfig(
         horizon=3, train_window=120, min_train_samples=60,
-        refit_every=20, panel_mode="per_stock",
+        refit_every=20, panel_mode="per_stock", label_basis="close",
         selector=SelectorConfig(type="lasso"),
         weighter=WeighterConfig(type="ic"),
     )
@@ -109,12 +110,12 @@ def test_refit_with_default_embargo_long_history_also_runs_to_completion():
 def test_default_embargo_shifts_training_label_end_vs_legacy():
     cfg_default = MLFactorConfig(
         horizon=3, train_window=200, min_train_samples=30,
-        refit_every=20, panel_mode="per_stock",
+        refit_every=20, panel_mode="per_stock", label_basis="close",
     )
     cfg_legacy = MLFactorConfig(
         horizon=3, train_window=200, min_train_samples=30,
         refit_every=20, panel_mode="per_stock",
-        embargo_days=0,
+        embargo_days=0, label_basis="close",
     )
     strat_default = MLFactorStrategy(cfg=cfg_default)
     strat_legacy = MLFactorStrategy(cfg=cfg_legacy)
@@ -133,11 +134,11 @@ def test_embargo_eliminates_label_leak_on_synthetic():
     """
     cfg_legacy = MLFactorConfig(
         horizon=3, train_window=100, min_train_samples=20,
-        refit_every=20, panel_mode="per_stock", embargo_days=0,
+        refit_every=20, panel_mode="per_stock", embargo_days=0, label_basis="close",
     )
     cfg_embargo = MLFactorConfig(
         horizon=3, train_window=100, min_train_samples=20,
-        refit_every=20, panel_mode="per_stock",
+        refit_every=20, panel_mode="per_stock", label_basis="close",
     )
     strat_legacy = MLFactorStrategy(cfg=cfg_legacy)
     strat_embargo = MLFactorStrategy(cfg=cfg_embargo)

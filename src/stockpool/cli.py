@@ -985,6 +985,7 @@ def cmd_factors_analyze(args: argparse.Namespace) -> int:
         winsorize=winsorize_arg,
         degenerate_day_unique_ratio_threshold=args.degenerate_threshold,
         min_coverage_frac=args.min_coverage_frac,
+        label_basis=cfg.strategy.ml_factor.label_basis,
     )
 
     out_dir = Path(args.output)

@@ -465,6 +465,13 @@ class MLFactorConfig(BaseModel):
     # raise NotImplementedError until a later PR fills them in.
     label_type: Literal["return", "vol_adjusted", "cross_sec_rank"] = "return"
 
+    # 标签价格基准(2026-06 审查 P2-3):
+    #   open  — open[t+1+h]/open[t+1] − 1,与 T+1 次日开盘成交的执行口径对齐
+    #           (默认;决策 bar 拿不到的 close[t]→open[t+1] 隔夜段不进标签)。
+    #   close — legacy close[t+h]/close[t] − 1(含隔夜段,偏乐观)。
+    # 注意:open 基准的标签多看 1 根 bar,embargo/截断数学自动 +1。
+    label_basis: Literal["open", "close"] = "open"
+
     selector: SelectorConfig = Field(default_factory=SelectorConfig)
     weighter: WeighterConfig = Field(default_factory=WeighterConfig)
     thresholds: QuantileThresholds = Field(default_factory=QuantileThresholds)

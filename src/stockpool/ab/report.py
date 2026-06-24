@@ -352,6 +352,14 @@ def _full_cfg_dump(ab_result: ABResult) -> str:
     )
 
 
+def _arm_label_basis(arm: ArmResult) -> str:
+    """ml_factor arm 用其训练标签口径,否则默认 open(与 T+1 执行对齐)。"""
+    cfg = arm.effective_cfg
+    if cfg.strategy.name == "ml_factor":
+        return cfg.strategy.ml_factor.label_basis
+    return "open"
+
+
 def _score_ic_section(arm_a: ArmResult, arm_b: ArmResult) -> str:
     """final_score 横截面 rank-IC 表(两 arm × 各 holding-day horizon)。
 
@@ -360,8 +368,8 @@ def _score_ic_section(arm_a: ArmResult, arm_b: ArmResult) -> str:
     """
     horizons = sorted(set(arm_a.effective_cfg.backtest.equity_curve_holding_days)
                       | set(arm_b.effective_cfg.backtest.equity_curve_holding_days))
-    ic_a = arm_score_ic(arm_a.per_stock, horizons)
-    ic_b = arm_score_ic(arm_b.per_stock, horizons)
+    ic_a = arm_score_ic(arm_a.per_stock, horizons, label_basis=_arm_label_basis(arm_a))
+    ic_b = arm_score_ic(arm_b.per_stock, horizons, label_basis=_arm_label_basis(arm_b))
 
     def _num(v, fmt="{:+.4f}"):
         return fmt.format(v) if v is not None else "—"
@@ -388,8 +396,9 @@ def _score_ic_section(arm_a: ArmResult, arm_b: ArmResult) -> str:
     )
     note = (
         "<p class='meta'>横截面 rank-IC(Spearman)of <code>final_score</code> vs "
-        "前瞻 h 日收盘到收盘收益(ICIR 带 Newey-West 修正)。衡量预测力,不含 "
-        "sizing/成本/执行 —— 与 Sharpe 互补;小样本下比 Sharpe 更可靠,但执行/sizing "
+        "前瞻 h 日 forward return(各 arm 按其 label_basis:ml_factor open 基准用 "
+        "open[t+1+h]/open[t+1]−1,否则收盘到收盘;ICIR 带 Newey-West 修正)。衡量预测力,"
+        "不含 sizing/成本/执行 —— 与 Sharpe 互补;小样本下比 Sharpe 更可靠,但执行/sizing "
         "侧改动不改 score、IC 看不出差异。</p>"
     )
     return (

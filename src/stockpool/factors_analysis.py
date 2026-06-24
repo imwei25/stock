@@ -267,6 +267,7 @@ def analyze_factors(
     winsorize: tuple[float, float] | None = (0.01, 0.99),
     degenerate_day_unique_ratio_threshold: float = 0.01,
     min_coverage_frac: float = 0.05,
+    label_basis: Literal["open", "close"] = "close",
 ) -> FactorAnalysisResult:
     """End-to-end factor analysis on a panel.
 
@@ -280,6 +281,9 @@ def analyze_factors(
         regime_index_close: optional pd.Series of an index close (e.g. sh000001)
                      to split daily IC into bull/bear/sideways regimes.
         method:      "spearman" (rank IC, default) or "pearson".
+        label_basis: "open" → open[t+1+h]/open[t+1]−1(与 T+1 执行/训练标签
+                     对齐);"close"(默认)维持 legacy close[t+h]/close[t]−1。
+                     CLI 传入 ``cfg.strategy.ml_factor.label_basis`` 以与生产一致。
         winsorize:   ``(lo, hi)`` per-day quantile clip applied to each
                      factor wide-frame before IC; pass ``None`` to disable.
                      Default ``(0.01, 0.99)`` matches the ML training
@@ -319,7 +323,12 @@ def analyze_factors(
     # ("momentum_20", "boll_position_20"). Pre-resolved names round-trip unchanged.
     factor_names = [make_factor(n).name for n in factor_names]
 
-    fwd = forward_return_panel(panel["close"], horizon)
+    # label_basis="open" → open[t+1+h]/open[t+1]−1(与 T+1 执行/训练标签对齐);
+    # "close"(默认)维持 legacy close[t+h]/close[t]−1。
+    fwd = forward_return_panel(
+        panel["close"], horizon,
+        open_=panel["open"] if label_basis == "open" else None,
+    )
 
     # Stream factor compute -> IC -> discard the T×N factor panel. The full
     # accumulated dict in compute_factor_panel costs ~17 MB * len(factor_names)

@@ -1,7 +1,8 @@
 """Tests for ab.score_ic — cross-sectional rank-IC of strategy score in A/B.
 
-This branch uses close-to-close forward returns (forward_return_panel has no
-open basis), so tests build the label from close accordingly.
+These tests exercise the close-basis path (label_basis defaults to "open" but
+falls back to close-to-close when no ``open_`` panel is supplied). open-basis
+math is covered in test_label_basis.py.
 """
 from __future__ import annotations
 
@@ -79,8 +80,9 @@ def test_panels_and_arm_score_ic_end_to_end():
     for code in ["A", "B", "C", "D"]:
         c = rng.uniform(10, 20, len(dates))
         per_stock.append((code, code, _FakeResult(_score_frame(dates, rng.normal(size=len(dates)), c))))
-    score, close = panels_from_per_stock(per_stock)
+    score, open_, close = panels_from_per_stock(per_stock)
     assert score.shape == (40, 4) and close.shape == (40, 4)
+    assert open_.shape == (40, 4)
     out = arm_score_ic(per_stock, [3, 5])
     assert set(out) == {3, 5}
     assert out[3]["n_stocks"] == 4
