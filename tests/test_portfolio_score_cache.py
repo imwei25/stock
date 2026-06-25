@@ -6,9 +6,33 @@ from pathlib import Path
 
 import yaml
 
+import pandas as pd
+
 from stockpool.config import load_config
-from stockpool.portfolio.scoring import score_cache_key
+from stockpool.portfolio.scoring import _set_stock_context, score_cache_key
 from stockpool.portfolio_ab.config import build_effective_cfg, load_portfolio_ab_config
+
+
+class _FakeStrat:
+    def __init__(self, panel=None):
+        if panel is not None:
+            self._factor_panel = panel
+        self._current_stock_code = "SENTINEL"
+
+
+def test_set_stock_context_slices_when_in_panel():
+    panel = {"f1": pd.DataFrame(columns=["A", "B"]), "f2": pd.DataFrame(columns=["A", "B"])}
+    s = _FakeStrat(panel)
+    _set_stock_context(s, "A")
+    assert s._current_stock_code == "A"          # in panel → slice that stock
+    _set_stock_context(s, "ZZZ")
+    assert s._current_stock_code is None          # absent → None → recompute fallback
+
+
+def test_set_stock_context_noop_without_panel():
+    s = _FakeStrat(panel=None)   # composite_verdict-like: no _factor_panel
+    _set_stock_context(s, "A")
+    assert s._current_stock_code == "SENTINEL"    # untouched, no crash
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CODES = ["000001", "000002", "600000", "600519"]

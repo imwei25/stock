@@ -370,9 +370,20 @@ class MLFactorStrategy(Strategy):
 
     def _strategy_signature(self) -> str:
         """8-char hash of MLFactorConfig — used to invalidate stale caches
-        when factors/horizon/selector/weighter/etc. change."""
-        blob = repr(self.cfg.model_dump()).encode("utf-8")
-        return hashlib.sha256(blob).hexdigest()[:8]
+        when factors/horizon/selector/weighter/etc. change.
+
+        Memoized: ``self.cfg`` is immutable for the strategy's lifetime, so the
+        signature is constant. It was previously recomputed (repr+model_dump+
+        sha256) on every bar via ``_shared_key`` — hundreds of thousands of
+        calls during a portfolio walk; caching it is bit-identical and a
+        measurable speedup.
+        """
+        sig = getattr(self, "_sig_cache", None)
+        if sig is None:
+            blob = repr(self.cfg.model_dump()).encode("utf-8")
+            sig = hashlib.sha256(blob).hexdigest()[:8]
+            self._sig_cache = sig
+        return sig
 
     def _is_sharing(self) -> bool:
         """是否走跨股共享 fit:pooled + 配置开关 + 拿到了 pool_data。"""

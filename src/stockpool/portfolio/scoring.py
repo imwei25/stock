@@ -66,7 +66,10 @@ def score_cache_key(cfg, universe_codes: Iterable[str]) -> str:
         d.pop(k, None)
     blob = json.dumps(d, sort_keys=True, ensure_ascii=False, default=str)
     codes = ",".join(sorted(map(str, universe_codes)))
-    return hashlib.sha256(f"{blob}|{codes}".encode("utf-8")).hexdigest()[:16]
+    # Version tag: bump when scoring SEMANTICS change so stale cached panels are
+    # not served. v2 = predict-time slices the prebuilt cross-sectional factor
+    # panel per stock (was: recompute factors per single stock → wrong cross-sec).
+    return hashlib.sha256(f"v2|{blob}|{codes}".encode("utf-8")).hexdigest()[:16]
 
 
 # Module-global populated by ``_worker_init`` inside each Pool worker so the
@@ -97,6 +100,28 @@ def _worker_init(strategy, sector_map):
 _WORKER_STOCKS_SEEN: int = 0
 
 
+def _set_stock_context(legacy_strategy, code: str) -> None:
+    """Point an ml_factor strategy at ``code`` so ``generate_signals`` slices the
+    prebuilt cross-sectional factor panel for that stock — giving cross-sectional
+    factor values consistent with training — instead of recomputing factors on
+    the single stock's history (degenerate cross-sec values + far slower).
+
+    No-op for strategies without a prebuilt panel (e.g. composite_verdict) and
+    for codes absent from the panel (left as None → recompute fallback keeps
+    them scoreable). Only the predict-time X is affected; pooled training is
+    unchanged.
+    """
+    fp = getattr(legacy_strategy, "_factor_panel", None)
+    if not fp:
+        return
+    try:
+        any_wide = next(iter(fp.values()))
+        in_panel = code in any_wide.columns
+    except StopIteration:
+        in_panel = False
+    legacy_strategy._current_stock_code = code if in_panel else None
+
+
 def _score_one_stock(args):
     """Worker task: returns ``(code, series_or_None, err_msg_or_None)``."""
     global _WORKER_STOCKS_SEEN
@@ -106,6 +131,7 @@ def _score_one_stock(args):
         from stockpool._instrumentation import checkpoint
         checkpoint(f"worker first stock start ({code})")
     try:
+        _set_stock_context(_WORKER_STRATEGY, code)
         sig = _WORKER_STRATEGY.generate_signals(daily)  # type: ignore[union-attr]
     except Exception as e:  # noqa: BLE001 — failure-isolation contract
         return (code, None, f"generate_signals failed: {e}")
@@ -129,6 +155,7 @@ def _serial_loop(legacy_strategy, tasks, score_field, code_iter):
     series_by_code: dict[str, pd.Series] = {}
     for code, daily in code_iter:
         try:
+            _set_stock_context(legacy_strategy, code)
             sig = legacy_strategy.generate_signals(daily)
         except Exception as e:  # noqa: BLE001 — failure-isolation contract
             log.warning("score panel: %s generate_signals failed (%s); skip", code, e)
