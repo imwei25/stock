@@ -1,0 +1,28 @@
+# stockpool runtime dependencies (mirror of pyproject.toml [project].dependencies).
+# Install:  pip install -r requirements.txt
+akshare>=1.12
+mootdx>=0.11
+baostock>=0.8
+lightgbm>=4.0
+pandas>=2.0
+numpy>=1.24
+pyarrow>=14.0
+pyecharts>=2.0
+pyyaml>=6.0
+pydantic>=2.5
+
+# --- Rust-accelerated factor ops (optional but ~10x faster analyze; falls back
+#     to the pure-pandas oracle when absent, via STOCKPOOL_USE_PYTHON_OPS=1) ---
+# maturin builds the `stockpool_ops_rs` extension from rust/stockpool_ops/.
+maturin>=1.5
+# NOTE: `rust` itself is a TOOLCHAIN, not a pip package — install separately:
+#   Windows: winget install Rustlang.Rustup   (needs VS C++ Build Tools)
+#   *nix/mac: curl https://sh.rustup.rs -sSf | sh
+# then build+install the extension into this venv:
+#   maturin build --release --manifest-path rust/stockpool_ops/Cargo.toml --out dist
+#   pip install --force-reinstall --no-deps dist/stockpool_ops_rs-*.whl
+# (scripts/setup_env.sh automates this; use --skip-rust to stay on the pandas path)
+
+# --- dev / test ---
+pytest>=7.4
+pytest-mock>=3.12
