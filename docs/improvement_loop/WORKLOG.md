@@ -28,7 +28,13 @@
   first_valid_index 启发式(CLAUDE.md 警告:mask 比例虚高)。故设 `min_listing_days=0`
   只测 mask 的核心价值:把涨跌停/停牌日从训练标签层剔除(forward_return 双向检查)。
   score 重算,factor panel cache-hit。
-- **结果**:<待 F1 跑完填入>
+- **结果**(238 ab_pool):mask_off Sharpe 1.60 / return 1.855 vs mask_on Sharpe 0.97 / return 0.777。
+  Δ Sharpe −0.63(大败)。
+- **判定**:**REJECTED(mask on)**。**重要发现**:把涨跌停日从训练标签剔除 = 丢掉最强的动量
+  正样本(涨停 +9.9% 本身是信号),模型变弱。**量化印证** CLAUDE.md 的设计判断("涨停日是有用
+  信号")。保持 mask off。**子任务 F 结案。**
+- **注**:本测仅 limit/停牌 mask(min_listing_days=0)。listing mask 需 ipo_dates(缺失);
+  但核心 mask 已负,不再追加。
 
 ---
 

@@ -40,7 +40,7 @@
 ### C. ML 超参 (hyperparameters) — 需 score 重算(~5-15min/AB)
 - [REJECTED] C1 — horizon=5 → Sharpe 1.60→1.38。3 > 5。
 - [REJECTED] C1b — horizon=1 → Sharpe 0.80。**horizon=3 最优(3>5,3≫1),C1 结案。**
-- [TODO] C2 — train_window 250 vs 500
+- [IN_PROGRESS] C2 — train_window 250 vs 500
 - [TODO] C3 — lasso alpha 0.001 vs 0.0005 vs 0.005
 - [TODO] C4 — refit_every 20 vs 10 vs 40
 
@@ -53,8 +53,7 @@
 - [TODO] E2 — label_basis open(当前) vs close(确认 open 更优 / 不退化)
 
 ### F. 可交易性 mask
-- [IN_PROGRESS] F1 — `mask.enabled: true`(min_listing_days=0 规避缺失 ipo_dates;
-  只测涨跌停/停牌标签屏蔽)
+- [REJECTED] F1 — mask on → Sharpe 1.60→0.97。剔除涨停标签=丢动量正样本。off。**子任务 F 结案。**
 
 ### G. portfolio 组合参数 ⚡(engine-only,score 缓存共享,~2-3min/AB,优先)
 - [KEPT] G1 — top_k 20→10:sweep 最优(10 > 20 > ; 10 > 5)。**config.yaml top_k=10 已落地**。
@@ -80,4 +79,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **F1**(mask off vs on,min_listing_days=0;score 重算)
+> next: **C2**(train_window 250 vs 500;score 重算)
