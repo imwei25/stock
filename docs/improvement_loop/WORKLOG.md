@@ -16,6 +16,17 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## A4 — GTJA 基线 vs pick-by-ic IC 去相关集 (25, 无 gtja)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/A4.yaml`(选择文件 A4_selection.json)
+- **结果**(238 ab_pool):baseline_gtja Sharpe 1.60 / DD 0.164 vs pick_by_ic_25 Sharpe 1.37 / DD 0.290。
+  Δ Sharpe −0.23,DD 大幅恶化。
+- **判定**:**REJECTED**。即便 IC + 去相关 + IR 三重原则化重选,无 GTJA 的集仍输给 GTJA。
+  **子任务 A 彻底结案:GTJA 因子集为最优,对 hand/clean/wq101/IC-principled 四类候选全胜。**
+- **遗留方向**:GTJA-inclusive 的 fresh `factors analyze`(2026-06-24 analysis 早于 gtja,不含
+  gtja_*)能否再选出更优集 — 需重跑 analyze(全市场 ~300 因子 IC,~1-3h),记为 follow-up。
+
+---
+
 ## B3 — winsorize [0.01,0.99] vs off (panel 重建)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/B3.yaml`
 - **结果**(238 ab_pool):winsor_on Sharpe 1.60 / return 1.855 vs winsor_off Sharpe 0.82 / return 0.732。
