@@ -16,6 +16,14 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## C2 — train_window 250 vs 500 (score 重算)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C2.yaml`
+- **结果**(238 ab_pool):tw_250 Sharpe 1.60 / return 1.855 vs tw_500 Sharpe 1.35 / return 1.463。
+  Δ Sharpe −0.26。
+- **判定**:**REJECTED(tw=500)**。长窗跨更多 regime,稀释近期信号。保持 tw=250。
+
+---
+
 ## C1b — horizon 1 vs 3
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C1b.yaml`
 - **结果**(238 ab_pool):horizon_1 Sharpe 0.80 / return 0.676 vs horizon_3 Sharpe 1.60 / return 1.855。
