@@ -139,7 +139,7 @@ recommend_pool:
 portfolio_backtest:
   enabled: true
   portfolio:
-    top_k: 20
+    top_k: 10                # loop G1/G1b: 10 优于 20 与 5 (Sharpe 1.33→1.60, DD↓), sweep 最优
     rebalance_n_days: 5
     max_per_industry: 5
     initial_cash: 1.0

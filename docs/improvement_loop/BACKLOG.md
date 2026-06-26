@@ -4,7 +4,8 @@
 > 完成一个方向后更新其状态,并把结果写进 [WORKLOG.md](WORKLOG.md)。
 >
 > **基线 (baseline)**:`config.yaml` = `factors_file: reports/selection.json`。
-> ⚠️ **A1 起 selection.json 内容 = GTJA 集**(旧 prod 备份于 selection_pre_gtja_2026-06-26.json)。+
+> ⚠️ **A1 起 selection.json 内容 = GTJA 集**(旧 prod 备份于 selection_pre_gtja_2026-06-26.json)。
+> ⚠️ **G1 起 portfolio.top_k = 10**(原 20)。+
 > ml_factor / lasso(α=0.001) / IC(rank) / horizon=3 / train_window=250 / refit=20 /
 > preprocess{winsorize+zscore, industry_neutralize=false, mcap=false} / mask=off /
 > portfolio{top_k=20, rebalance=5, max_per_industry=5} / sizing=vol_target。
@@ -54,9 +55,9 @@
 - [TODO] F1 — `mask.enabled: true`(涨跌停/停牌/新股标签层屏蔽)
 
 ### G. portfolio 组合参数 ⚡(engine-only,score 缓存共享,~2-3min/AB,优先)
-- [WIN-PENDING-SWEEP] G1 — top_k 20 vs 10 → **10 大胜**(Sharpe 1.33→1.60,DD↓)。
-- [IN_PROGRESS] G1b — top_k 10 vs 5(找集中度最优点,再定 config)
-- [TODO] G2 — rebalance_n_days 5 vs 10
+- [KEPT] G1 — top_k 20→10:sweep 最优(10 > 20 > ; 10 > 5)。**config.yaml top_k=10 已落地**。
+- [REJECTED] G1b — top_k=5 过度集中(DD 0.255)。10 是最优。
+- [IN_PROGRESS] G2 — rebalance_n_days 5 vs 10(新基线 top_k=10,engine-only)
 - [TODO] G3 — max_per_industry 5 vs 3 vs 8
 
 ### H. sizing
@@ -76,4 +77,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **G1b**(top_k 10 vs 5;找最优集中度后提交 config)
+> next: **G2**(rebalance_n_days 5 vs 10;engine-only,基线 top_k=10)

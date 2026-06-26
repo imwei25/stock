@@ -16,6 +16,22 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## G1b — portfolio top_k 10 vs 5 (集中度 sweep step 2)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G1b.yaml`
+- **结果**(238 ab_pool):
+
+  | metric | topk_10 | topk_5 | Δ |
+  |---|---:|---:|---:|
+  | total_return | 1.855 | 1.627 | −0.227 |
+  | sharpe | 1.60 | 1.35 | −0.25 |
+  | max_drawdown | 0.164 | 0.255 | +0.090(大幅恶化) |
+
+- **判定**:top_k=5 **过度集中**(DD 0.164→0.255)。**sweep 最优 = top_k=10**(10 > 20 且 10 > 5)。
+- **落地**:**config.yaml `portfolio.top_k: 20 → 10`**(已校验加载)。G1 方向 **KEPT**。
+  这是本循环**第 2 个 AB 验证的改进**(继 GTJA 因子集)。
+
+---
+
 ## G1 — portfolio top_k 20 vs 10 (engine-only, score 缓存共享)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G1.yaml` · 两 arm 均 cache-hit scores
 - **假设**:更集中(更少持仓)= 更强信号股权重更高,可能提升风险调整收益。

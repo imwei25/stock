@@ -1,0 +1,16 @@
+# Loop direction G2: rebalance_n_days 5 vs 10 (new baseline top_k=10 inherited).
+# Both arms inherit base strategy (GTJA) → shared score cache → engine-only.
+# Run: .venv/Scripts/python.exe -m stockpool portfolio-ab --config docs/improvement_loop/configs/G2.yaml
+base_config: ../../../config.yaml
+use_ab_pool: true
+
+arms:
+  rebal_5:
+    portfolio_backtest:
+      portfolio:
+        rebalance_n_days: 5
+
+  rebal_10:
+    portfolio_backtest:
+      portfolio:
+        rebalance_n_days: 10
