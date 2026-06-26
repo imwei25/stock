@@ -30,8 +30,8 @@
 - [REJECTED] A3 — 新基线 vs `selection_wq101_localized` → 该文件 == 旧基础集,Sharpe 0.51,大败。
   **子任务 A 结案:GTJA 是最优因子集。**
 - [REJECTED] A4 — pick-by-ic 25(无 gtja)→ Sharpe 1.60→1.37,DD↑。**子任务 A 彻底结案,GTJA 最优。**
-- [FOLLOW-UP] A5 — GTJA-inclusive fresh `factors analyze` + reselect(~1-3h 全市场 IC;
-  唯一可能再生增益的方向,留作 capstone follow-up)
+- [IN_PROGRESS] A5 — GTJA-inclusive fresh `factors analyze` + reselect(~1-3h 全市场 IC;
+  唯一可能再生增益的方向)
 
 ### B. 截面预处理 (preprocess)
 - [REJECTED] B1 — `industry_neutralize: true` → Sharpe 1.33→1.24,DD 恶化。保持 off。
@@ -49,7 +49,7 @@
 
 ### D. selector / weighter
 - [REJECTED] D1 — weighter equal → Sharpe 1.60→0.80。IC 远优,保持。ir 不再单测。
-- [IN_PROGRESS] D2 — selector lightgbm vs lasso(prior 负向 AB 是别的 config,GTJA 集下复核一次)
+- [REJECTED] D2 — lightgbm selector → Sharpe 1.60→0.19(灾难,过拟合)。lasso 远优。**子任务 D 结案。**
 
 ### E. 标签工程 (label engineering)
 - [REJECTED] E1 — embargo=0 → Sharpe 1.60→1.41,DD↑。embargo=auto 印证有效,保持。
@@ -83,4 +83,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **D2**(selector lightgbm vs lasso;score 重算)
+> next: **A5**(全市场 factors analyze 含 gtja → pick-by-ic → AB;~1-3h)

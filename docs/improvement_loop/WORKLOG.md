@@ -16,6 +16,18 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## D2 — selector lasso vs lightgbm (score 重算)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/D2.yaml`
+- **结果**(238 ab_pool):selector_lasso Sharpe 1.60 vs selector_lightgbm Sharpe 0.19。Δ −1.41(灾难)。
+- **判定**:**REJECTED(lightgbm)**。30 因子 + 有限样本下树模型严重过拟合,lasso 远优。
+  确认并扩展 CLAUDE.md 既有负向结论。保持 lasso。**子任务 D 结案。**
+
+## A5 — GTJA-inclusive fresh factors analyze + reselect (capstone follow-up)
+- **日期**:2026-06-27 · 背景:2026-06-24 analysis 不含 gtja_*,A4 的 IC 重选无法纳入 GTJA 因子。
+  本方向重跑全市场 `factors analyze`(含 gtja),pick-by-ic,再 AB vs GTJA 基线。
+  这是唯一可能再生增益的方向。
+- **结果**:<analyze 跑完后填入>
+
 ## A4 — GTJA 基线 vs pick-by-ic IC 去相关集 (25, 无 gtja)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/A4.yaml`(选择文件 A4_selection.json)
 - **结果**(238 ab_pool):baseline_gtja Sharpe 1.60 / DD 0.164 vs pick_by_ic_25 Sharpe 1.37 / DD 0.290。
