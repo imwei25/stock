@@ -1,0 +1,16 @@
+# Loop direction G3: max_per_industry 5 vs 3 (baseline top_k=10).
+# Engine-only, shared score cache.
+# Run: .venv/Scripts/python.exe -m stockpool portfolio-ab --config docs/improvement_loop/configs/G3.yaml
+base_config: ../../../config.yaml
+use_ab_pool: true
+
+arms:
+  cap_5:
+    portfolio_backtest:
+      portfolio:
+        max_per_industry: 5
+
+  cap_3:
+    portfolio_backtest:
+      portfolio:
+        max_per_industry: 3

@@ -58,8 +58,8 @@
 - [KEPT] G1 — top_k 20→10:sweep 最优(10 > 20 > ; 10 > 5)。**config.yaml top_k=10 已落地**。
 - [REJECTED] G1b — top_k=5 过度集中(DD 0.255)。10 是最优。
 - [REJECTED] G2 — rebalance_n_days 10 → Sharpe 1.60→1.54,DD↑。保持 5。
-- [IN_PROGRESS] G2b — rebalance_n_days 5 vs 3(与 horizon=3 对齐)
-- [TODO] G3 — max_per_industry 5 vs 3 vs 8
+- [REJECTED] G2b — rebal=3 过频(成本主导,Sharpe 1.13)。**rebalance=5 最优,保持。**
+- [IN_PROGRESS] G3 — max_per_industry 5 vs 3(基线 top_k=10)
 
 ### H. sizing
 - [TODO] H1 — vol_target(当前) vs fixed(per-stock `ab`,sizing 段覆盖)
@@ -78,4 +78,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **G2b**(rebalance_n_days 5 vs 3)
+> next: **G3**(max_per_industry 5 vs 3)

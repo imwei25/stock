@@ -16,6 +16,15 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## G2b — rebalance_n_days 5 vs 3
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G2b.yaml`
+- **结果**(238 ab_pool):rebal_5 Sharpe 1.60 / DD 0.164 vs rebal_3 Sharpe 1.13 / DD 0.291,
+  trade +68%。Δ Sharpe −0.48(大败,交易成本主导)。
+- **判定**:**REJECTED(rebal=3)**。**rebalance=5 是最优**(5>10 且 5>3),保持现状,无 config 改动。
+  **G2 子方向结案**。
+
+---
+
 ## G2 — rebalance_n_days 5 vs 10 (engine-only,基线 top_k=10)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G2.yaml`
 - **结果**(238 ab_pool):rebal_5 Sharpe 1.60 / DD 0.164 vs rebal_10 Sharpe 1.54 / DD 0.205。
