@@ -16,6 +16,25 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## B2 — GTJA 基线 preprocess.mcap_neutralize false vs true
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/B2.yaml`(balance 缓存 offline)
+- **假设**:市值中性化去除 size beta,可能提纯 alpha。
+- **结果**(238 ab_pool):
+
+  | metric | baseline(off) | mcap_neut(on) | Δ |
+  |---|---:|---:|---:|
+  | total_return | 1.211 | 0.743 | −0.468 |
+  | sharpe | 1.33 | 0.96 | −0.37 |
+  | max_drawdown | 0.181 | 0.223 | +0.042(更差) |
+
+- **判定**:**REJECTED**(大幅退化)。A 股 size/小盘溢价是强 alpha 来源,中性化把它抹掉了。保持 off。
+- **结论**:子任务 B 两个 neutralize 方向皆负 → 现有 preprocess(winsorize+zscore,两 neut 关)
+  已是较优配置。B3(winsorize 微调)预期低 ROI 且需 30min panel 重建,降优先级。
+- **效率洞察**:**G 子任务(portfolio 参数 top_k/rebalance/cap)只改 engine 不改 score**,
+  score 缓存键不含 portfolio 参数 → 两 arm 共享缓存、仅跑快 engine(~2-3min/AB),优先做。
+
+---
+
 ## B1 — GTJA 基线 preprocess.industry_neutralize false vs true
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/B1.yaml`
 - **假设**:行业中性化去除行业 beta,可能提纯 alpha。

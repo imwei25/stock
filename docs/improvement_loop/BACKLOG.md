@@ -33,8 +33,8 @@
 
 ### B. 截面预处理 (preprocess)
 - [REJECTED] B1 — `industry_neutralize: true` → Sharpe 1.33→1.24,DD 恶化。保持 off。
-- [IN_PROGRESS] B2 — `mcap_neutralize: true`(balance 缓存存在,offline 可跑)
-- [TODO] B3 — winsorize 分位 sweep([0.01,0.99] vs [0.025,0.975] vs off)
+- [REJECTED] B2 — `mcap_neutralize: true` → Sharpe 1.33→0.96,大败(抹掉 A 股 size 溢价)。off。
+- [TODO-LATER] B3 — winsorize 分位 sweep(低 ROI + 需 30min 重建,排到便宜方向之后)
 
 ### C. ML 超参 (hyperparameters)
 - [TODO] C1 — horizon 3 vs 5 vs 1
@@ -53,8 +53,8 @@
 ### F. 可交易性 mask
 - [TODO] F1 — `mask.enabled: true`(涨跌停/停牌/新股标签层屏蔽)
 
-### G. portfolio 组合参数
-- [TODO] G1 — top_k 20 vs 10 vs 30
+### G. portfolio 组合参数 ⚡(engine-only,score 缓存共享,~2-3min/AB,优先)
+- [IN_PROGRESS] G1 — top_k 20 vs 10(再 20 vs 30)
 - [TODO] G2 — rebalance_n_days 5 vs 10
 - [TODO] G3 — max_per_industry 5 vs 3 vs 8
 
@@ -75,4 +75,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **B2**(基线 GTJA + mcap_neutralize=false vs true)
+> next: **G1**(top_k 20 vs 10;engine-only 快速)

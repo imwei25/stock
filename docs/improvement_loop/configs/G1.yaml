@@ -1,0 +1,17 @@
+# Loop direction G1: portfolio top_k 20 vs 10.
+# Both arms inherit base config.yaml strategy (GTJA selection.json) verbatim →
+# identical scores → shared score cache → only the PortfolioEngine differs (fast).
+# Run: .venv/Scripts/python.exe -m stockpool portfolio-ab --config docs/improvement_loop/configs/G1.yaml
+base_config: ../../../config.yaml
+use_ab_pool: true
+
+arms:
+  topk_20:
+    portfolio_backtest:
+      portfolio:
+        top_k: 20
+
+  topk_10:
+    portfolio_backtest:
+      portfolio:
+        top_k: 10
