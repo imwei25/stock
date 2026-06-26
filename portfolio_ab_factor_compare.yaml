@@ -1,0 +1,73 @@
+# Portfolio-level AB: compare OLD vs NEW factor selections in their intended
+# cross-sectional context (top-K equal-weight on ab_pool stratified universe).
+#
+# Arms differ ONLY in `factors_file`:
+#   old_v2          -> reports/selection_v2.json                  (20 factors)
+#   new_with_gtja   -> reports/selection_with_gtja_candidate.json (30 factors, +GTJA191)
+#
+# All strategy hyperparams + portfolio settings (top_k=20, weekly rebalance,
+# max 5 per industry) inherited identically from config.yaml so the only
+# moving part is the factor set.
+#
+# use_ab_pool=true injects ab_pool codes into each arm's
+# portfolio_backtest.universe_codes — keeps training universe at full ~4358
+# (ml_factor needs cross-sectional richness), restricts portfolio selection /
+# backtest to the curated ab_pool subset (avoids precompute segfault on full).
+#
+# Run: .venv/Scripts/python.exe -m stockpool portfolio-ab --config portfolio_ab_factor_compare.yaml
+
+base_config: config.yaml
+use_ab_pool: true
+
+arms:
+  old_v2:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection_v2.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+        preprocess:
+          winsorize: [0.01, 0.99]
+          zscore: true
+          industry_neutralize: false
+
+  new_with_gtja:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection_with_gtja_candidate.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+        preprocess:
+          winsorize: [0.01, 0.99]
+          zscore: true
+          industry_neutralize: false
