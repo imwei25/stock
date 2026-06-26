@@ -26,8 +26,10 @@
   → **GTJA 大胜**(Sharpe 0.51→1.33),已 promote 为新基线。详见 WORKLOG。
 - [REJECTED] A2 — 新基线(GTJA) vs `selection_clean_rebuild_candidate`
   → Sharpe 1.33→1.19,DD 恶化,各项皆退。保留 GTJA 基线。
-- [IN_PROGRESS] A3 — 新基线 vs `selection_wq101_localized`(WQ101 本土化窗口变体, 30)
-- [TODO] A4 — 在 A1-A3 胜者基础上做去相关/IR 重选(pick-by-ic 调 max-corr / min-ir)
+- [REJECTED] A3 — 新基线 vs `selection_wq101_localized` → 该文件 == 旧基础集,Sharpe 0.51,大败。
+  **子任务 A 结案:GTJA 是最优因子集。**
+- [DEFERRED] A4 — 在胜者基础上 pick-by-ic 去相关/IR 重选(需先跑 factors analyze;
+  留作子任务 A 的可选精修,优先做正交方向 B/C/...)
 
 ### B. 截面预处理 (preprocess)
 - [TODO] B1 — `industry_neutralize: true`(当前 false)
@@ -73,4 +75,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **A3**(基线=GTJA selection.json vs wq101_localized)
+> next: **B1**(基线 GTJA + industry_neutralize=false vs +industry_neutralize=true)

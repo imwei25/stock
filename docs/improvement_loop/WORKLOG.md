@@ -16,6 +16,19 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## A3 — 新基线 GTJA `selection.json` vs `selection_wq101_localized` (30)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/A3.yaml`
+- **关键发现**:`selection_wq101_localized.json` 与旧 pre-gtja `selection.json` **因子集完全相同**
+  (sorted 相等,30=30)。印证 CLAUDE.md 记载:wq101 本土化 round1 "0 winner",
+  文件即基础集。故 A3 实质 = 旧基础集 vs GTJA(同 A1)。
+- **结果**(238 ab_pool):baseline_gtja Sharpe 1.33 / return 1.211 vs
+  wq101_localized Sharpe 0.51 / return 0.325 / maxDD 0.245(= A1 baseline_prod 完全一致,
+  非缓存碰撞,是同因子同分)。Δ Sharpe −0.83。
+- **判定**:**REJECTED**。**子任务 A(因子选择)结案**:GTJA 对全部 3 个候选皆大胜,
+  增益稳健可复现。
+
+---
+
 ## A2 — 新基线 GTJA `selection.json` vs `selection_clean_rebuild_candidate` (30)
 - **日期**:2026-06-26 · 配置 `docs/improvement_loop/configs/A2.yaml`
 - **假设**:去掉 4 个幻象因子(alpha_027/059/061/095)的 clean rebuild 可能更稳健。
