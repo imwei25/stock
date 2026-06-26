@@ -16,6 +16,22 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## C1b — horizon 1 vs 3
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C1b.yaml`
+- **结果**(238 ab_pool):horizon_1 Sharpe 0.80 / return 0.676 vs horizon_3 Sharpe 1.60 / return 1.855。
+  Δ horizon=3 +0.80。
+- **判定**:horizon=1 太短噪声大,大败。**horizon=3 是最优**(3>5 且 3≫1),保持。**C1 结案。**
+
+## F1 — tradability mask off vs on (仅 limit/停牌,min_listing_days=0 规避缺失的 ipo_dates)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/F1.yaml`
+- **背景**:`data/ipo_dates.parquet` 缺失(需 baostock,当前被封)→ listing mask 会退化到
+  first_valid_index 启发式(CLAUDE.md 警告:mask 比例虚高)。故设 `min_listing_days=0`
+  只测 mask 的核心价值:把涨跌停/停牌日从训练标签层剔除(forward_return 双向检查)。
+  score 重算,factor panel cache-hit。
+- **结果**:<待 F1 跑完填入>
+
+---
+
 ## C1 — horizon 3 vs 5 (score 重算)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C1.yaml`
 - **结果**(238 ab_pool):horizon_3 Sharpe 1.60 / return 1.855 vs horizon_5 Sharpe 1.38 / return 1.416。
