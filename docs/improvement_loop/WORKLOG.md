@@ -16,6 +16,16 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## D1 — weighter ic vs equal (score 重算)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/D1.yaml`
+- **结果**(238 ab_pool):weighter_ic Sharpe 1.60 / return 1.855 vs weighter_equal Sharpe 0.80 / return 0.902。
+  Δ Sharpe −0.81(大败)。
+- **判定**:**REJECTED(equal)**。IC 加权远优。印证 2026-05-24 回退决定。保持 ic。
+- **顺带**:ir 不再单测(equal 已大败,ir 不太可能超 ic);D2(lightgbm selector)CLAUDE.md
+  已有负向 AB 证据,降级(若 GTJA 集下想复核可后补)。
+
+---
+
 ## C2 — train_window 250 vs 500 (score 重算)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C2.yaml`
 - **结果**(238 ab_pool):tw_250 Sharpe 1.60 / return 1.855 vs tw_500 Sharpe 1.35 / return 1.463。
