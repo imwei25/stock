@@ -16,6 +16,14 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## G3 — max_per_industry 5 vs 3
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G3.yaml`
+- **结果**(238 ab_pool):cap_5 Sharpe 1.60 vs cap_3 Sharpe 1.59,Δ −0.01(噪声级)。
+- **判定**:**无差异**。top_k=10 下行业 cap 极少 binding(top-10 已横跨足够行业)。保持 cap=5。
+  **子任务 G 结案**:仅 top_k=10 是有效改进;rebal=5 / cap=5 已是最优。
+
+---
+
 ## G2b — rebalance_n_days 5 vs 3
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G2b.yaml`
 - **结果**(238 ab_pool):rebal_5 Sharpe 1.60 / DD 0.164 vs rebal_3 Sharpe 1.13 / DD 0.291,

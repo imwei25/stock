@@ -37,8 +37,8 @@
 - [REJECTED] B2 — `mcap_neutralize: true` → Sharpe 1.33→0.96,大败(抹掉 A 股 size 溢价)。off。
 - [TODO-LATER] B3 — winsorize 分位 sweep(低 ROI + 需 30min 重建,排到便宜方向之后)
 
-### C. ML 超参 (hyperparameters)
-- [TODO] C1 — horizon 3 vs 5 vs 1
+### C. ML 超参 (hyperparameters) — 需 score 重算(~5-15min/AB)
+- [IN_PROGRESS] C1 — horizon 3 vs 5(再按需 vs 1)
 - [TODO] C2 — train_window 250 vs 500
 - [TODO] C3 — lasso alpha 0.001 vs 0.0005 vs 0.005
 - [TODO] C4 — refit_every 20 vs 10 vs 40
@@ -59,7 +59,7 @@
 - [REJECTED] G1b — top_k=5 过度集中(DD 0.255)。10 是最优。
 - [REJECTED] G2 — rebalance_n_days 10 → Sharpe 1.60→1.54,DD↑。保持 5。
 - [REJECTED] G2b — rebal=3 过频(成本主导,Sharpe 1.13)。**rebalance=5 最优,保持。**
-- [IN_PROGRESS] G3 — max_per_industry 5 vs 3(基线 top_k=10)
+- [REJECTED] G3 — cap=3 ≈ cap=5(噪声级,top_k=10 下 cap 极少 binding)。保持 5。**子任务 G 结案。**
 
 ### H. sizing
 - [TODO] H1 — vol_target(当前) vs fixed(per-stock `ab`,sizing 段覆盖)
@@ -78,4 +78,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **G3**(max_per_industry 5 vs 3)
+> next: **C1**(horizon 3 vs 5;score 重算,基线 top_k=10)
