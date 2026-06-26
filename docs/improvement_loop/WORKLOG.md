@@ -16,6 +16,23 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## B1 — GTJA 基线 preprocess.industry_neutralize false vs true
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/B1.yaml`
+- **假设**:行业中性化去除行业 beta,可能提纯 alpha。
+- **结果**(238 ab_pool):
+
+  | metric | baseline(off) | industry_neut(on) | Δ |
+  |---|---:|---:|---:|
+  | total_return | 1.211 | 1.132 | −0.079 |
+  | sharpe | 1.33 | 1.24 | −0.09 |
+  | max_drawdown | 0.181 | 0.232 | +0.052(更差) |
+  | win_rate | 0.493 | 0.470 | −0.024 |
+
+- **判定**:**REJECTED**。empirically 印证 CLAUDE.md P1.5:行业中性化在本因子集上
+  不增益(单成员子行业 demean-to-zero 风险 + 去掉了有用的行业动量)。保持 off。
+
+---
+
 ## A3 — 新基线 GTJA `selection.json` vs `selection_wq101_localized` (30)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/A3.yaml`
 - **关键发现**:`selection_wq101_localized.json` 与旧 pre-gtja `selection.json` **因子集完全相同**

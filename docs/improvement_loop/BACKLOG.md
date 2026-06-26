@@ -32,8 +32,8 @@
   留作子任务 A 的可选精修,优先做正交方向 B/C/...)
 
 ### B. 截面预处理 (preprocess)
-- [TODO] B1 — `industry_neutralize: true`(当前 false)
-- [TODO] B2 — `mcap_neutralize: true`(需 baostock balance 缓存;若拉不到则 BLOCKED)
+- [REJECTED] B1 — `industry_neutralize: true` → Sharpe 1.33→1.24,DD 恶化。保持 off。
+- [IN_PROGRESS] B2 — `mcap_neutralize: true`(balance 缓存存在,offline 可跑)
 - [TODO] B3 — winsorize 分位 sweep([0.01,0.99] vs [0.025,0.975] vs off)
 
 ### C. ML 超参 (hyperparameters)
@@ -75,4 +75,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **B1**(基线 GTJA + industry_neutralize=false vs +industry_neutralize=true)
+> next: **B2**(基线 GTJA + mcap_neutralize=false vs true)

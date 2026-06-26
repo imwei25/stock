@@ -1,0 +1,61 @@
+# Loop direction B2: GTJA baseline, preprocess.mcap_neutralize false vs true.
+# Both arms = selection.json (GTJA); only mcap_neutralize differs.
+# Requires data/fundamentals_balance.parquet (totalShare) — present, runs offline.
+# Run: .venv/Scripts/python.exe -m stockpool portfolio-ab --config docs/improvement_loop/configs/B2.yaml
+base_config: ../../../config.yaml
+use_ab_pool: true
+
+arms:
+  baseline_nomcap:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+        preprocess:
+          winsorize: [0.01, 0.99]
+          zscore: true
+          industry_neutralize: false
+          mcap_neutralize: false
+
+  mcap_neutralized:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: ic
+          ic: {use_rank: true, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+        preprocess:
+          winsorize: [0.01, 0.99]
+          zscore: true
+          industry_neutralize: false
+          mcap_neutralize: true
