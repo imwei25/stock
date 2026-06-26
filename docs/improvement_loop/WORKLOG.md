@@ -16,6 +16,14 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## C1 — horizon 3 vs 5 (score 重算)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C1.yaml`
+- **结果**(238 ab_pool):horizon_3 Sharpe 1.60 / return 1.855 vs horizon_5 Sharpe 1.38 / return 1.416。
+  Δ Sharpe −0.22。
+- **判定**:**REJECTED(horizon=5)**。3 > 5。试 C1b(1 vs 3)bracket 最优。
+
+---
+
 ## G3 — max_per_industry 5 vs 3
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G3.yaml`
 - **结果**(238 ab_pool):cap_5 Sharpe 1.60 vs cap_3 Sharpe 1.59,Δ −0.01(噪声级)。

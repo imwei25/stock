@@ -38,7 +38,8 @@
 - [TODO-LATER] B3 — winsorize 分位 sweep(低 ROI + 需 30min 重建,排到便宜方向之后)
 
 ### C. ML 超参 (hyperparameters) — 需 score 重算(~5-15min/AB)
-- [IN_PROGRESS] C1 — horizon 3 vs 5(再按需 vs 1)
+- [REJECTED] C1 — horizon=5 → Sharpe 1.60→1.38。3 > 5。
+- [IN_PROGRESS] C1b — horizon 1 vs 3(bracket 最优)
 - [TODO] C2 — train_window 250 vs 500
 - [TODO] C3 — lasso alpha 0.001 vs 0.0005 vs 0.005
 - [TODO] C4 — refit_every 20 vs 10 vs 40
