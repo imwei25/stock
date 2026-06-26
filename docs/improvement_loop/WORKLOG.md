@@ -16,6 +16,14 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## C3b — lasso alpha 0.001 vs 0.005
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C3b.yaml`
+- **结果**(238 ab_pool):alpha_1e3 Sharpe 1.60 vs alpha_5e3 Sharpe 0.34。Δ −1.26(灾难性)。
+- **判定**:alpha=0.005 过度剪枝(几乎杀光因子)。**alpha=0.001 最优**(0.001 > 0.0005 且 ≫ 0.005)。
+  **C3 结案,无 config 改动。**
+
+---
+
 ## C3 — lasso alpha 0.001 vs 0.0005 (score 重算)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C3.yaml`
 - **结果**(238 ab_pool):alpha_1e3 Sharpe 1.60 vs alpha_5e4 Sharpe 0.91。Δ −0.69。

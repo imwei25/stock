@@ -42,8 +42,8 @@
 - [REJECTED] C1b — horizon=1 → Sharpe 0.80。**horizon=3 最优(3>5,3≫1),C1 结案。**
 - [REJECTED] C2 — tw=500 → Sharpe 1.60→1.35。保持 250。
 - [REJECTED] C3 — alpha=0.0005 → Sharpe 1.60→0.91。更少稀疏更差。
-- [IN_PROGRESS] C3b — lasso alpha 0.001 vs 0.005(bracket 更稀疏端)
-- [TODO] C4 — refit_every 20 vs 10 vs 40
+- [REJECTED] C3b — alpha=0.005 过度剪枝 Sharpe 0.34。**alpha=0.001 最优,C3 结案。**
+- [IN_PROGRESS] C4 — refit_every 20 vs 10
 
 ### D. selector / weighter
 - [REJECTED] D1 — weighter equal → Sharpe 1.60→0.80。IC 远优,保持。ir 不再单测。
@@ -80,4 +80,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **C3b**(lasso alpha 0.001 vs 0.005;score 重算)
+> next: **C4**(refit_every 20 vs 10;score 重算)
