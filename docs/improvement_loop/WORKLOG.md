@@ -16,6 +16,13 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## C3 — lasso alpha 0.001 vs 0.0005 (score 重算)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C3.yaml`
+- **结果**(238 ab_pool):alpha_1e3 Sharpe 1.60 vs alpha_5e4 Sharpe 0.91。Δ −0.69。
+- **判定**:**REJECTED(0.0005)**。更低 alpha=更少稀疏=更多噪声因子,大败。试 C3b(vs 0.005)bracket。
+
+---
+
 ## D1 — weighter ic vs equal (score 重算)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/D1.yaml`
 - **结果**(238 ab_pool):weighter_ic Sharpe 1.60 / return 1.855 vs weighter_equal Sharpe 0.80 / return 0.902。
