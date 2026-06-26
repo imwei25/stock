@@ -16,6 +16,16 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## C4 — refit_every 20 vs 10 (score 重算)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C4.yaml`
+- **结果**(238 ab_pool):**完全 bit-identical**(每项 Δ=0)。refit_10 **确实重算**了
+  (日志:pre-warmed 29 monthly fits + parallel 238 stocks,非缓存命中)。
+- **判定**:**结构性发现**:pooled `share_pool_fit=true` 打分路径用**月度** refit 节奏
+  (29 个月度 fit),`refit_every` 对组合打分路径**无效**(被月度 cadence 覆盖)。无 config 改动。
+  C4 结案。
+
+---
+
 ## C3b — lasso alpha 0.001 vs 0.005
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C3b.yaml`
 - **结果**(238 ab_pool):alpha_1e3 Sharpe 1.60 vs alpha_5e3 Sharpe 0.34。Δ −1.26(灾难性)。

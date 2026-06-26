@@ -43,14 +43,15 @@
 - [REJECTED] C2 — tw=500 → Sharpe 1.60→1.35。保持 250。
 - [REJECTED] C3 — alpha=0.0005 → Sharpe 1.60→0.91。更少稀疏更差。
 - [REJECTED] C3b — alpha=0.005 过度剪枝 Sharpe 0.34。**alpha=0.001 最优,C3 结案。**
-- [IN_PROGRESS] C4 — refit_every 20 vs 10
+- [REJECTED/N-A] C4 — refit_every 10 == 20 bit-identical。pooled 打分用月度 refit,
+  refit_every 无效。**C 子任务结案**(horizon=3 / tw=250 / alpha=0.001 全为最优)。
 
 ### D. selector / weighter
 - [REJECTED] D1 — weighter equal → Sharpe 1.60→0.80。IC 远优,保持。ir 不再单测。
 - [DEFERRED] D2 — selector lightgbm:CLAUDE.md 已有负向 AB(LGB+LGB sharpe −0.2),降级。
 
 ### E. 标签工程 (label engineering)
-- [TODO] E1 — embargo_days auto(=horizon) vs 0 vs 2×horizon
+- [IN_PROGRESS] E1 — embargo_days auto(=horizon=3) vs 0
 - [TODO] E2 — label_basis open(当前) vs close(确认 open 更优 / 不退化)
 
 ### F. 可交易性 mask
@@ -80,4 +81,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **C4**(refit_every 20 vs 10;score 重算)
+> next: **E1**(embargo_days auto vs 0;score 重算)
