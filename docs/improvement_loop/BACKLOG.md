@@ -24,8 +24,9 @@
 ### A. 因子选择 (factor selection)
 - [KEPT] A1 — baseline `selection.json` vs `selection_with_gtja_candidate`(+GTJA191, 30)
   → **GTJA 大胜**(Sharpe 0.51→1.33),已 promote 为新基线。详见 WORKLOG。
-- [IN_PROGRESS] A2 — **新基线(GTJA)** vs `selection_clean_rebuild_candidate`(去 4 个幻象因子, 30)
-- [TODO] A3 — 新基线 vs `selection_wq101_localized`(WQ101 本土化窗口变体, 30)
+- [REJECTED] A2 — 新基线(GTJA) vs `selection_clean_rebuild_candidate`
+  → Sharpe 1.33→1.19,DD 恶化,各项皆退。保留 GTJA 基线。
+- [IN_PROGRESS] A3 — 新基线 vs `selection_wq101_localized`(WQ101 本土化窗口变体, 30)
 - [TODO] A4 — 在 A1-A3 胜者基础上做去相关/IR 重选(pick-by-ic 调 max-corr / min-ir)
 
 ### B. 截面预处理 (preprocess)
@@ -72,4 +73,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **A2**(基线=GTJA selection.json vs clean_rebuild)
+> next: **A3**(基线=GTJA selection.json vs wq101_localized)

@@ -16,6 +16,24 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## A2 — 新基线 GTJA `selection.json` vs `selection_clean_rebuild_candidate` (30)
+- **日期**:2026-06-26 · 配置 `docs/improvement_loop/configs/A2.yaml`
+- **假设**:去掉 4 个幻象因子(alpha_027/059/061/095)的 clean rebuild 可能更稳健。
+- **结果**(238 ab_pool):
+
+  | metric | baseline_gtja | clean_rebuild | Δ (B−A) |
+  |---|---:|---:|---:|
+  | total_return | 1.211 | 1.087 | −0.124 |
+  | ann_return | 0.317 | 0.291 | −0.026 |
+  | sharpe | 1.33 | 1.19 | −0.15 |
+  | max_drawdown | 0.181 | 0.257 | +0.076(更差) |
+  | win_rate | 0.493 | 0.479 | −0.014 |
+
+- **判定**:**REJECTED**(各项皆退,DD 明显恶化)。clean_rebuild 不含 GTJA 因子,
+  本质是另一套 wq101-only 选择,印证 A1 结论:GTJA 因子是增益主来源。保留 GTJA 基线。
+
+---
+
 ## A1 — baseline prod `selection.json` (30) vs `selection_with_gtja_candidate` (30, +GTJA191)
 - **日期**:2026-06-26 · 配置 `docs/improvement_loop/configs/A1.yaml` · 报告 `reports/portfolio_ab/2026-06-26.html`
 - **假设**:GTJA191 本土化短周期量价因子在 prod 基线上提升组合表现。
