@@ -1,0 +1,16 @@
+# Loop direction G1b: portfolio top_k 10 vs 5 (concentration sweep step 2).
+# Both arms inherit base strategy (GTJA) → shared score cache → engine-only.
+# Run: .venv/Scripts/python.exe -m stockpool portfolio-ab --config docs/improvement_loop/configs/G1b.yaml
+base_config: ../../../config.yaml
+use_ab_pool: true
+
+arms:
+  topk_10:
+    portfolio_backtest:
+      portfolio:
+        top_k: 10
+
+  topk_5:
+    portfolio_backtest:
+      portfolio:
+        top_k: 5

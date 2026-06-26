@@ -16,6 +16,24 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## G1 — portfolio top_k 20 vs 10 (engine-only, score 缓存共享)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G1.yaml` · 两 arm 均 cache-hit scores
+- **假设**:更集中(更少持仓)= 更强信号股权重更高,可能提升风险调整收益。
+- **结果**(238 ab_pool):
+
+  | metric | topk_20 | topk_10 | Δ |
+  |---|---:|---:|---:|
+  | total_return | 1.211 | 1.855 | +0.644 |
+  | ann_return | 0.317 | 0.439 | +0.122 |
+  | sharpe | 1.33 | 1.60 | +0.27 |
+  | max_drawdown | 0.181 | 0.164 | −0.016(更优) |
+  | trade_count | 2120 | 1060 | −50% |
+
+- **判定**:**WIN(top_k=10 占优)**,但**先 sweep G1b(10 vs 5)找最优再提交 config**,
+  避免过度集中(238 池里 top_k=5 的 idiosyncratic 风险 / 过拟合)。暂不改 config.yaml。
+
+---
+
 ## B2 — GTJA 基线 preprocess.mcap_neutralize false vs true
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/B2.yaml`(balance 缓存 offline)
 - **假设**:市值中性化去除 size beta,可能提纯 alpha。

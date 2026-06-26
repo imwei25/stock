@@ -54,7 +54,8 @@
 - [TODO] F1 — `mask.enabled: true`(涨跌停/停牌/新股标签层屏蔽)
 
 ### G. portfolio 组合参数 ⚡(engine-only,score 缓存共享,~2-3min/AB,优先)
-- [IN_PROGRESS] G1 — top_k 20 vs 10(再 20 vs 30)
+- [WIN-PENDING-SWEEP] G1 — top_k 20 vs 10 → **10 大胜**(Sharpe 1.33→1.60,DD↓)。
+- [IN_PROGRESS] G1b — top_k 10 vs 5(找集中度最优点,再定 config)
 - [TODO] G2 — rebalance_n_days 5 vs 10
 - [TODO] G3 — max_per_industry 5 vs 3 vs 8
 
@@ -75,4 +76,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **G1**(top_k 20 vs 10;engine-only 快速)
+> next: **G1b**(top_k 10 vs 5;找最优集中度后提交 config)
