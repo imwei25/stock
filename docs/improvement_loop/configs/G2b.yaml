@@ -1,0 +1,16 @@
+# Loop direction G2b: rebalance_n_days 5 vs 3 (align with horizon=3).
+# Engine-only, shared score cache.
+# Run: .venv/Scripts/python.exe -m stockpool portfolio-ab --config docs/improvement_loop/configs/G2b.yaml
+base_config: ../../../config.yaml
+use_ab_pool: true
+
+arms:
+  rebal_5:
+    portfolio_backtest:
+      portfolio:
+        rebalance_n_days: 5
+
+  rebal_3:
+    portfolio_backtest:
+      portfolio:
+        rebalance_n_days: 3

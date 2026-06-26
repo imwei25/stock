@@ -16,6 +16,15 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## G2 — rebalance_n_days 5 vs 10 (engine-only,基线 top_k=10)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G2.yaml`
+- **结果**(238 ab_pool):rebal_5 Sharpe 1.60 / DD 0.164 vs rebal_10 Sharpe 1.54 / DD 0.205。
+  Δ Sharpe −0.06,DD +0.041(更差)。
+- **判定**:**REJECTED(rebal=10)**。保持 rebal=5。但 5<10 趋势 → 试 G2b(5 vs 3,
+  与 horizon=3 对齐)看更频繁是否更优(扣已建模交易成本)。
+
+---
+
 ## G1b — portfolio top_k 10 vs 5 (集中度 sweep step 2)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/G1b.yaml`
 - **结果**(238 ab_pool):
