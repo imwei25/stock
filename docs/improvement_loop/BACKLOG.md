@@ -3,7 +3,8 @@
 > 本文件是 `/loop` 自驱改进循环的**持久化状态**。每次迭代先读本文件决定下一步,
 > 完成一个方向后更新其状态,并把结果写进 [WORKLOG.md](WORKLOG.md)。
 >
-> **基线 (baseline)**:`config.yaml` 现状 = `factors_file: reports/selection.json` (30 因子) +
+> **基线 (baseline)**:`config.yaml` = `factors_file: reports/selection.json`。
+> ⚠️ **A1 起 selection.json 内容 = GTJA 集**(旧 prod 备份于 selection_pre_gtja_2026-06-26.json)。+
 > ml_factor / lasso(α=0.001) / IC(rank) / horizon=3 / train_window=250 / refit=20 /
 > preprocess{winsorize+zscore, industry_neutralize=false, mcap=false} / mask=off /
 > portfolio{top_k=20, rebalance=5, max_per_industry=5} / sizing=vol_target。
@@ -21,9 +22,10 @@
 ## 子任务 (subtasks) 与改进方向 (directions)
 
 ### A. 因子选择 (factor selection)
-- [TODO] A1 — baseline `selection.json` vs `selection_with_gtja_candidate`(+GTJA191, 30)
-- [TODO] A2 — baseline vs `selection_clean_rebuild_candidate`(去 4 个幻象因子, 30)
-- [TODO] A3 — baseline vs `selection_wq101_localized`(WQ101 本土化窗口变体, 30)
+- [KEPT] A1 — baseline `selection.json` vs `selection_with_gtja_candidate`(+GTJA191, 30)
+  → **GTJA 大胜**(Sharpe 0.51→1.33),已 promote 为新基线。详见 WORKLOG。
+- [IN_PROGRESS] A2 — **新基线(GTJA)** vs `selection_clean_rebuild_candidate`(去 4 个幻象因子, 30)
+- [TODO] A3 — 新基线 vs `selection_wq101_localized`(WQ101 本土化窗口变体, 30)
 - [TODO] A4 — 在 A1-A3 胜者基础上做去相关/IR 重选(pick-by-ic 调 max-corr / min-ir)
 
 ### B. 截面预处理 (preprocess)
@@ -62,6 +64,12 @@
   → 待网络恢复后 `ab-pool build --refresh` 重建并复核 top 方向。
 - [ ] L2 — `git push` 被网络阻断(github.com:443 不可达);commit 在本地累积,
   待 VPN/代理恢复后统一 push。
+- [WORKAROUND] L3 — `data/stock_industry_map.parquet` 缓存于 2026-06-26 跨过 30 天
+  staleness,`load_or_build_industry_map(auto)` 触发重拉但 baostock("黑名单用户")
+  + akshare(connection aborted)双源失败 → sector_map 空 →
+  `IndustryRelativeStrengthFactor` raise → 任何需要**新建** factor panel 的 arm 失败
+  (A1 首跑 baseline_prod 即因此 0 trade)。**临时方案**:`touch` 该 parquet 重置 mtime,
+  让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **A1**
+> next: **A2**(基线=GTJA selection.json vs clean_rebuild)
