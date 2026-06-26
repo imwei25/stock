@@ -35,7 +35,7 @@
 ### B. 截面预处理 (preprocess)
 - [REJECTED] B1 — `industry_neutralize: true` → Sharpe 1.33→1.24,DD 恶化。保持 off。
 - [REJECTED] B2 — `mcap_neutralize: true` → Sharpe 1.33→0.96,大败(抹掉 A 股 size 溢价)。off。
-- [TODO-LATER] B3 — winsorize 分位 sweep(低 ROI + 需 30min 重建,排到便宜方向之后)
+- [IN_PROGRESS] B3 — winsorize [0.01,0.99] vs off(收尾 B 子任务最后一个 prep 旋钮)
 
 ### C. ML 超参 (hyperparameters) — 需 score 重算(~5-15min/AB)
 - [REJECTED] C1 — horizon=5 → Sharpe 1.60→1.38。3 > 5。
@@ -51,8 +51,9 @@
 - [DEFERRED] D2 — selector lightgbm:CLAUDE.md 已有负向 AB(LGB+LGB sharpe −0.2),降级。
 
 ### E. 标签工程 (label engineering)
-- [IN_PROGRESS] E1 — embargo_days auto(=horizon=3) vs 0
-- [TODO] E2 — label_basis open(当前) vs close(确认 open 更优 / 不退化)
+- [REJECTED] E1 — embargo=0 → Sharpe 1.60→1.41,DD↑。embargo=auto 印证有效,保持。
+- [RESOLVED-BY-REASONING] E2 — label_basis:open=现实 T+1 口径;close 偏乐观(含拿不到的隔夜段),
+  即使 AB 数字更高也是**已知乐观偏差**而非真改进 → 保持 open,不做误导性 AB。
 
 ### F. 可交易性 mask
 - [REJECTED] F1 — mask on → Sharpe 1.60→0.97。剔除涨停标签=丢动量正样本。off。**子任务 F 结案。**
@@ -81,4 +82,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **E1**(embargo_days auto vs 0;score 重算)
+> next: **B3**(winsorize [0.01,0.99] vs off;panel 重建 ~30min)

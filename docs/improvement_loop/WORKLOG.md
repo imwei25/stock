@@ -16,6 +16,16 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## E1 — embargo_days auto(=3) vs 0 (score 重算)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/E1.yaml`
+- **结果**(238 ab_pool):embargo_auto Sharpe 1.60 / DD 0.164 vs embargo_0 Sharpe 1.41 / DD 0.288。
+  Δ Sharpe −0.19,DD 大幅恶化。
+- **判定**:**REJECTED(embargo=0)**。去掉 embargo 引入 horizon 日标签泄露,样本变多但 OOS 变差
+  (DD 0.288)。**印证 F2 PR-A embargo 设计**。保持 auto。E1(embargo)结案;2×horizon 不再单测
+  (auto 已好、0 已坏,更大 embargo 仅减样本)。
+
+---
+
 ## C4 — refit_every 20 vs 10 (score 重算)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/C4.yaml`
 - **结果**(238 ab_pool):**完全 bit-identical**(每项 Δ=0)。refit_10 **确实重算**了
