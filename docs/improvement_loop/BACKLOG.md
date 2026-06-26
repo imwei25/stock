@@ -29,13 +29,13 @@
   → Sharpe 1.33→1.19,DD 恶化,各项皆退。保留 GTJA 基线。
 - [REJECTED] A3 — 新基线 vs `selection_wq101_localized` → 该文件 == 旧基础集,Sharpe 0.51,大败。
   **子任务 A 结案:GTJA 是最优因子集。**
-- [DEFERRED] A4 — 在胜者基础上 pick-by-ic 去相关/IR 重选(需先跑 factors analyze;
-  留作子任务 A 的可选精修,优先做正交方向 B/C/...)
+- [IN_PROGRESS] A4 — pick-by-ic 去相关/IR 重选(用 clean 2026-06-24 analysis,
+  top-25 / max-corr 0.6 / min-ir 0.05)→ AB vs GTJA 基线。capstone 寻新增益。
 
 ### B. 截面预处理 (preprocess)
 - [REJECTED] B1 — `industry_neutralize: true` → Sharpe 1.33→1.24,DD 恶化。保持 off。
 - [REJECTED] B2 — `mcap_neutralize: true` → Sharpe 1.33→0.96,大败(抹掉 A 股 size 溢价)。off。
-- [IN_PROGRESS] B3 — winsorize [0.01,0.99] vs off(收尾 B 子任务最后一个 prep 旋钮)
+- [REJECTED] B3 — winsorize off → Sharpe 1.60→0.82。winsorize 强有效,保持。**子任务 B 结案。**
 
 ### C. ML 超参 (hyperparameters) — 需 score 重算(~5-15min/AB)
 - [REJECTED] C1 — horizon=5 → Sharpe 1.60→1.38。3 > 5。
@@ -82,4 +82,4 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **B3**(winsorize [0.01,0.99] vs off;panel 重建 ~30min)
+> next: **A4**(pick-by-ic 重选 → AB vs GTJA;capstone)

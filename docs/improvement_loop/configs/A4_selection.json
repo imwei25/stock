@@ -1,0 +1,29 @@
+{
+  "factors": [
+    "alpha_016",
+    "volume_std_20",
+    "turnover_zscore_60",
+    "industry_relative_strength_20",
+    "corr_mom_vol_20",
+    "alpha_006",
+    "alpha_069",
+    "alpha_012",
+    "alpha_002",
+    "alpha_037",
+    "range_std_20",
+    "mom_vol_interact_10",
+    "alpha_082",
+    "alpha_029",
+    "alpha_007",
+    "amount_z_5",
+    "vwap_dev_5",
+    "close_skew_20",
+    "alpha_073",
+    "vol_accel_5",
+    "alpha_087",
+    "alpha_067",
+    "alpha_072",
+    "alpha_042",
+    "alpha_020"
+  ]
+}

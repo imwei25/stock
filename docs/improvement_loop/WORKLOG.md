@@ -16,6 +16,15 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## B3 — winsorize [0.01,0.99] vs off (panel 重建)
+- **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/B3.yaml`
+- **结果**(238 ab_pool):winsor_on Sharpe 1.60 / return 1.855 vs winsor_off Sharpe 0.82 / return 0.732。
+  Δ Sharpe −0.78。
+- **判定**:**REJECTED(off)**。winsorize 强有效(裁尾抑制极端值污染 IC/Lasso)。保持 [0.01,0.99]。
+  **子任务 B 完全结案**:winsorize on 必需,industry/mcap neut 皆 off = 最优 preprocess。
+
+---
+
 ## E1 — embargo_days auto(=3) vs 0 (score 重算)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/E1.yaml`
 - **结果**(238 ab_pool):embargo_auto Sharpe 1.60 / DD 0.164 vs embargo_0 Sharpe 1.41 / DD 0.288。
