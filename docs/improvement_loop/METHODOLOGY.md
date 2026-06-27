@@ -38,6 +38,26 @@
   但各子段符号皆正)。**定级降为 provisional**:方向性偏正、DD 更低、经济上合理,**暂保留**,
   待 M1 第二池 + bootstrap 复核。 |
 
+## ★★ 第二池复核结果(M1 落地后,2026-06-27)— 两个 win 均不泛化
+
+用 `ab_pool_v2`(240 票,流动性分位分层,与原池 **0 重叠**)+ bootstrap 复核:
+
+| 方向 | 原池(top-mcap/liq) | 第二池(liq 分层) | 结论 |
+|---|---|---|---|
+| **top_k 20→10** | ΔSharpe +0.27(CI 含 0) | ΔSharpe **−0.06**(符号翻转,CI 含 0) | **撤销**,config 恢复 top_k=20 |
+| **GTJA vs pre-GTJA** | ΔSharpe +0.83 | ΔSharpe **−0.26**(反转;pre_gtja 在 v2 反而更好 1.125 vs 0.868) | **universe-conditional,非普适** |
+
+**关键洞察**:因子集的 edge **依赖投资universe**——GTJA191 短周期量价因子利好**大/流动性**名,
+wq101 基础集利好**中等流动性**名。前 24 方向循环的结论是**池特定的**,不跨池泛化。
+绝对 Sharpe 在 v2(0.87/1.13)远低于原池(1.33/0.51 各异),印证原池大盘幸存者偏差抬高了绝对数。
+
+**这是比 audit 预期更深的问题**:不是"top_k 边际不显著",而是**连 GTJA 这个最强 win 也不跨池成立**。
+→ 在确定**目标投资 universe**(及是否要求 win 跨池一致)之前,**不应继续在单池上做更多优化**
+(否则重蹈覆辙)。已暂停新优化循环,待用户决策目标 universe。
+
+config.yaml 处置:top_k 已恢复 20;GTJA selection.json **暂保留**(在设计池/大盘上确有强 edge,
+反转可能是真实的 universe 效应而非纯过拟合),但**降级为 universe-conditional**,待用户定目标池后定夺。
+
 ## 后续优化的工作流(硬化版)
 
 每个新方向:portfolio-ab → **两池**(原 ab_pool + ab_pool_v2)各跑 → `ab_significance.py` 出

@@ -97,6 +97,9 @@ def main() -> int:
     ap.add_argument("--config", required=True)
     ap.add_argument("--n-boot", type=int, default=5000)
     ap.add_argument("--refresh-scores", action="store_true")
+    ap.add_argument("--pool", default=None,
+                    help="override portfolio universe with a pool parquet "
+                         "(e.g. data/ab_pool_v2.parquet for M1 second-pool check)")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -121,11 +124,16 @@ def main() -> int:
     sector_map = load_or_build_industry_map(cache_dir, source="auto")
     set_sector_map(sector_map)
 
-    portfolio_codes = base_cfg.portfolio_backtest.universe_codes
-    if not portfolio_codes and ab_cfg.use_ab_pool:
-        from stockpool.ab_pool import load_ab_pool
-        pool_df = load_ab_pool(base_cfg.ab_pool.cache_path)
+    if args.pool:
+        pool_df = pd.read_parquet(args.pool)
         portfolio_codes = [str(c).zfill(6) for c in pool_df["code"]]
+        print(f"[pool override] {args.pool}: {len(portfolio_codes)} codes")
+    else:
+        portfolio_codes = base_cfg.portfolio_backtest.universe_codes
+        if not portfolio_codes and ab_cfg.use_ab_pool:
+            from stockpool.ab_pool import load_ab_pool
+            pool_df = load_ab_pool(base_cfg.ab_pool.cache_path)
+            portfolio_codes = [str(c).zfill(6) for c in pool_df["code"]]
     portfolio_pool_data = ({c: pool_data[c] for c in portfolio_codes if c in pool_data}
                            if portfolio_codes else None)
     intended_n = len(portfolio_pool_data) if portfolio_pool_data else len(pool_data)

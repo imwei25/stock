@@ -139,8 +139,8 @@ recommend_pool:
 portfolio_backtest:
   enabled: true
   portfolio:
-    top_k: 10                # loop G1: 方向性优于 20/5 (Sharpe→1.60, DD↓), 但 bootstrap CI 含 0
-                             # (p≈0.09, provisional); 待 ab_pool_v2 复核, 见 docs/improvement_loop/METHODOLOGY.md
+    top_k: 20                # G1 在第二池(ab_pool_v2)符号翻转(ΔSharpe -0.06,原池 +0.27 是幸存者
+                             # 池产物)→ 撤销 top_k=10,恢复 20。见 docs/improvement_loop/METHODOLOGY.md
     rebalance_n_days: 5
     max_per_industry: 5
     initial_cash: 1.0
