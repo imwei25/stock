@@ -30,7 +30,48 @@
 - **pick-by-ic**(top-25/max-corr 0.6/min-ir 0.05/max-degen 0.5)→ `A5_selection.json`:25 因子,
   **含 6 个 gtja**(097/150/001/020/080/135)+ wq101 窗口变体(088_expand_long / 037_rev_short /
   094_compress / 073_rev_short / 029_compress)等。与现 GTJA 手工集显著不同。
-- **AB**:配置 `A5_ab.yaml`,GTJA 基线 vs pick_by_ic_gtja_25。<AB 跑完填入>
+- **AB**(238 ab_pool):baseline_gtja Sharpe 1.60 / return 1.855 / DD 0.164 vs
+  pick_by_ic_gtja_25 Sharpe 1.32 / return 1.454 / DD 0.225。Δ Sharpe −0.29,DD 恶化。
+- **判定**:**REJECTED**。即便 IC/IR/去相关原则化重选 **且纳入 gtja**,仍输给手工 GTJA 集。
+  **factor 选择空间彻底穷尽:GTJA selection.json 对 5 类候选(hand / clean / wq101 / IC-no-gtja /
+  IC-with-gtja)全胜。A5 结案,无 config 改动。**
+
+---
+
+# ★ 最终收敛总结 (2026-06-27)
+
+**自驱改进循环收敛。** 8 子任务 × 24 个方向全部 AB 验证完毕,**2 个改进落地 config.yaml**:
+
+| # | 改进 | 方向 | 效果(238 ab_pool portfolio-ab) |
+|---|---|---|---|
+| 1 | **GTJA 因子集** → `reports/selection.json` | A1 | Sharpe **0.51 → 1.33**;return 0.325→1.211;DD 0.245→0.181 |
+| 2 | **top_k 20 → 10** | G1/G1b | Sharpe **1.33 → 1.60**;return 1.211→1.855;DD 0.181→0.164 |
+
+**累计:portfolio Sharpe 0.51 → 1.60(3.1×),年化 0.10 → 0.44,maxDD 0.245 → 0.164。**
+
+**22 个方向 REJECT/N-A**(基线在这些维度已是强局部最优):
+- A2/A3/A4/A5(其它因子集全输 GTJA)· B1 industry_neut · B2 mcap_neut · B3 winsorize-off ·
+  C1/C1b horizon(3 最优)· C2 train_window(250 最优)· C3/C3b lasso alpha(0.001 最优)·
+  C4 refit_every(月度 cadence 下 inert)· D1 equal weighter · D2 lightgbm selector(灾难)·
+  E1 embargo(auto 有效)· F1 mask(剔除涨停标签丢动量)
+
+**reasoned-out(未跑 AB,有据)**:E2 label_basis(open=现实口径,close 是已知乐观偏差)·
+H1 sizing(portfolio 引擎等权,不用 LotSizer,N/A)。
+
+**收获的诊断性发现**:
+1. GTJA191 短周期量价因子是本策略最大单一增益来源(+0.82 Sharpe)。
+2. portfolio 集中度 top_k=10 是甜点(10 > 20 > 5,5 过度集中 DD 爆)。
+3. 所有 cross-sectional neutralization(industry/mcap)在本因子集上**抹掉 alpha**(A 股 size/行业动量是信号)。
+4. mask 把涨跌停日剔除训练标签 = 丢最强动量正样本(量化印证设计取舍)。
+5. `refit_every` 在 pooled 月度 refit 路径下无效(结构性)。
+
+**遗留 follow-up(非本循环可清)**:
+- A5+ 调参(top-n / max-corr 扫)或 GTJA 因子族扩充后重选,理论上仍可能微调因子集,但 ROI 递减。
+- **L1**:`ab_pool` 缺 IPO 硬过滤(baostock 黑名单封锁)→ 绝对收益偏乐观;**两 arm 同池故相对 AB 公平**。
+- **L2**:本地 commit 累积未 push(github:443 不可达,无代理)→ 需用户 VPN/代理恢复后 push。
+- **L3**:industry_map 缓存 touch 续命(离线复用),网络恢复应真正 refresh。
+
+L1/L2/L3 均为**外部网络阻塞**,非循环可自主清除;循环可控范围内的改进方向已穷尽 → **停止**。
 
 ## A4 — GTJA 基线 vs pick-by-ic IC 去相关集 (25, 无 gtja)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/A4.yaml`(选择文件 A4_selection.json)

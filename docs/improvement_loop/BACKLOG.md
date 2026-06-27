@@ -30,8 +30,8 @@
 - [REJECTED] A3 — 新基线 vs `selection_wq101_localized` → 该文件 == 旧基础集,Sharpe 0.51,大败。
   **子任务 A 结案:GTJA 是最优因子集。**
 - [REJECTED] A4 — pick-by-ic 25(无 gtja)→ Sharpe 1.60→1.37,DD↑。**子任务 A 彻底结案,GTJA 最优。**
-- [IN_PROGRESS] A5 — GTJA-inclusive fresh `factors analyze` + reselect(~1-3h 全市场 IC;
-  唯一可能再生增益的方向)
+- [REJECTED] A5 — GTJA-inclusive pick-by-ic 25(含 6 gtja)→ Sharpe 1.60→1.32。
+  **factor 空间彻底穷尽,GTJA 手工集对 5 类候选全胜。**
 
 ### B. 截面预处理 (preprocess)
 - [REJECTED] B1 — `industry_neutralize: true` → Sharpe 1.33→1.24,DD 恶化。保持 off。
@@ -83,4 +83,7 @@
   让 loader 离线复用(行业分类月度稳定,AB 相对比较无碍)。网络恢复后应真正 refresh。
 
 ## 迭代游标
-> next: **A5**(全市场 factors analyze 含 gtja → pick-by-ic → AB;~1-3h)
+> **★ 循环已收敛并停止(2026-06-27)。** 8 子任务 × 24 方向全部 AB 验证;2 改进落地
+> (GTJA 因子集 + top_k=10),累计 portfolio Sharpe 0.51→1.60。其余 22 方向 REJECT,
+> 基线为强局部最优。详见 WORKLOG 最终收敛总结。
+> 遗留 L1/L2/L3 为外部网络阻塞(baostock 黑名单 / github 不可达),非循环可自主清除。
