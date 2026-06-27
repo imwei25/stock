@@ -124,6 +124,39 @@ def test_run_portfolio_ab_failure_isolation(base_cfg, monkeypatch):
     assert not res.arms["good"].failed
 
 
+def test_score_memo_shares_panel_across_arms(base_cfg, monkeypatch):
+    """Two arms with identical scoring config (differ only in top_k) compute the
+    score panel ONCE — the in-process memo shares it even under refresh_scores
+    (which bypasses the on-disk cache)."""
+    pool_data = _seed_panel(["A", "B", "C", "D"])
+    ab_cfg = PortfolioABConfig(
+        base_config="config.yaml",
+        arms={
+            "k2": PortfolioArmOverride(strategy={"name": "composite_verdict"}),
+            "k1": PortfolioArmOverride(
+                strategy={"name": "composite_verdict"},
+                portfolio_backtest={"portfolio": {"top_k": 1}},
+            ),
+        },
+    )
+    import stockpool.portfolio_ab.runner as R
+    real_fn = R.precompute_scores_from_legacy
+    calls = {"n": 0}
+
+    def counting(*a, **k):
+        calls["n"] += 1
+        return real_fn(*a, **k)
+
+    monkeypatch.setattr(R, "precompute_scores_from_legacy", counting)
+    res = run_portfolio_ab(
+        ab_cfg, base_cfg, pool_data=pool_data,
+        sector_map={}, name_map={c: c for c in pool_data},
+        refresh_scores=True,  # bypass disk cache → memo is the only sharing path
+    )
+    assert not res.arms["k2"].failed and not res.arms["k1"].failed
+    assert calls["n"] == 1, f"expected 1 shared precompute across arms, got {calls['n']}"
+
+
 def test_armresult_primary_curve_empty_when_failed():
     arm = ArmResult(name="x", effective_cfg=None, failed=True, error="boom")
     assert arm.primary_curve.empty

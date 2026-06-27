@@ -120,6 +120,7 @@ def run_single_arm(
     refresh_scores: bool = False,
     portfolio_pool_data: Mapping[str, pd.DataFrame] | None = None,
     n_workers: int | None = None,
+    score_memo: dict | None = None,
 ) -> ArmResult:
     """Execute one portfolio arm. Exceptions are caught and packed into ArmResult.
 
@@ -141,6 +142,12 @@ def run_single_arm(
             ``None`` keeps the helper's default (safe for memory), ``1``
             forces serial, larger values parallelise but cost
             ``~6 GB RAM per worker`` on Windows spawn.
+        score_memo: optional in-process ``{score_cache_key: score_panel}`` dict
+            shared across arms by ``run_portfolio_ab``. When two arms resolve to
+            the same scoring signature, the second reuses the first's panel
+            (skipping factor-panel build + walk-forward scoring) — even under
+            ``refresh_scores=True``. ``None`` disables the memo (single-arm /
+            test callers).
     """
     if portfolio_pool_data is None:
         portfolio_pool_data = pool_data
@@ -149,40 +156,55 @@ def run_single_arm(
         arm_name, len(pool_data), len(portfolio_pool_data),
     )
     try:
-        # ML factor panel only if the arm's strategy actually needs it.
-        # Built on the *training* pool so training_universe=all sees full set.
-        factor_panel = None
-        close_panel = None
-        if (
-            effective_cfg.strategy.name == "ml_factor"
-            and effective_cfg.strategy.ml_factor.panel_mode == "pooled"
-        ):
-            factor_panel, close_panel = load_or_build_factor_panel(
-                effective_cfg.strategy.ml_factor.factors, pool_data,
-                effective_cfg.data.cache_dir,
-                preprocess_cfg=effective_cfg.strategy.ml_factor.preprocess,
-            )
-        shared_cache: dict = {}
-        legacy = build_strategy(
-            effective_cfg,
-            pool_data=pool_data,
-            factor_panel=factor_panel,
-            close_panel=close_panel,
-            shared_cache=shared_cache,
-        )
-
         # Score panel cache — keyed by a *scoring signature* (strategy + data +
         # universe), NOT the full content_hash. Arms that differ only in
         # portfolio_backtest params (top_k / rebalance / sector cap / staggered)
         # produce identical scores → share one cached panel instead of
         # recomputing the expensive walk-forward scores twice.
+        #
+        # Three-tier reuse, cheapest first:
+        #   1. ``score_memo`` (in-process dict shared across arms by
+        #      ``run_portfolio_ab``) — also covers ``refresh_scores=True``, where
+        #      the disk cache is intentionally bypassed but the two arms still
+        #      share one fresh computation.
+        #   2. on-disk parquet (cross-run; skipped under refresh_scores).
+        #   3. recompute (builds the factor panel + strategy, then scores).
+        # The factor panel + ``build_strategy`` are built ONLY in tier 3, so a
+        # reusing arm skips that work entirely.
         score_dir = Path(effective_cfg.portfolio_backtest.score_cache_dir)
         score_dir.mkdir(parents=True, exist_ok=True)
-        score_path = score_dir / f"{score_cache_key(effective_cfg, portfolio_pool_data.keys())}.parquet"
-        if score_path.exists() and not refresh_scores:
+        cache_key = score_cache_key(effective_cfg, portfolio_pool_data.keys())
+        score_path = score_dir / f"{cache_key}.parquet"
+
+        score_panel = None
+        if score_memo is not None and cache_key in score_memo:
+            log.info("[%s] reusing in-memory score panel (key=%s)", arm_name, cache_key)
+            score_panel = score_memo[cache_key]
+        elif score_path.exists() and not refresh_scores:
             log.info("[%s] cache hit: %s", arm_name, score_path)
             score_panel = pd.read_parquet(score_path)
-        else:
+
+        if score_panel is None:
+            # ML factor panel only if the arm's strategy actually needs it.
+            # Built on the *training* pool so training_universe=all sees full set.
+            factor_panel = None
+            close_panel = None
+            if (
+                effective_cfg.strategy.name == "ml_factor"
+                and effective_cfg.strategy.ml_factor.panel_mode == "pooled"
+            ):
+                factor_panel, close_panel = load_or_build_factor_panel(
+                    effective_cfg.strategy.ml_factor.factors, pool_data,
+                    effective_cfg.data.cache_dir,
+                    preprocess_cfg=effective_cfg.strategy.ml_factor.preprocess,
+                )
+            legacy = build_strategy(
+                effective_cfg,
+                pool_data=pool_data,
+                factor_panel=factor_panel,
+                close_panel=close_panel,
+                shared_cache={},
+            )
             log.info("[%s] precomputing score panel ...", arm_name)
             # Score only the portfolio universe (subset of training pool).
             score_panel = precompute_scores_from_legacy(
@@ -191,6 +213,9 @@ def run_single_arm(
             if score_panel.empty:
                 raise RuntimeError("score panel is empty — all stocks failed")
             score_panel.to_parquet(score_path)
+
+        if score_memo is not None:
+            score_memo[cache_key] = score_panel
 
         portfolio_strat = PrecomputedScoreStrategy(
             score_panel, name=effective_cfg.strategy.name,
@@ -301,6 +326,10 @@ def run_portfolio_ab(
             )
 
     # Serial path (default; also fallback when parallel_arms raises).
+    # Shared in-process score memo: arms with the same scoring signature reuse
+    # one computed panel (covers refresh_scores too). The parallel path can't
+    # share this across processes, so it relies on the on-disk cache instead.
+    score_memo: dict = {}
     arms: dict[str, ArmResult] = {}
     for arm_name, override in ab_cfg.arms.items():
         try:
@@ -318,5 +347,6 @@ def run_portfolio_ab(
             refresh_scores=refresh_scores,
             portfolio_pool_data=portfolio_pool_data,
             n_workers=n_workers,
+            score_memo=score_memo,
         )
     return ABResult(arms=arms)
