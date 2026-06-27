@@ -83,6 +83,14 @@ def test_portfolio_backtest_smoke(base_setup):
     assert "Equity Curve" in html
 
 
+def test_portfolio_backtest_workers_flag(base_setup):
+    """`--workers` is accepted and plumbed into precompute (serial path here)."""
+    cfg_file, tmp_path = base_setup
+    rc = main(["portfolio-backtest", "--config", str(cfg_file), "--workers", "1"])
+    assert rc == 0
+    assert (tmp_path / "reports" / "portfolio" / "latest.html").exists()
+
+
 def test_portfolio_backtest_refuses_when_disabled(tmp_path, base_setup, monkeypatch):
     cfg_file, _ = base_setup
     raw = yaml.safe_load(cfg_file.read_text(encoding="utf-8"))

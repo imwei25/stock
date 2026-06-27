@@ -585,7 +585,9 @@ def cmd_portfolio_backtest(args: argparse.Namespace) -> int:
         checkpoint("before precompute_scores_from_legacy", extra={
             "n_portfolio": len(portfolio_pool_data),
         })
-        score_panel = precompute_scores_from_legacy(legacy, portfolio_pool_data)
+        score_panel = precompute_scores_from_legacy(
+            legacy, portfolio_pool_data, n_workers=args.workers,
+        )
         checkpoint("after precompute_scores_from_legacy", extra={"shape": score_panel.shape})
         if score_panel.empty:
             log.error("Score panel is empty (all stocks failed).")
@@ -1244,6 +1246,12 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="Bypass data/portfolio_scores cache, recompute scores")
     p_pb.add_argument("--refresh-fundamentals", action="store_true",
                       help="强制重拉 baostock 财务数据(绕过 30 天缓存)")
+    p_pb.add_argument("--workers", type=int, default=None,
+                      help="Parallel workers for precompute_scores "
+                           "(default: auto ≤3; each pickles ~hundreds MB of "
+                           "training pool + factor_panel, so raising this needs "
+                           "~6 GB RAM headroom per worker). Pass 1 for serial "
+                           "(lowest memory).")
     p_pb.set_defaults(func=cmd_portfolio_backtest)
 
     p_pab = sub.add_parser(
