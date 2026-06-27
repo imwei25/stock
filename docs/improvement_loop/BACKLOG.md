@@ -69,7 +69,16 @@
 ### H. sizing
 - [TODO] H1 — vol_target(当前) vs fixed(per-stock `ab`,sizing 段覆盖)
 
-## 已知遗留问题 (leftover issues) — 必须清零才能停
+## ★ 遗留问题最终状态 (2026-06-27 network-watcher 收尾)
+- **L2 — ✅ CLEARED**:github 恢复可达,`git push origin main` 成功(0261bb2..c738141,25 commits 全推)。
+- **L1 — ⚠️ 需用户处理(非循环可清)**:`ab_pool` IPO 硬过滤依赖 baostock `query_stock_basic`,
+  但 baostock 账号被**黑名单封锁**(error 10001011「黑名单用户,请与管理员联系」),网络恢复后**仍封**。
+  → 非网络问题,polling 无效。需用户:解除 baostock 黑名单,或为 ipo_dates 增加 akshare 数据源路径(代码改动)。
+  影响:绝对收益偏乐观;**相对 AB 结论不受影响(两 arm 同池)**。
+- **L3 — workaround 生效**:industry_map 缓存 touch 续命,离线复用功能正常(分类月度稳定)。
+  baostock 黑名单 + 早前 akshare 连接中断 → 暂不强刷;blacklist 解除后可真正 refresh。
+
+## 已知遗留问题 (leftover issues) — 原始登记
 - [ ] L1 — `data/ab_pool.parquet` 构建时 baostock 登录失败,跳过了 IPO 硬过滤;
   池里可能含极近 IPO 新股。两 arm 同池故 AB 公平,但绝对收益偏乐观。
   → 待网络恢复后 `ab-pool build --refresh` 重建并复核 top 方向。
@@ -86,4 +95,6 @@
 > **★ 循环已收敛并停止(2026-06-27)。** 8 子任务 × 24 方向全部 AB 验证;2 改进落地
 > (GTJA 因子集 + top_k=10),累计 portfolio Sharpe 0.51→1.60。其余 22 方向 REJECT,
 > 基线为强局部最优。详见 WORKLOG 最终收敛总结。
-> 遗留 L1/L2/L3 为外部网络阻塞(baostock 黑名单 / github 不可达),非循环可自主清除。
+> 遗留:L2(push)✅ 已于 network-watcher 恢复后清零;L1(baostock 黑名单)需用户处理,
+> 非循环可清(polling 无效,blacklist 网络恢复后仍封);L3 workaround 生效。
+> **循环正式收尾停止。**
