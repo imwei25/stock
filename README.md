@@ -89,11 +89,13 @@ PIT 警告:基本面数据按 **公告日(pubDate)** 而非 **报告期末(statD
 # PR-3 起 staggered_starts > 1 自动跑 N 个 offset 出 ensemble + 包络图
 .venv/Scripts/python -m stockpool portfolio-backtest --config config.yaml
 .venv/Scripts/python -m stockpool portfolio-backtest --refresh-scores       # 强制重算 score panel
+.venv/Scripts/python -m stockpool portfolio-backtest --workers 8            # 并行打分 (默认 auto≤3; 每 worker ~6GB; 1=串行)
 
 # Portfolio AB — 比较两套 portfolio 策略 (与 per-stock `ab` 平行)
 .venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab.yaml
 .venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab.yaml --arm <name>   # 调试单 arm, stdout 打印指标
 .venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab.yaml --parallel-arms  # 两 arm 并行(subprocess; peak 内存 ~2×)
+.venv/Scripts/python -m stockpool portfolio-ab --config portfolio_ab.yaml --workers 8       # 并行打分 (默认 auto≤3; 每 worker ~6GB; 1=串行)
 ```
 
 `portfolio_ab.yaml` 最小示例(模板见 `portfolio_ab.yaml.example`):
