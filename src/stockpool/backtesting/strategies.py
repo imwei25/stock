@@ -21,6 +21,7 @@ from stockpool.config import (
     IndicatorsConfig, MLFactorConfig, ScoringConfig,
     VerdictsConfig, WeightsConfig,
 )
+from stockpool.backtesting.composite_weekly import weekly_scores_by_bar
 from stockpool.fetcher import resample_to_weekly
 from stockpool.indicators import add_all
 from stockpool.ml.dataset import (
@@ -88,16 +89,19 @@ class CompositeVerdictStrategy(Strategy):
         enriched_daily = add_all(daily_df, self.indicators_cfg)
         rows: list[dict] = []
 
+        # Weekly scores for every bar, precomputed in one O(T) pass instead of
+        # re-resampling + re-running add_all per bar (the old O(T^2) hot loop).
+        # Bit-exact vs the per-bar path — see composite_weekly module docstring.
+        weekly_scores = weekly_scores_by_bar(
+            daily_df, self.indicators_cfg, self.weights,
+            start=DAILY_WARMUP - 1, weekly_warmup=WEEKLY_WARMUP,
+        )
+
         for i in range(DAILY_WARMUP - 1, len(daily_df)):
             daily_window = enriched_daily.iloc[:i + 1]
             daily_score = score_triggers(detect_signals(daily_window, self.weights))
 
-            weekly = resample_to_weekly(daily_df.iloc[:i + 1])
-            if len(weekly) >= WEEKLY_WARMUP:
-                enriched_w = add_all(weekly, self.indicators_cfg)
-                weekly_score = score_triggers(detect_signals(enriched_w, self.weights))
-            else:
-                weekly_score = 0
+            weekly_score = weekly_scores[i]
 
             final = combine_daily_weekly(daily_score, weekly_score, self.scoring)
             verdict = verdict_of(final, self.verdicts_cfg)
