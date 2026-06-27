@@ -26,7 +26,11 @@
 - **日期**:2026-06-27 · 背景:2026-06-24 analysis 不含 gtja_*,A4 的 IC 重选无法纳入 GTJA 因子。
   本方向重跑全市场 `factors analyze`(含 gtja),pick-by-ic,再 AB vs GTJA 基线。
   这是唯一可能再生增益的方向。
-- **结果**:<analyze 跑完后填入>
+- **analyze 完成**:386 因子(含 gtja_*),~60min,输出 `reports/factor_analysis/loop_a5/2026-06-27.json`。
+- **pick-by-ic**(top-25/max-corr 0.6/min-ir 0.05/max-degen 0.5)→ `A5_selection.json`:25 因子,
+  **含 6 个 gtja**(097/150/001/020/080/135)+ wq101 窗口变体(088_expand_long / 037_rev_short /
+  094_compress / 073_rev_short / 029_compress)等。与现 GTJA 手工集显著不同。
+- **AB**:配置 `A5_ab.yaml`,GTJA 基线 vs pick_by_ic_gtja_25。<AB 跑完填入>
 
 ## A4 — GTJA 基线 vs pick-by-ic IC 去相关集 (25, 无 gtja)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/A4.yaml`(选择文件 A4_selection.json)

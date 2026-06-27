@@ -1,0 +1,29 @@
+{
+  "factors": [
+    "alpha_016",
+    "gtja_097",
+    "alpha_088_expand_long",
+    "turnover_zscore_60",
+    "gtja_150",
+    "ret_skew_20",
+    "momentum_20",
+    "alpha_077",
+    "alpha_037_rev_short",
+    "gtja_001",
+    "gtja_020",
+    "alpha_069",
+    "alpha_094_compress",
+    "alpha_012",
+    "mom_vol_interact_10",
+    "gtja_080",
+    "alpha_014",
+    "alpha_029",
+    "alpha_073_rev_short",
+    "alpha_082",
+    "close_skew_20",
+    "gtja_135",
+    "alpha_011",
+    "alpha_029_compress",
+    "ret_kurt_20"
+  ]
+}
