@@ -38,7 +38,11 @@ def _ann_sharpe(daily_ret: np.ndarray, rf_annual: float = 0.0) -> float:
     sd = excess.std(ddof=1)
     if sd == 0 or not np.isfinite(sd):
         return float("nan")
-    return float(excess.mean() / sd * np.sqrt(ANN))
+    sr = float(excess.mean() / sd * np.sqrt(ANN))
+    # Degenerate segment guard: a near-constant return window yields an
+    # absurd |Sharpe| (tiny denominator). No real strategy exceeds ~10;
+    # treat such values as unreliable (NaN) so they don't poison sign checks.
+    return sr if abs(sr) <= 10.0 else float("nan")
 
 
 def _curve_to_daily_ret(curve: pd.DataFrame) -> pd.Series:
@@ -100,6 +104,12 @@ def main() -> int:
     ap.add_argument("--pool", default=None,
                     help="override portfolio universe with a pool parquet "
                          "(e.g. data/ab_pool_v2.parquet for M1 second-pool check)")
+    ap.add_argument("--full-market", action="store_true",
+                    help="evaluate the portfolio on the FULL training universe "
+                         "(no sub-pool restriction). Use with --workers 1 first.")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="n_workers for score precompute (1 = serial in-process, "
+                         "safest against the full-universe parallel segfault).")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -111,6 +121,12 @@ def main() -> int:
     from stockpool.portfolio_ab.runner import run_portfolio_ab
 
     ab_cfg = load_portfolio_ab_config(args.config)
+    if args.full_market:
+        # full market = no sub-pool: disable ab_pool injection in per-arm cfgs
+        try:
+            ab_cfg = ab_cfg.model_copy(update={"use_ab_pool": False})
+        except Exception:
+            ab_cfg.use_ab_pool = False
     base_path = (Path(args.config).parent / ab_cfg.base_config).resolve()
     base_cfg = load_config(base_path)
     cache_dir = Path(base_cfg.data.cache_dir)
@@ -124,7 +140,10 @@ def main() -> int:
     sector_map = load_or_build_industry_map(cache_dir, source="auto")
     set_sector_map(sector_map)
 
-    if args.pool:
+    if args.full_market:
+        portfolio_codes = None
+        print(f"[full-market] portfolio universe = full training pool ({len(pool_data)} codes)")
+    elif args.pool:
         pool_df = pd.read_parquet(args.pool)
         portfolio_codes = [str(c).zfill(6) for c in pool_df["code"]]
         print(f"[pool override] {args.pool}: {len(portfolio_codes)} codes")
@@ -141,7 +160,8 @@ def main() -> int:
     res = run_portfolio_ab(ab_cfg, base_cfg, pool_data=pool_data,
                            sector_map=sector_map, name_map=name_map,
                            refresh_scores=args.refresh_scores,
-                           portfolio_pool_data=portfolio_pool_data)
+                           portfolio_pool_data=portfolio_pool_data,
+                           n_workers=args.workers)
 
     arms = list(res.arms.items())  # insertion order: A then B
     (nameA, armA), (nameB, armB) = arms[0], arms[1]
@@ -160,8 +180,14 @@ def main() -> int:
     vA = _arm_validity(armA, intended_n)
     vB = _arm_validity(armB, intended_n)
 
+    # Validity: both arms must trade, and their coverage must be comparable
+    # (catches a silently-degenerate arm). Do NOT require an absolute coverage
+    # floor — a top-K portfolio on the full ~4599 universe only ever touches a
+    # small fraction, so an absolute floor (e.g. 0.5) is only meaningful on a
+    # small sub-pool. Parity (within ~3x) is the universe-agnostic check.
+    cov_min, cov_max = min(vA["coverage"], vB["coverage"]), max(vA["coverage"], vB["coverage"])
     valid = (vA["trade_count"] > 0 and vB["trade_count"] > 0
-             and vA["coverage"] >= 0.5 and vB["coverage"] >= 0.5)
+             and cov_min > 0 and (cov_min / cov_max) >= 0.33)
     sign = np.sign(dpt)
     subs_hold = all(np.sign(x) == sign for seg in subs.values() for x in seg if np.isfinite(x)) and sign != 0
     ci_excl0 = (lo > 0) or (hi < 0)
