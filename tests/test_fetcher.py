@@ -35,7 +35,7 @@ def test_fetch_creates_cache(tmp_path):
     fake = _make_akshare_df("2026-01-02", 30)
 
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake) as mocked:
-        df = fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+        df = fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="akshare")
 
     assert mocked.called
     assert len(df) == 30
@@ -48,7 +48,7 @@ def test_second_call_uses_cache_no_request(tmp_path):
     fake = _make_akshare_df("2026-01-02", 60)
 
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake):
-        fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+        fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="akshare")
 
     # Pretend "today" is the same business day as the last cached bar so the
     # staleness check passes (last cached == most recent business day).
@@ -56,7 +56,7 @@ def test_second_call_uses_cache_no_request(tmp_path):
     fresh_today = last_cached
     with patch("stockpool.fetcher._today", return_value=fresh_today), \
          patch("stockpool.fetcher.ak.stock_zh_a_hist") as mocked:
-        df = fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+        df = fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="akshare")
         assert not mocked.called
 
     assert len(df) == 30
@@ -66,10 +66,10 @@ def test_force_refresh_bypasses_cache(tmp_path):
     fake = _make_akshare_df("2026-01-02", 30)
 
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake):
-        fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+        fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="akshare")
 
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake) as mocked:
-        fetch_daily("605589", history_days=30, cache_dir=tmp_path, force_refresh=True)
+        fetch_daily("605589", history_days=30, cache_dir=tmp_path, force_refresh=True, source="akshare")
         assert mocked.called
 
 
@@ -85,7 +85,7 @@ def test_akshare_retry_then_succeed(tmp_path):
 
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", side_effect=flaky), \
          patch("stockpool.fetcher.time.sleep"):
-        df = fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+        df = fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="akshare")
 
     assert calls["n"] == 3
     assert len(df) == 30
@@ -95,7 +95,7 @@ def test_akshare_all_retries_fail_raises(tmp_path):
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", side_effect=ConnectionError("down")), \
          patch("stockpool.fetcher.time.sleep"):
         with pytest.raises(ConnectionError):
-            fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+            fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="akshare")
 
 
 def test_resample_to_weekly():
@@ -123,13 +123,13 @@ def test_stale_cache_triggers_refetch(tmp_path):
     fake = _make_akshare_df("2026-01-02", 60)
 
     with patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake):
-        fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+        fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="akshare")
 
     # Advance today far past the cache's last date to make it stale.
     stale_today = pd.Timestamp("2026-01-02") + pd.offsets.BDay(59) + pd.Timedelta(days=30)
     with patch("stockpool.fetcher._today", return_value=stale_today), \
          patch("stockpool.fetcher.ak.stock_zh_a_hist", return_value=fake) as mocked:
-        fetch_daily("605589", history_days=30, cache_dir=tmp_path)
+        fetch_daily("605589", history_days=30, cache_dir=tmp_path, source="akshare")
         assert mocked.called
 
 

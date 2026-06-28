@@ -16,6 +16,54 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## D3-Layer-B — weighter ic vs sharpe @ 15-yr × top1000 (Layer B daily IC)
+- **日期**:2026-06-28 · 配置 `docs/improvement_loop/configs/D3b_sharpe_full.yaml`
+  · 工具 `docs/improvement_loop/analysis/layer_b_direct.py`(绕过 portfolio_ab runner 死锁)
+- **背景**:D3 (3-yr ab_pool) 显示 sharpe weighter +0.12 ΔSharpe;但 `ab_significance.py`
+  paired bootstrap NOT CONFIRMED(CI 含 0,子段反转)。把 cache 扩到 15-yr(mootdx 加分页 +
+  `history_days: 3750`)+ 改换 Layer B(daily 截面 IC)拿更高功率检验。Universe 用 top-1000
+  流动性(15-yr × 4400 在 runner 触发死锁 bug,见
+  `docs/handoff/2026-06-28-portfolio-ab-15yr-deadlock.md`)。
+- **结果**(15-yr × top1000, T=3533 日 IC 观测):
+
+  | metric | weighter_ic | weighter_sharpe | Δ (B−A) |
+  |---|---:|---:|---:|
+  | daily IC mean | +0.04628 | +0.04571 | **−0.00057** |
+  | daily IC std | 0.133 | 0.132 | — |
+  | IR proxy(mean/std) | +0.349 | +0.347 | −0.002 |
+  | paired t (iid) | — | — | −1.253 |
+  | block-bootstrap 95% CI for mean ΔIC | — | — | **[-0.00160, +0.00044]**(含 0) |
+
+- **regime 子段**(7 buckets,按事件日期切):
+
+  | 区间 | n | ΔIC | t | 方向 |
+  |---|---:|---:|---:|---|
+  | 预 2015 杠杆牛 (2011-12 ~ 2015-06) | 856 | −0.00112 | −0.74 | IC 略胜 |
+  | **2015 杠杆崩盘 + 熔断** (2015-06 ~ 2016-02) | 156 | **−0.00326** | **−2.79** | **IC 显著胜** |
+  | 供给侧改革 (2016-02 ~ 2018-06) | 577 | −0.00016 | −0.55 | 平 |
+  | 贸易战 (2018-06 ~ 2020-03) | 414 | −0.00124 | −1.58 | IC 略胜 |
+  | COVID + 抱团 (2020-03 ~ 2021-12) | 450 | +0.00029 | +0.27 | 平 |
+  | **平台监管 / 退市** (2022-01 ~ 2024-04) | 549 | **+0.00162** | **+2.73** | **sharpe 显著胜** |
+  | 新国九条 (2024-04 ~ 2026-06) | 531 | −0.00180 | −1.54 | IC 略胜 |
+  | **整体** | — | **5− vs 2+** | — | 不一致 |
+
+  uniform 5-buckets: 4− vs 1+;uniform 8-buckets: 5− vs 3+。
+
+- **判定**:**NOT CONFIRMED at Layer B**(点 ΔIC = −0.00057,15-yr 大样本 CI 仍含 0,
+  且**方向反过来 IC 略胜**)。
+- **解读**:sharpe weighter 是 **regime-conditional alpha**:
+  - 在低波动/趋势期(2022-2024 平台监管/退市/弱复苏)显著占优(t = +2.73);
+  - 在极端波动期(2015 杠杆崩盘 + 熔断)显著吃亏(t = −2.79);
+  - **整体抵消,且 IC 边际更稳健**。
+- **落地**:维持 `config.yaml: weighter.type: ic`(D3 之后已 revert)。三个新 weighter
+  (sharpe / halflife_ic / ridge)的实现 + 测试**保留**,可 opt-in,但 default 不切。
+- **方法学副产物**:
+  - 写了 `layer_b_direct.py`(绕过 runner 死锁,直接调 `precompute_scores_from_legacy`)
+  - 扩 `ab_significance.py` 加 `--subperiods` / `--regime-boundaries`
+  - mootdx 加分页支持(`_fetch_paginated`,`start` 翻 5 页拿 15 年)
+
+---
+
 ## D2 — selector lasso vs lightgbm (score 重算)
 - **日期**:2026-06-27 · 配置 `docs/improvement_loop/configs/D2.yaml`
 - **结果**(238 ab_pool):selector_lasso Sharpe 1.60 vs selector_lightgbm Sharpe 0.19。Δ −1.41(灾难)。

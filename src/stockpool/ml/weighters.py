@@ -283,6 +283,365 @@ class IRWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _Standardisi
         return pd.Series(scores, index=X.index, name="score")
 
 
+class HalfLifeICWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _StandardisingMixin):
+    """Weight each factor by its **time-decayed** per-day cross-sectional IC.
+
+    Unlike :class:`ICWeighter` which pools all (stock, date) samples into one
+    Spearman correlation, this weighter computes a per-date cross-sectional IC
+    and aggregates with exponential decay so recent dates dominate. Standard
+    Barra/AlphaPortfolio convention.
+
+    For each factor j:
+      * On every training date t with >= ``min_stocks_per_day`` stocks,
+        ``IC_{j,t} = corr(rank(factor_j[:, t]), rank(y[:, t]))``.
+      * Weight ``IC_{j,t}`` by ``exp(-ln2 * (T - t) / halflife)`` — the
+        most recent date carries weight 1.0, a date ``halflife`` business days
+        earlier carries 0.5, etc.
+      * ``IC_j = Σ_t w_t · IC_{j,t} / Σ_t w_t``.
+
+    Weights are sign-preserving and L1-normalised — same final-score contract
+    as :class:`ICWeighter`. Requires pooled cross-sectional input (MultiIndex
+    with ``"date"`` level); raises in per-stock mode.
+    """
+
+    def __init__(
+        self,
+        halflife: float = 60.0,
+        use_rank: bool = True,
+        min_stocks_per_day: int = 10,
+        min_abs_ic: float = 0.0,
+    ):
+        if halflife <= 0:
+            raise ValueError(f"halflife must be > 0, got {halflife}")
+        if min_stocks_per_day < 4:
+            raise ValueError(
+                f"min_stocks_per_day must be >= 4, got {min_stocks_per_day}"
+            )
+        if min_abs_ic < 0:
+            raise ValueError(f"min_abs_ic must be >= 0, got {min_abs_ic}")
+        self.halflife = halflife
+        self.use_rank = use_rank
+        self.min_stocks_per_day = min_stocks_per_day
+        self.min_abs_ic = min_abs_ic
+        self._feature_names: list[str] | None = None
+        self._x_mean: np.ndarray | None = None
+        self._x_std: np.ndarray | None = None
+        self._weights: pd.Series | None = None
+        self._ic: pd.Series | None = None
+
+    @staticmethod
+    def _extract_dates(idx: pd.Index) -> np.ndarray:
+        if isinstance(idx, pd.MultiIndex) and "date" in (idx.names or []):
+            return idx.get_level_values("date").to_numpy()
+        raise ValueError(
+            "HalfLifeICWeighter requires y/X with a MultiIndex containing a "
+            "'date' level (pooled cross-sectional data); got "
+            f"index names={getattr(idx, 'names', None)!r}"
+        )
+
+    def _per_day_ic(
+        self, fvals: np.ndarray, y: np.ndarray, dates: np.ndarray,
+    ) -> pd.Series:
+        """Per-date cross-sectional Spearman (or Pearson) IC. Index = date."""
+        df = pd.DataFrame({"f": fvals, "y": y, "d": dates})
+        sizes = df.groupby("d", sort=True)["d"].transform("size")
+        df = df[sizes >= self.min_stocks_per_day]
+        if df.empty:
+            return pd.Series(dtype=float)
+        if self.use_rank:
+            df = df.assign(
+                f=df.groupby("d", sort=False)["f"].rank(method="average"),
+                y=df.groupby("d", sort=False)["y"].rank(method="average"),
+            )
+        # Pearson corr on (possibly ranked) values per group.
+        def _corr_per_group(g: pd.DataFrame) -> float:
+            a, b = g["f"].to_numpy(), g["y"].to_numpy()
+            sa, sb = a.std(ddof=0), b.std(ddof=0)
+            if sa < 1e-12 or sb < 1e-12:
+                return np.nan
+            return float(((a - a.mean()) * (b - b.mean())).mean() / (sa * sb))
+        return df.groupby("d", sort=True)[["f", "y"]].apply(_corr_per_group).dropna()
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        Xs = self._fit_standardiser(X)
+        if not self._feature_names:
+            self._weights = pd.Series(dtype=float)
+            self._ic = pd.Series(dtype=float)
+            return
+
+        dates = self._extract_dates(y.index)
+        y_np = y.to_numpy(dtype=float)
+        decay = np.log(2.0) / self.halflife
+
+        ic_values = np.zeros(Xs.shape[1])
+        for j, name in enumerate(self._feature_names):
+            ic_series = self._per_day_ic(Xs[:, j], y_np, dates)
+            if len(ic_series) < 2:
+                ic_values[j] = 0.0
+                continue
+            # Most recent date → weight 1.0; ages measured in business-day
+            # positions within the training window (not calendar days).
+            ages = np.arange(len(ic_series) - 1, -1, -1, dtype=float)
+            w = np.exp(-decay * ages)
+            ic_values[j] = float(np.average(ic_series.to_numpy(), weights=w))
+
+        self._ic = pd.Series(
+            ic_values, index=self._feature_names, name="halflife_ic",
+        )
+        masked = np.where(np.abs(ic_values) >= self.min_abs_ic, ic_values, 0.0)
+        total = np.sum(np.abs(masked))
+        if total < 1e-12:
+            k = len(self._feature_names)
+            self._weights = pd.Series(
+                [1.0 / k] * k, index=self._feature_names, name="weight",
+            )
+        else:
+            self._weights = pd.Series(
+                masked / total, index=self._feature_names, name="weight",
+            )
+
+    def weights(self) -> pd.Series:
+        assert self._weights is not None
+        return self._weights.copy()
+
+    @property
+    def ic(self) -> pd.Series:
+        """Per-factor time-decayed IC (signed)."""
+        assert self._ic is not None
+        return self._ic.copy()
+
+    def predict(self, X: pd.DataFrame) -> pd.Series:
+        if self._weights is None or self._weights.empty:
+            return pd.Series(0.0, index=X.index)
+        Xs = self._apply_standardiser(X)
+        scores = Xs @ self._weights.to_numpy()
+        return pd.Series(scores, index=X.index, name="score")
+
+
+class SharpeWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _StandardisingMixin):
+    """Weight each factor by the Sharpe of its quantile long-short portfolio.
+
+    For each factor j, on every cross-section (date) with at least
+    ``min_stocks_per_day`` valid stocks, rank stocks by the standardised factor
+    value. The "factor portfolio" is long the top ``quantile`` of stocks and
+    short the bottom ``quantile``; its single-date return is
+    ``mean(y_top) - mean(y_bot)``. Aggregating across the training window gives
+    a daily return series whose ``mean / std`` is the factor's Sharpe.
+
+    Weights are sign-preserving (positive Sharpe → positive weight, negative
+    Sharpe inverts the factor) and L1-normalised so prediction magnitudes are
+    comparable across refits — mirrors :class:`ICWeighter` semantics.
+
+    Differs from :class:`IRWeighter` in *what* is being averaged: IR aggregates
+    cross-window IC, this aggregates a cross-sectional long-short P&L per date,
+    which is closer to the economic value a portfolio strategy would realise.
+
+    Requires the training ``y`` (and ``X``) to carry a ``MultiIndex`` with a
+    ``"date"`` level (i.e. pooled mode); raises in per-stock mode.
+
+    No annualisation factor is applied — the sqrt(252) multiplier would cancel
+    in the subsequent L1 normalisation.
+    """
+
+    def __init__(
+        self,
+        quantile: float = 0.2,
+        min_stocks_per_day: int = 10,
+        min_valid_days: int = 5,
+        min_abs_sharpe: float = 0.0,
+    ):
+        if not 0.0 < quantile < 0.5:
+            raise ValueError(
+                f"quantile must be in (0, 0.5), got {quantile}"
+            )
+        if min_stocks_per_day < 4:
+            raise ValueError(
+                f"min_stocks_per_day must be >= 4, got {min_stocks_per_day}"
+            )
+        if min_valid_days < 2:
+            raise ValueError(
+                f"min_valid_days must be >= 2, got {min_valid_days}"
+            )
+        if min_abs_sharpe < 0.0:
+            raise ValueError(
+                f"min_abs_sharpe must be >= 0, got {min_abs_sharpe}"
+            )
+        self.quantile = quantile
+        self.min_stocks_per_day = min_stocks_per_day
+        self.min_valid_days = min_valid_days
+        self.min_abs_sharpe = min_abs_sharpe
+        self._feature_names: list[str] | None = None
+        self._x_mean: np.ndarray | None = None
+        self._x_std: np.ndarray | None = None
+        self._weights: pd.Series | None = None
+        self._sharpe: pd.Series | None = None
+
+    @staticmethod
+    def _extract_dates(idx: pd.Index) -> np.ndarray:
+        if isinstance(idx, pd.MultiIndex) and "date" in (idx.names or []):
+            return idx.get_level_values("date").to_numpy()
+        raise ValueError(
+            "SharpeWeighter requires y/X with a MultiIndex containing a 'date' "
+            "level (pooled cross-sectional data); got "
+            f"index names={getattr(idx, 'names', None)!r}"
+        )
+
+    def _single_factor_sharpe(
+        self, fvals: np.ndarray, y: np.ndarray, dates: np.ndarray,
+    ) -> float:
+        df = pd.DataFrame({"f": fvals, "y": y, "d": dates})
+        # Cross-sectional rank within each date in [0, 1].
+        ranks = df.groupby("d", sort=False)["f"].rank(pct=True, method="average")
+        counts = df.groupby("d", sort=False)["d"].transform("size")
+        eligible = counts >= self.min_stocks_per_day
+        if not eligible.any():
+            return 0.0
+        top_mask = eligible & (ranks >= 1 - self.quantile)
+        bot_mask = eligible & (ranks <= self.quantile)
+        top_per_day = df.loc[top_mask].groupby("d", sort=True)["y"].mean()
+        bot_per_day = df.loc[bot_mask].groupby("d", sort=True)["y"].mean()
+        ls = (top_per_day - bot_per_day).dropna()
+        if len(ls) < self.min_valid_days:
+            return 0.0
+        arr = ls.to_numpy()
+        std = arr.std(ddof=0)
+        if std < 1e-12:
+            return 0.0
+        return float(arr.mean() / std)
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        Xs = self._fit_standardiser(X)
+        if not self._feature_names:
+            self._weights = pd.Series(dtype=float)
+            self._sharpe = pd.Series(dtype=float)
+            return
+
+        dates = self._extract_dates(y.index)
+        y_np = y.to_numpy(dtype=float)
+        sharpe_values = np.array([
+            self._single_factor_sharpe(Xs[:, j], y_np, dates)
+            for j in range(Xs.shape[1])
+        ])
+        self._sharpe = pd.Series(
+            sharpe_values, index=self._feature_names, name="sharpe",
+        )
+
+        masked = np.where(
+            np.abs(sharpe_values) >= self.min_abs_sharpe, sharpe_values, 0.0,
+        )
+        total = np.sum(np.abs(masked))
+        if total < 1e-12:
+            k = len(self._feature_names)
+            self._weights = pd.Series(
+                [1.0 / k] * k, index=self._feature_names, name="weight",
+            )
+        else:
+            self._weights = pd.Series(
+                masked / total, index=self._feature_names, name="weight",
+            )
+
+    def weights(self) -> pd.Series:
+        assert self._weights is not None
+        return self._weights.copy()
+
+    @property
+    def sharpe(self) -> pd.Series:
+        """Per-factor Sharpe of the quantile long-short portfolio (signed)."""
+        assert self._sharpe is not None
+        return self._sharpe.copy()
+
+    def predict(self, X: pd.DataFrame) -> pd.Series:
+        if self._weights is None or self._weights.empty:
+            return pd.Series(0.0, index=X.index)
+        Xs = self._apply_standardiser(X)
+        scores = Xs @ self._weights.to_numpy()
+        return pd.Series(scores, index=X.index, name="score")
+
+
+class RidgeWeighter(_LinearWeighterContributionsMixin, FactorWeighter, _StandardisingMixin):
+    """Ridge regression weighter (L2-regularised linear regression on factors).
+
+    Sister to :class:`ICWeighter`: instead of per-factor marginal IC, fits
+    ``y = X·β + ε`` jointly with L2 penalty ``alpha``. Joint fit naturally
+    suppresses redundant factors (correlated factors share weight) — useful
+    when the Lasso selector still leaves residual collinearity.
+
+    Weights are the ridge coefficients on standardised X, then L1-normalised
+    so predictions are scale-comparable to other weighters. Set ``alpha=0``
+    for plain OLS (no regularisation); typical values 0.1–10.
+
+    Linear weighter contract: ``contributions(X) = standardise(X) * weights``,
+    row sums equal ``predict(X)``. No look-ahead — fit only consumes (X, y).
+    Closed-form solver (no sklearn dependency), matches LassoSelector pattern.
+    """
+
+    def __init__(
+        self,
+        alpha: float = 1.0,
+        fit_intercept: bool = False,
+    ):
+        if alpha < 0:
+            raise ValueError(f"alpha must be >= 0, got {alpha}")
+        self.alpha = alpha
+        self.fit_intercept = fit_intercept
+        self._feature_names: list[str] | None = None
+        self._x_mean: np.ndarray | None = None
+        self._x_std: np.ndarray | None = None
+        self._weights: pd.Series | None = None
+        self._raw_coef: pd.Series | None = None
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        Xs = self._fit_standardiser(X)
+        if not self._feature_names:
+            self._weights = pd.Series(dtype=float)
+            self._raw_coef = pd.Series(dtype=float)
+            return
+
+        y_arr = y.to_numpy(dtype=float)
+        if self.fit_intercept:
+            y_arr = y_arr - y_arr.mean()
+
+        # Closed-form ridge: (XᵀX + α·I)⁻¹·Xᵀy. Use lstsq-style solve via
+        # np.linalg.solve for stability; pseudo-inverse fallback on singular.
+        n, p = Xs.shape
+        gram = Xs.T @ Xs + self.alpha * np.eye(p)
+        rhs = Xs.T @ y_arr
+        try:
+            coef = np.linalg.solve(gram, rhs)
+        except np.linalg.LinAlgError:
+            coef = np.linalg.pinv(gram) @ rhs
+
+        self._raw_coef = pd.Series(coef, index=self._feature_names, name="ridge_coef")
+
+        total = np.sum(np.abs(coef))
+        if total < 1e-12:
+            k = len(self._feature_names)
+            self._weights = pd.Series(
+                [1.0 / k] * k, index=self._feature_names, name="weight",
+            )
+        else:
+            self._weights = pd.Series(
+                coef / total, index=self._feature_names, name="weight",
+            )
+
+    def weights(self) -> pd.Series:
+        assert self._weights is not None
+        return self._weights.copy()
+
+    @property
+    def raw_coef(self) -> pd.Series:
+        """Unnormalised ridge coefficients on standardised X (signed)."""
+        assert self._raw_coef is not None
+        return self._raw_coef.copy()
+
+    def predict(self, X: pd.DataFrame) -> pd.Series:
+        if self._weights is None or self._weights.empty:
+            return pd.Series(0.0, index=X.index)
+        Xs = self._apply_standardiser(X)
+        scores = Xs @ self._weights.to_numpy()
+        return pd.Series(scores, index=X.index, name="score")
+
+
 class LightGBMWeighter(FactorWeighter):
     """Tree-based weighter using LightGBM.
 

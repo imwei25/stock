@@ -71,18 +71,64 @@ def _paired_block_bootstrap(rA: np.ndarray, rB: np.ndarray, *, n_boot=5000,
     return float(lo), float(hi), p_le0, block
 
 
-def _subperiod_deltas(rA: pd.Series, rB: pd.Series, rf_annual=0.0):
-    out = {}
-    for label, k in [("halves", 2), ("thirds", 3)]:
-        idx = rA.index
+def _subperiod_deltas(
+    rA: pd.Series, rB: pd.Series, rf_annual=0.0,
+    extra_partitions: int | list[int] | None = None,
+    regime_boundaries: list[pd.Timestamp] | None = None,
+):
+    """Per-subperiod ΔSharpe (B − A).
+
+    Always returns halves + thirds (back-compat). Optionally also returns:
+      * uniform-calendar partitions of size N (or list of Ns) via ``extra_partitions``;
+      * event-defined regime buckets split at ``regime_boundaries`` (timestamps).
+
+    Each bucket reports its (Sharpe_A, Sharpe_B, ΔSharpe, n_bars, label).
+    """
+    out: dict[str, list] = {}
+    idx = rA.index
+
+    def _calc_uniform(k: int) -> list[tuple]:
         bounds = np.linspace(0, len(idx), k + 1, dtype=int)
-        segs = []
+        rows = []
         for j in range(k):
             sl = slice(bounds[j], bounds[j + 1])
+            if sl.stop <= sl.start:
+                continue
             a = _ann_sharpe(rA.iloc[sl].to_numpy(), rf_annual)
             b = _ann_sharpe(rB.iloc[sl].to_numpy(), rf_annual)
-            segs.append(b - a)
-        out[label] = segs
+            label = f"{idx[sl.start].date()}~{idx[sl.stop-1].date()}"
+            rows.append((label, sl.stop - sl.start, a, b, b - a))
+        return rows
+
+    out["halves"] = [r[4] for r in _calc_uniform(2)]
+    out["thirds"] = [r[4] for r in _calc_uniform(3)]
+    out["_halves_detail"] = _calc_uniform(2)
+    out["_thirds_detail"] = _calc_uniform(3)
+
+    extras = []
+    if isinstance(extra_partitions, int):
+        extras = [extra_partitions]
+    elif isinstance(extra_partitions, list):
+        extras = extra_partitions
+    for k in extras:
+        out[f"{k}_buckets"] = [r[4] for r in _calc_uniform(k)]
+        out[f"_{k}_buckets_detail"] = _calc_uniform(k)
+
+    if regime_boundaries:
+        rows = []
+        boundaries = sorted(pd.Timestamp(b) for b in regime_boundaries)
+        edges = [idx[0]] + boundaries + [idx[-1] + pd.Timedelta(days=1)]
+        for j in range(len(edges) - 1):
+            lo, hi = edges[j], edges[j + 1]
+            mask = (idx >= lo) & (idx < hi)
+            if mask.sum() < 5:
+                continue
+            a = _ann_sharpe(rA[mask].to_numpy(), rf_annual)
+            b = _ann_sharpe(rB[mask].to_numpy(), rf_annual)
+            label = f"{lo.date()}~{(hi - pd.Timedelta(days=1)).date()}"
+            rows.append((label, int(mask.sum()), a, b, b - a))
+        out["regime"] = [r[4] for r in rows]
+        out["_regime_detail"] = rows
     return out
 
 
@@ -110,6 +156,13 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=None,
                     help="n_workers for score precompute (1 = serial in-process, "
                          "safest against the full-universe parallel segfault).")
+    ap.add_argument("--subperiods", type=str, default=None,
+                    help="extra uniform-calendar subperiod counts, comma-separated "
+                         "(e.g. '5,8'). Halves+thirds always reported.")
+    ap.add_argument("--regime-boundaries", type=str, default=None,
+                    help="event-defined regime split dates, comma-separated "
+                         "YYYY-MM-DD (e.g. '2015-06-15,2016-02-01,2018-06-15,"
+                         "2020-03-01,2022-01-01,2024-04-01')")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -176,7 +229,19 @@ def main() -> int:
     shA, shB = _ann_sharpe(aA, rf), _ann_sharpe(aB, rf)
     dpt = shB - shA
     lo, hi, p_le0, block = _paired_block_bootstrap(aA, aB, n_boot=args.n_boot, rf_annual=rf)
-    subs = _subperiod_deltas(rA, rB, rf)
+    extra_parts = (
+        [int(x) for x in args.subperiods.split(",")]
+        if args.subperiods else None
+    )
+    regime_bdys = (
+        [pd.Timestamp(x.strip()) for x in args.regime_boundaries.split(",")]
+        if args.regime_boundaries else None
+    )
+    subs = _subperiod_deltas(
+        rA, rB, rf,
+        extra_partitions=extra_parts,
+        regime_boundaries=regime_bdys,
+    )
     vA = _arm_validity(armA, intended_n)
     vB = _arm_validity(armB, intended_n)
 
@@ -189,7 +254,10 @@ def main() -> int:
     valid = (vA["trade_count"] > 0 and vB["trade_count"] > 0
              and cov_min > 0 and (cov_min / cov_max) >= 0.33)
     sign = np.sign(dpt)
-    subs_hold = all(np.sign(x) == sign for seg in subs.values() for x in seg if np.isfinite(x)) and sign != 0
+    # halves + thirds for the back-compat "subs_hold" verdict (extras are
+    # reported but don't gate the verdict — they're for diagnostic colour).
+    legacy_segs = subs.get("halves", []) + subs.get("thirds", [])
+    subs_hold = all(np.sign(x) == sign for x in legacy_segs if np.isfinite(x)) and sign != 0
     ci_excl0 = (lo > 0) or (hi < 0)
     confirmed = (abs(dpt) >= 0.10) and ci_excl0 and subs_hold and valid and (dpt > 0)
 
@@ -200,9 +268,23 @@ def main() -> int:
     print(f"M2 paired-bootstrap 95% CI for ΔSharpe: [{lo:+.3f}, {hi:+.3f}]  "
           f"P(Δ<=0)={p_le0:.3f}  -> CI excludes 0: {ci_excl0}")
     print(f"M3 sub-period ΔSharpe:")
-    for label, segs in subs.items():
-        print(f"     {label}: " + "  ".join(f"{x:+.3f}" for x in segs))
-    print(f"     sign holds in all sub-periods: {subs_hold}")
+    # Detail rows for each partition: label, n_bars, SharpeA, SharpeB, ΔSharpe.
+    for key in list(subs.keys()):
+        if not key.startswith("_") or not key.endswith("_detail"):
+            continue
+        partition_name = key[1:-len("_detail")]
+        rows = subs[key]
+        if not rows:
+            continue
+        print(f"     [{partition_name}]")
+        signs = [np.sign(r[4]) for r in rows if np.isfinite(r[4])]
+        consistent = len(set(signs)) == 1 and signs and signs[0] != 0
+        for lbl, n, a, b, d in rows:
+            tag = "+" if d > 0 else "-" if d < 0 else "0"
+            print(f"       {lbl}  n={n:>4}  A={a:+.3f}  B={b:+.3f}  Δ={d:+.3f}  [{tag}]")
+        print(f"       → sign consistent: {consistent}  ({sum(1 for s in signs if s>0)}+ "
+              f"{sum(1 for s in signs if s<0)}- of {len(signs)})")
+    print(f"     legacy halves+thirds sign holds: {subs_hold}")
     print(f"M4 validity: A trades={vA['trade_count']} cov={vA['coverage']:.2f} | "
           f"B trades={vB['trade_count']} cov={vB['coverage']:.2f}  -> ok: {valid}")
     print(f"{'-'*70}")

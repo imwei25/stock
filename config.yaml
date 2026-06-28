@@ -17,7 +17,10 @@ stocks:
   - {code: "300475", name: "香农芯创",  sector: "半导体"}
 
 data:
-  history_days: 500
+  # 2026-06-28 扩展到 ~15 年(2010+),用于增加统计功率应对小 alpha 的 CI 收窄。
+  # ~3750 trading days × 250/yr。期间含多个 regime(2015 杠杆牛 / 2016 熔断 /
+  # 2018 贸易战 / COVID / 注册制 / 新国九条),walk-forward 训练自动按 fold 切。
+  history_days: 3750
   # Phase 2: 额外向前多拉 warmup_days 天数据(仅作为长 rolling 因子的 warmup,
   # 不进入回测 bar 迭代和绩效统计;但进入 factor 计算和训练样本)。
   warmup_days: 200
@@ -191,7 +194,11 @@ strategy:
         tol: 1.0e-6
 
     weighter:
-      type: ic                # ic | ir | equal | lightgbm (PR-B2 Task 4 改默认)
+      # 2026-06-28 sharpe 提升 NOT CONFIRMED:点 ΔSharpe +0.117 但 bootstrap 95% CI
+      # [-0.21, +0.57] 含 0;子段(halves/thirds)符号翻转(first-third +0.887 主导
+      # 整体 win,后 2/3 反转)。不达硬化判定门槛 → 维持 ic 默认。详见
+      # docs/improvement_loop/FULL_MARKET_RESULTS.md 同方法学,以及 D3b/D6/D7 报告。
+      type: ic                # ic | ir | equal | sharpe | halflife_ic | ridge | lightgbm
       ic:
         use_rank: true        # rank IC (Spearman) 更稳健
         min_abs_ic: 0.0
@@ -199,6 +206,19 @@ strategy:
         n_chunks: 6
         use_rank: true
         min_abs_ir: 0.0
+      # sharpe:               # NOT CONFIRMED: 点 +0.12 但 CI[-0.21, +0.57] 含 0,子段反转
+      #   quantile: 0.2
+      #   min_stocks_per_day: 10
+      #   min_valid_days: 5
+      #   min_abs_sharpe: 0.0
+      # halflife_ic:          # ab_pool 上 +0.09 sharpe,full universe 反转 -0.12 (universe-conditional)
+      #   halflife: 60.0
+      #   use_rank: true
+      #   min_stocks_per_day: 10
+      #   min_abs_ic: 0.0
+      # ridge:                # ab_pool 上 +0.02 sharpe,full universe 反转 -0.11
+      #   alpha: 1.0
+      #   fit_intercept: false
       # equal 子段无超参,不写就用 EqualWeighterConfig() 默认空块
       # lightgbm:             # PR-B2 Task 4 启用时可调超参,默认见 LightGBMWeighterConfig
       #   num_leaves: 15

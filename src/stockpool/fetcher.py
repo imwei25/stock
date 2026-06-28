@@ -186,7 +186,7 @@ def fetch_daily(
     history_days: int,
     cache_dir: str | Path,
     force_refresh: bool = False,
-    source: Source = "akshare",
+    source: Source = "mootdx",
     warmup_days: int = 0,
 ) -> pd.DataFrame:
     """Return latest ``history_days + warmup_days`` daily K bars (English column names).
@@ -225,10 +225,18 @@ def fetch_daily(
     )
 
     if need_fetch:
-        start = None
+        start: str | None = None
         if cached is not None and not force_refresh:
             last = cached["date"].max()
             start = (last + pd.Timedelta(days=1)).strftime("%Y%m%d")
+        elif (history_days + warmup_days) > 800:
+            # Full refresh wants more than mootdx's single-call cap (800 bars).
+            # Pass an explicit start date so the backend can paginate / span
+            # long history. Calendar-day estimate = bars / 0.7 + buffer.
+            target_bars = history_days + warmup_days
+            calendar_days = int(target_bars / 0.7) + 30
+            start = (pd.Timestamp.today().normalize()
+                     - pd.Timedelta(days=calendar_days)).strftime("%Y%m%d")
         fresh = _dispatch_stock(source, code, start=start)
         if cached is not None and not force_refresh:
             combined = pd.concat([cached, fresh]).drop_duplicates("date").sort_values("date")
@@ -273,7 +281,7 @@ def fetch_index_daily(
     history_days: int,
     cache_dir: str | Path,
     force_refresh: bool = False,
-    source: Source = "akshare",
+    source: Source = "mootdx",
     warmup_days: int = 0,
 ) -> pd.DataFrame:
     """Return latest ``history_days + warmup_days`` daily bars for a market index.
@@ -361,7 +369,7 @@ def fetch_sector_daily(
     history_days: int,
     cache_dir: str | Path,
     force_refresh: bool = False,
-    source: Source = "akshare",
+    source: Source = "mootdx",
     warmup_days: int = 0,
 ) -> pd.DataFrame:
     """Return latest ``history_days + warmup_days`` daily bars for an industry sector board.

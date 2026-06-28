@@ -299,6 +299,47 @@ class EqualWeighterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class HalfLifeICWeighterConfig(BaseModel):
+    """Half-life IC weighter (per-day cross-sectional IC + exp decay).
+
+    ``halflife`` = number of business-day positions in the training window over
+    which an IC observation's weight decays by 2× (Barra convention,
+    common values 30–120 days). Requires pooled cross-sectional input.
+    """
+    model_config = ConfigDict(extra="forbid")
+    halflife: float = Field(default=60.0, gt=0.0)
+    use_rank: bool = True
+    min_stocks_per_day: int = Field(default=10, ge=4)
+    min_abs_ic: float = Field(default=0.0, ge=0.0)
+
+
+class SharpeWeighterConfig(BaseModel):
+    """Sharpe weighter hyperparameters.
+
+    For each factor, build a cross-sectional quantile long-short portfolio
+    (long top ``quantile``, short bottom ``quantile``) per training date,
+    score factors by ``mean(daily_LS) / std(daily_LS)``, sign-preserving
+    L1-normalised. Requires pooled cross-sectional data (MultiIndex with
+    'date' level).
+    """
+    model_config = ConfigDict(extra="forbid")
+    quantile: float = Field(default=0.2, gt=0.0, lt=0.5)
+    min_stocks_per_day: int = Field(default=10, ge=4)
+    min_valid_days: int = Field(default=5, ge=2)
+    min_abs_sharpe: float = Field(default=0.0, ge=0.0)
+
+
+class RidgeWeighterConfig(BaseModel):
+    """L2-regularised linear regression weighter.
+
+    ``alpha=0`` reduces to plain OLS. Pipeline standardises X first, so
+    ``alpha`` is on the standardised scale; sensible range 0.1–10.
+    """
+    model_config = ConfigDict(extra="forbid")
+    alpha: float = Field(default=1.0, ge=0.0)
+    fit_intercept: bool = False
+
+
 class LightGBMWeighterConfig(BaseModel):
     """LightGBM weighter hyperparameters. Defaults match LightGBMSelectorConfig."""
     model_config = ConfigDict(extra="forbid")
@@ -323,10 +364,17 @@ class WeighterConfig(BaseModel):
     via ``type: lightgbm``.
     """
     model_config = ConfigDict(extra="forbid")
-    type: Literal["ic", "ir", "equal", "lightgbm"] = "ic"
+    type: Literal[
+        "ic", "ir", "equal", "sharpe", "halflife_ic", "ridge", "lightgbm",
+    ] = "ic"
     ic: ICWeighterConfig = Field(default_factory=ICWeighterConfig)
     ir: IRWeighterConfig = Field(default_factory=IRWeighterConfig)
     equal: EqualWeighterConfig = Field(default_factory=EqualWeighterConfig)
+    sharpe: SharpeWeighterConfig = Field(default_factory=SharpeWeighterConfig)
+    halflife_ic: HalfLifeICWeighterConfig = Field(
+        default_factory=HalfLifeICWeighterConfig,
+    )
+    ridge: RidgeWeighterConfig = Field(default_factory=RidgeWeighterConfig)
     lightgbm: LightGBMWeighterConfig = Field(default_factory=LightGBMWeighterConfig)
 
 

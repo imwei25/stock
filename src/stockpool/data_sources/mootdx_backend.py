@@ -52,12 +52,59 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _offset_for_start(start: str | None) -> int:
+    """Estimate trading bars needed from ``start`` to today.
+
+    Returns the *unbounded* bar count (no _MAX_BARS_PER_CALL cap). Callers
+    decide whether to single-call (≤ 800) or paginate (> 800).
+    """
     if start is None:
         return _MAX_BARS_PER_CALL
     days_back = (pd.Timestamp.today().normalize() - pd.to_datetime(start)).days
     # 日历日 → 交易日的粗估 (~0.7 倍) + 缓冲
     est_bars = int(days_back * 0.75) + 10
-    return max(5, min(est_bars, _MAX_BARS_PER_CALL))
+    return max(5, est_bars)
+
+
+def _pages_for_total(total_bars_target: int) -> int:
+    """Number of paginated mootdx calls needed to cover ``total_bars_target`` bars.
+
+    mootdx caps each call to 800 bars; the ``start`` parameter shifts the window
+    backwards by N bars. Pulling 15 yrs (~3750 bars) → 5 pages.
+    """
+    import math
+    return max(1, math.ceil(total_bars_target / _MAX_BARS_PER_CALL))
+
+
+def _fetch_paginated(code: str, n_pages: int) -> pd.DataFrame:
+    """Concat N pages of mootdx bars back-to-back to bypass the 800-bar cap.
+
+    Pages: start ∈ {0, 800, 1600, ..., (N-1)*800}. Each call returns up to 800
+    most-recent bars from that start offset. Older pages may return < 800
+    rows if the symbol's listing predates the cap; those are tolerated.
+    """
+    frames = []
+    last_err: Exception | None = None
+    for page in range(n_pages):
+        start_offset = page * _MAX_BARS_PER_CALL
+        try:
+            raw = _call_with_retry(
+                "bars", symbol=code, frequency=_FREQ_DAILY,
+                offset=_MAX_BARS_PER_CALL, start=start_offset,
+            )
+            frames.append(raw)
+        except Exception as e:  # noqa: BLE001
+            # Older pages frequently return empty for younger listings — that's
+            # expected (the stock simply didn't exist that far back). Only the
+            # first page (most-recent) being empty is a real failure.
+            if page == 0:
+                raise
+            last_err = e
+            log.debug("mootdx page %d (start=%d) for %s empty/failed: %s",
+                      page, start_offset, code, e)
+            break
+    if not frames:
+        raise last_err or RuntimeError(f"no pages returned for {code}")
+    return pd.concat(frames, ignore_index=True)
 
 
 def _call_with_retry(method_name: str, *args, **kwargs):
@@ -85,12 +132,18 @@ def _call_with_retry(method_name: str, *args, **kwargs):
 def fetch_stock(code: str, start: str | None = None) -> pd.DataFrame:
     """拉 A 股日线 (前复权语义未处理: mootdx bars 返回不复权价)。
 
+    单次 mootdx 调用上限 800 bar;当 ``start`` 指向 ~3 年前(对应 > 800 bar)
+    时自动分页(``start`` offset 0/800/1600/…),最多拉到上市起。
+
     Note:
         mootdx 的 bars 默认返回不复权价。本项目使用价格做技术指标(MA/MACD/...)
         和回测,在没有除权事件的票上影响有限;若需精确复权,后续可加 xdxr 处理。
     """
-    offset = _offset_for_start(start)
-    raw = _call_with_retry("bars", symbol=code, frequency=_FREQ_DAILY, offset=offset)
+    target_bars = _offset_for_start(start)  # bars needed from latest back to ``start``
+    if start is None or target_bars <= _MAX_BARS_PER_CALL:
+        raw = _call_with_retry("bars", symbol=code, frequency=_FREQ_DAILY, offset=target_bars)
+    else:
+        raw = _fetch_paginated(code, n_pages=_pages_for_total(target_bars))
     out = _normalize(raw)
     if start is not None:
         out = out[out["date"] >= pd.to_datetime(start)]

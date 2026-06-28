@@ -1,0 +1,58 @@
+# D6: halflife_ic vs sharpe on FULL universe (D4 winner on ab_pool was halflife, +0.09 sharpe).
+# Confirms whether the ab_pool win scales. Run AFTER D3b finishes to free memory.
+# Run: .venv/Scripts/python.exe -m stockpool portfolio-ab --config docs/improvement_loop/configs/D6_halflife_vs_sharpe_full.yaml --workers 6
+base_config: ../../../config.yaml
+use_ab_pool: false
+
+arms:
+  weighter_sharpe:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: sharpe
+          sharpe: {quantile: 0.2, min_stocks_per_day: 10, min_valid_days: 5, min_abs_sharpe: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+        preprocess:
+          winsorize: [0.01, 0.99]
+          zscore: true
+          industry_neutralize: false
+
+  weighter_halflife_ic:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso: {alpha: 0.001, max_iter: 1000, tol: 1.0e-6}
+        weighter:
+          type: halflife_ic
+          halflife_ic: {halflife: 60.0, use_rank: true, min_stocks_per_day: 10, min_abs_ic: 0.0}
+        thresholds: {strong_buy: 0.90, buy: 0.70, sell: 0.30, strong_sell: 0.10}
+        buy_verdicts:     ["buy", "strong_buy"]
+        sell_verdicts:    ["sell", "strong_sell"]
+        refresh_verdicts: ["strong_buy"]
+        preprocess:
+          winsorize: [0.01, 0.99]
+          zscore: true
+          industry_neutralize: false

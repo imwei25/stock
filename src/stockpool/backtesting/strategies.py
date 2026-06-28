@@ -31,7 +31,8 @@ from stockpool.ml.dataset import (
 from stockpool.ml.pipeline import TwoStepPipeline
 from stockpool.ml.selectors import FactorSelector, LassoSelector, LightGBMSelector
 from stockpool.ml.weighters import (
-    EqualWeighter, FactorWeighter, ICWeighter, IRWeighter, LightGBMWeighter,
+    EqualWeighter, FactorWeighter, HalfLifeICWeighter, ICWeighter, IRWeighter,
+    LightGBMWeighter, RidgeWeighter, SharpeWeighter,
 )
 from stockpool.signals import (
     Trigger, combine_daily_weekly, detect_signals, score_triggers, verdict_of,
@@ -260,6 +261,25 @@ def _build_weighter(cfg) -> FactorWeighter:
         )
     if cfg.type == "equal":
         return EqualWeighter()
+    if cfg.type == "sharpe":
+        return SharpeWeighter(
+            quantile=cfg.sharpe.quantile,
+            min_stocks_per_day=cfg.sharpe.min_stocks_per_day,
+            min_valid_days=cfg.sharpe.min_valid_days,
+            min_abs_sharpe=cfg.sharpe.min_abs_sharpe,
+        )
+    if cfg.type == "halflife_ic":
+        return HalfLifeICWeighter(
+            halflife=cfg.halflife_ic.halflife,
+            use_rank=cfg.halflife_ic.use_rank,
+            min_stocks_per_day=cfg.halflife_ic.min_stocks_per_day,
+            min_abs_ic=cfg.halflife_ic.min_abs_ic,
+        )
+    if cfg.type == "ridge":
+        return RidgeWeighter(
+            alpha=cfg.ridge.alpha,
+            fit_intercept=cfg.ridge.fit_intercept,
+        )
     if cfg.type == "lightgbm":
         c = cfg.lightgbm
         return LightGBMWeighter(

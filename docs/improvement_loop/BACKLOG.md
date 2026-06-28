@@ -78,6 +78,56 @@
 - **L3 — workaround 生效**:industry_map 缓存 touch 续命,离线复用功能正常(分类月度稳定)。
   baostock 黑名单 + 早前 akshare 连接中断 → 暂不强刷;blacklist 解除后可真正 refresh。
 
+## 2026-06-28 — Sharpe weighter 验证 + 数据扩展过程中的 follow-ups
+
+> 上下文:试图把 weighter 从 `ic` 切到 `sharpe`。Layer D 显示 ΔSharpe +0.117 但
+> bootstrap CI 含 0 + 子段反转(NOT CONFIRMED)。扩 cache 到 15-yr,Layer B 在
+> top1000 上 3533 日 IC 配对检验也 NOT CONFIRMED(且方向反过来 IC 略胜,详见 WORKLOG
+> "D3-Layer-B")。期间发现 + 留下若干技术债。
+
+### TODO — 技术债 follow-ups
+
+- [ ] **F1 — 修 portfolio_ab runner 在 15-yr scale 上的死锁 bug**
+  - 详见 `docs/handoff/2026-06-28-portfolio-ab-15yr-deadlock.md`
+  - 100% 复现:`ab_significance.py --full-market` 或 `portfolio-ab` 跑 15-yr 数据,
+    `precompute_scores_from_legacy` 100% 后 main + workers 全部 idle、RSS 不释放、半小时不动。
+  - 绕过工具已就位(`layer_b_direct.py`),但 Layer D portfolio Sharpe AB 仍**不可用**。
+  - 排查路径(在 handoff 里):加 DBG 探针定位卡点 / `py-spy dump` 拿栈 / 怀疑 Pool teardown +
+    大 DataFrame 引用同时持有触发的死锁。
+  - 修完验证:跑 D3b full-universe AB 应正常完成。
+
+- [ ] **F2 — `.data_source` marker 并发 race condition**
+  - `fetch-universe --workers 8` 时频繁 `Data source changed (cache=mootdx → cfg=mootdx)`
+    误报(两边都是 mootdx 但还是触发 force_refresh)。
+  - 原因:8 个 worker 没锁地读 / 写 `data/.data_source`,中间瞬态出现空内容被判定为不同。
+  - **实际无害**(都强刷同一 source,没有源混淆),只是日志吵 + 多触发一次重抓。
+  - 修法:`check_source_change` / `update_source_marker` 加 fcntl/msvcrt 文件锁,
+    或简化成 idempotent 写入(只写不读)。
+
+- [ ] **F3 — 15-yr × full universe 下 ~1% 股票 OOM 跳过**
+  - 6 workers + 15-yr × 4400 stocks 时,每 worker 内 `generate_signals` 分配
+    `(20, 3769, 4400)` = 2.47 GiB array,内存压力下 ~34/4400 (<1%) 触发
+    `Unable to allocate` 被自动 skip。
+  - 不致命,但说明 score precompute 在 15-yr × 4400 边界吃紧。降低
+    `--workers` 到 3 即可(score 阶段单进程吃约 5 GB)。
+  - 长期修法:在 `generate_signals` 内对大 panel 操作分块,或让 worker 共享
+    panel 而不是 pickle 副本。
+
+### TODO — 方法学 / 研究 follow-ups
+
+- [ ] **F4 — Sharpe weighter 作为 regime-conditional alpha**
+  - Layer B 子段分析显示 sharpe 在 2022-2024(平台监管 / 退市新规)t=+2.73 显著占优,
+    在 2015-06~2016-02(杠杆崩盘 + 熔断)t=-2.79 显著吃亏 → **typical regime-conditional**。
+  - 不是适合替换 default 的"普适改进",但可作 ensemble 输入:动态 / regime-aware 选择
+    IC vs Sharpe weighter。
+  - 设计草案:用波动率分位 / dispersion 分位做 regime detector(避免事件日期硬编码),
+    在 detected regime 内选最优 weighter。这是新研究方向,不是 weighter 替换。
+
+- [ ] **F5 — `layer_b_direct.py` 工具化**
+  - 当前在 `docs/improvement_loop/analysis/`,只在循环内部用。
+  - 如果 F1 一直没修,这工具实质成为 Layer-D-不可用时的主路径,值得 promote 到
+    `src/stockpool/` 顶层或写入 `CLAUDE.md` 文档。
+
 ## 已知遗留问题 (leftover issues) — 原始登记
 - [ ] L1 — `data/ab_pool.parquet` 构建时 baostock 登录失败,跳过了 IPO 硬过滤;
   池里可能含极近 IPO 新股。两 arm 同池故 AB 公平,但绝对收益偏乐观。
