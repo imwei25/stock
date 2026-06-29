@@ -499,6 +499,13 @@ def isolated_cache_two_stocks(tmp_path, monkeypatch):
     cache_last = pd.date_range("2024-01-02", periods=220, freq="B")[-1]
     fresh_today = pd.Timestamp(cache_last) + pd.Timedelta(days=1)
     monkeypatch.setattr("stockpool.fetcher._today", lambda: fresh_today)
+    # Seed a cached industry map so prepare_pool's load_or_build_industry_map
+    # reads the cache instead of fetching from baostock/akshare — otherwise an
+    # offline run hangs for minutes on connection-retry timeouts (the real
+    # cause of this file's "slow" integration tests).
+    pd.DataFrame(
+        {"code": ["605589", "300750"], "industry": ["白酒", "电池"]}
+    ).to_parquet(cache_dir / "stock_industry_map.parquet", index=False)
     return cache_dir
 
 

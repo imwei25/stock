@@ -31,6 +31,12 @@ def isolated_cache(tmp_path, monkeypatch):
         "volume": rng.integers(500_000, 5_000_000, n).astype(float),
     })
     df.to_parquet(cache_dir / "605589_daily.parquet", index=False)
+    # Seed a cached industry map so the ml_factor backtest's
+    # load_or_build_industry_map reads cache instead of hanging for minutes on
+    # offline baostock/akshare connection retries.
+    pd.DataFrame(
+        {"code": ["605589", "000001"], "industry": ["白酒", "银行"]}
+    ).to_parquet(cache_dir / "stock_industry_map.parquet", index=False)
     return cache_dir
 
 

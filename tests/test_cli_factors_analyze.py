@@ -34,6 +34,13 @@ def isolated_cache(tmp_path):
             "volume": rng.integers(500_000, 5_000_000, n).astype(float),
         })
         df.to_parquet(cache_dir / f"{code}_daily.parquet", index=False)
+    # Seed a cached industry map so `factors analyze` reads cache instead of
+    # hanging on offline baostock/akshare retries when building the
+    # industry_relative_strength factor's sector_map.
+    pd.DataFrame({
+        "code": ["605589", "603986", "000528"],
+        "industry": ["化工", "半导体", "工程机械"],
+    }).to_parquet(cache_dir / "stock_industry_map.parquet", index=False)
     return cache_dir
 
 

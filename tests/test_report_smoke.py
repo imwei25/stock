@@ -140,6 +140,14 @@ report: {{output_dir: "{out_dir}", keep_history: true, klines_to_show: 120}}
 """, encoding="utf-8")
 
     monkeypatch.chdir(tmp_path)
+    # Seed a cached industry map under the cwd-relative cache dir so Pool B's
+    # load_or_build_industry_map reads cache instead of hanging on offline
+    # baostock/akshare retries.
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    pd.DataFrame(
+        {"code": ["605589"], "industry": ["化工"]}
+    ).to_parquet(data_dir / "stock_industry_map.parquet", index=False)
 
     rng = np.random.default_rng(7)
     close = 10 + np.cumsum(rng.normal(0.02, 0.3, 200))
