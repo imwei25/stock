@@ -6,6 +6,19 @@
 
 ---
 
+> **更新 2026-06-28(follow-up F1)**:已做 **reasoned hardening + 可观测性**,但**未在真
+> 15-yr 数据上复现验证**(需 ~30GB / 重建全量 cache,本会话不可行)。具体:
+> - 根因定位:workers teardown 后仍 alive ⟹ 卡在 `Pool.__exit__`(`with Pool` 用 forcible
+>   `terminate()`)。`src/stockpool/portfolio/scoring.py` 已改为显式 `close()` + `join()`
+>   优雅收尾(结果已 drain,close/join 应立即返回),异常路径 fallback `terminate()`。
+> - `src/stockpool/portfolio_ab/runner.py` 在 to_parquet / strategy ctor 前后加了下文第三节
+>   建议的 `DBG:` 探针。下次全量跑可直接看最后一条 DBG 在哪。
+> - `pytest tests/test_portfolio_scoring.py tests/test_portfolio_ab_runner.py` 全过(无回归)。
+> - **若下次全量跑仍 hang**:看 DBG 探针最后一条 + `py-spy dump --pid <PID>` 拿栈,
+>   按下文第三节继续。修复确认后本文档可删。
+
+---
+
 ## 一、症状
 
 在 `--config docs/improvement_loop/configs/D3b_sharpe_full.yaml` 上跑

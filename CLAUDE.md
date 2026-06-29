@@ -235,7 +235,7 @@ python -m stockpool ab-pool show    # 渲染 reports/ab_pool.html + 浏览器打
 - `recommend_pool/poolb_<content_hash>_<isoyear>w<NN>.parquet` — Pool B 本周排名缓存
 - `ab_pool.parquet` — AB 候选池(`code/name/industry/circ_mv/avg_amount_20d/source_tag/build_date`),`ab-pool build` 生成,静态不变除非 `--refresh`
 - `factor_panels/<sig>/{manifest.json, close.parquet, <factor>.parquet × N}` — ml_factor pooled mode 的因子面板 + close 宽表落盘缓存 (PR-2);sig hash 包含 factors / sorted codes / last_date,任一变化自动失效。回测命令加 `--refresh-factor-panel` 旁路
-- `.data_source` — 单行文本,记录上次写入该 cache_dir 的 source(`mootdx`/`baostock`/`akshare`);任何 `fetch_*` 启动时与 cfg.data.source 比对,不一致触发 force_refresh + 覆写
+- `.data_source` — 单行文本,记录上次写入该 cache_dir 的 source(`mootdx`/`baostock`/`akshare`);任何 `fetch_*` 启动时与 cfg.data.source 比对,不一致触发 force_refresh + 覆写。**写入是 idempotent + atomic**(2026-06-28 F2):`update_source_marker` 同 source 直接跳过写,需写时走 temp + `os.replace` 原子落盘(Windows 并发 replace 的 `ERROR_ACCESS_DENIED` 当良性吞掉,因所有 racer 写同值);`check_source_change` 把空/纯空白内容当"无变化"。修了 `fetch-universe --workers 8` 时 8 线程各自经 `fetch_daily` 重写 marker、瞬态空文件被误判为 source 切换而虚报 force_refresh 的 race
 
 报告:
 - 日报:`reports/<YYYY-MM-DD>.html` + `reports/latest.html`
@@ -401,6 +401,35 @@ strategy:
   ml_factor:
     factors_file: reports/selection.json   # 与 factors: [...] 二选一
 ```
+
+## 改进循环分析工具 (`docs/improvement_loop/analysis/`)
+
+自驱改进循环(`/loop`)用的离线分析脚本,**不是** `src/stockpool/` 公开 API,用
+`.venv/Scripts/python.exe docs/improvement_loop/analysis/<x>.py --config <yaml>` 直接跑:
+
+- **`ab_significance.py`** — 给一个 portfolio-AB config 跑两 arm,再用 noise-aware 统计判优:
+  M2 paired block-bootstrap 95% CI for ΔSharpe / M3 子段符号一致性(halves+thirds,可加
+  `--subperiods 5,8` / `--regime-boundaries`)/ M4 arm 有效性 guard。判 CONFIRMED 当且仅当
+  点 ΔSharpe ≥ +0.10 **且** CI 排除 0 **且** 子段符号一致 **且** 两 arm 都有效。**Layer D**
+  (组合 Sharpe AB)主路径,但在 15-yr 数据上会触发 F1 死锁(见下)。
+- **`layer_b_direct.py`** — **Layer B**(daily 截面 IC)显著性工具,**绕过 `run_portfolio_ab`**
+  直接调 `precompute_scores_from_legacy` + 自算 per-day rank IC + paired block-bootstrap。
+  在 `run_portfolio_ab` 的 15-yr 死锁(F1)修复前,这是 15-yr 数据下唯一能跑通的显著性路径
+  (够做 weighter / 因子集的 IC 配对检验,**不够**做组合 Sharpe AB)。daily IC 比组合 Sharpe
+  功率更高(T=数千日 vs 数百 bar)。
+- **判定硬化标准**见 `docs/improvement_loop/METHODOLOGY.md`:点估计 + CI 排除 0 + 子段符号一致
+  三者皆满足才采纳;regime 子段必须用 expanding 分位或事后划分**双重**验证防过拟合。
+
+**15-yr scale 已知问题**(`docs/handoff/2026-06-28-portfolio-ab-15yr-deadlock.md`):
+- **F1 死锁**:`portfolio_ab` runner 在 15-yr × ≥1000 票上 `precompute_scores_from_legacy`
+  跑完后 hang(workers 不退、RSS 不释放)。**根因未在 3-yr 复现**,定位为 `multiprocessing.Pool`
+  teardown:`scoring.py` 已把 `with Pool(...)`(__exit__ 走 forcible `terminate()`)改成显式
+  `close()` + `join()` 优雅收尾 + 异常时 fallback `terminate()`;`runner.py` 在 to_parquet /
+  strategy ctor 前后加了 `DBG:` 探针,下次全量跑可定位残留卡点。**未在真 15-yr 数据上验证**
+  (需 ~30GB / 重建全量 cache),改动是 reasoned hardening + 可观测性,不是已验证的根因修复。
+- **F3 worker OOM**:15-yr × 4400 票 × 6 workers 时每 worker 分配 `(20,3769,4400)` ≈ 2.5GiB
+  数组,<1% 股触发 `Unable to allocate` 被自动 skip。降 `--workers 3`(score 阶段单进程 ~5GB)
+  规避;`precompute_scores_from_legacy` 的 auto 默认已 `min(3, cpu-1)`。
 
 ## 已知不支持的能力
 

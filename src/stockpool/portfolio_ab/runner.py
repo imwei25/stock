@@ -212,14 +212,22 @@ def run_single_arm(
             )
             if score_panel.empty:
                 raise RuntimeError("score panel is empty — all stocks failed")
+            # DBG probes (F1): the 15-yr deadlock manifested *after* precompute
+            # returned, with no parquet written. These step-level logs let the
+            # next full-scale run pinpoint exactly which line wedges. See
+            # docs/handoff/2026-06-28-portfolio-ab-15yr-deadlock.md.
+            log.info("[%s] DBG: pre to_parquet (panel %s)", arm_name, score_panel.shape)
             score_panel.to_parquet(score_path)
+            log.info("[%s] DBG: post to_parquet -> %s", arm_name, score_path)
 
         if score_memo is not None:
             score_memo[cache_key] = score_panel
 
+        log.info("[%s] DBG: pre PrecomputedScoreStrategy ctor", arm_name)
         portfolio_strat = PrecomputedScoreStrategy(
             score_panel, name=effective_cfg.strategy.name,
         )
+        log.info("[%s] DBG: post strategy ctor -> building engine", arm_name)
         eligibility = EligibilityFilter(
             effective_cfg.portfolio_backtest.eligibility, name_map=name_map,
         )

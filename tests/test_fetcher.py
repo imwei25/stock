@@ -222,6 +222,55 @@ def test_update_source_marker_overwrites(tmp_path):
     assert (tmp_path / ".data_source").read_text(encoding="utf-8").strip() == "baostock"
 
 
+def test_check_source_change_empty_marker_is_no_change(tmp_path):
+    """F2: a transiently-empty marker (concurrent mid-write) must NOT be read
+    as a source switch — else parallel fetch_universe workers spuriously
+    force-refresh with a 'cache=<empty> → cfg=mootdx' warning."""
+    (tmp_path / ".data_source").write_text("   ", encoding="utf-8")
+    assert check_source_change(tmp_path, "mootdx") is False
+
+
+def test_update_source_marker_idempotent_no_rewrite(tmp_path):
+    """F2: re-marking the same source is a no-op (steady state has zero writes
+    to race on). We assert the file mtime is unchanged across a second call."""
+    update_source_marker(tmp_path, "mootdx")
+    marker = tmp_path / ".data_source"
+    mtime_before = marker.stat().st_mtime_ns
+    update_source_marker(tmp_path, "mootdx")
+    assert marker.stat().st_mtime_ns == mtime_before
+
+
+def test_update_source_marker_leaves_no_tmp_files(tmp_path):
+    """F2: atomic write must not leave stray .tmp scratch files behind."""
+    update_source_marker(tmp_path, "mootdx")
+    update_source_marker(tmp_path, "baostock")
+    leftovers = list(tmp_path.glob(".data_source.*.tmp"))
+    assert leftovers == []
+
+
+def test_update_source_marker_concurrent_no_spurious_change(tmp_path):
+    """F2 regression: hammer update + check from many threads on one source.
+    With atomic os.replace, a concurrent reader never sees a truncated file,
+    so check_source_change must stay False throughout (no false 'change')."""
+    import threading as _t
+
+    errors: list[str] = []
+
+    def worker():
+        for _ in range(50):
+            update_source_marker(tmp_path, "mootdx")
+            if check_source_change(tmp_path, "mootdx"):
+                errors.append("spurious source change observed")
+
+    threads = [_t.Thread(target=worker) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert errors == []
+    assert (tmp_path / ".data_source").read_text(encoding="utf-8").strip() == "mootdx"
+
+
 def test_fetch_daily_auto_refresh_on_source_change(tmp_path):
     """If the cache was last filled by a different source, fetch_daily must
     bypass the cache even when the caller didn't pass force_refresh."""

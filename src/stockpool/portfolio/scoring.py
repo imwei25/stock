@@ -349,11 +349,22 @@ def precompute_scores_from_legacy(
         from stockpool.factors.context import get_sector_map
         parent_sector_map = get_sector_map()
         checkpoint("before Pool() spawn — parent peak before pickle")
-        with Pool(
+        # Explicit lifecycle instead of ``with Pool(...)``. The context-manager
+        # __exit__ calls ``terminate()`` (forcible SIGTERM/TerminateProcess +
+        # join); at 15-yr × 1000+ scale this teardown deadlocked — workers
+        # stayed alive at 0% CPU and the post-block checkpoint was never reached
+        # (see docs/handoff/2026-06-28-portfolio-ab-15yr-deadlock.md). Once all
+        # results are drained, ``close()`` + ``join()`` is the *graceful* path:
+        # workers finish their (already-empty) queue and exit on their own, which
+        # avoids terminate()'s forcible-kill join hang. On any error we still
+        # fall back to terminate() so a genuinely stuck worker can't wedge us
+        # forever.
+        pool = Pool(
             processes=n_workers,
             initializer=_worker_init,
             initargs=(legacy_strategy, parent_sector_map),
-        ) as pool:
+        )
+        try:
             checkpoint("Pool() spawned — workers initialised")
             for code, series, err in pool.imap_unordered(_score_one_stock, tasks):
                 if err is not None:
@@ -362,8 +373,16 @@ def precompute_scores_from_legacy(
                     series_by_code[code] = series
                 if progress is not None:
                     progress.update(1)
-        if progress is not None:
-            progress.close()
+            checkpoint("imap drained — closing pool", extra={"n_done": len(series_by_code)})
+            pool.close()   # no more work will be submitted
+            pool.join()    # graceful drain + worker exit (not forcible terminate)
+        except BaseException:
+            pool.terminate()
+            pool.join()
+            raise
+        finally:
+            if progress is not None:
+                progress.close()
         checkpoint("Pool() exited", extra={"n_done": len(series_by_code)})
 
     if not series_by_code:

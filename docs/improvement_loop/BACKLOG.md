@@ -85,48 +85,42 @@
 > top1000 上 3533 日 IC 配对检验也 NOT CONFIRMED(且方向反过来 IC 略胜,详见 WORKLOG
 > "D3-Layer-B")。期间发现 + 留下若干技术债。
 
-### TODO — 技术债 follow-ups
+### follow-ups 处理状态(2026-06-28 收尾)
 
-- [ ] **F1 — 修 portfolio_ab runner 在 15-yr scale 上的死锁 bug**
-  - 详见 `docs/handoff/2026-06-28-portfolio-ab-15yr-deadlock.md`
-  - 100% 复现:`ab_significance.py --full-market` 或 `portfolio-ab` 跑 15-yr 数据,
-    `precompute_scores_from_legacy` 100% 后 main + workers 全部 idle、RSS 不释放、半小时不动。
-  - 绕过工具已就位(`layer_b_direct.py`),但 Layer D portfolio Sharpe AB 仍**不可用**。
-  - 排查路径(在 handoff 里):加 DBG 探针定位卡点 / `py-spy dump` 拿栈 / 怀疑 Pool teardown +
-    大 DataFrame 引用同时持有触发的死锁。
-  - 修完验证:跑 D3b full-universe AB 应正常完成。
+- [HARDENED] **F1 — portfolio_ab runner 15-yr 死锁**
+  - 定位为 `multiprocessing.Pool` teardown:`with Pool(...)` 的 `__exit__` 走 forcible
+    `terminate()` + join,在 15-yr × ≥1000 票上 hang(workers 不退、RSS 不释放,
+    post-block checkpoint 从未到达 → 卡在 `__exit__`)。
+  - **改动**:`portfolio/scoring.py` 把 `with Pool` 改成显式 `close()` + `join()` 优雅收尾
+    (结果已 drain 完,close/join 立即返回),异常路径 fallback `terminate()`;
+    `portfolio_ab/runner.py` 在 to_parquet / strategy ctor 前后加 `DBG:` 探针。
+  - ⚠️ **未在真 15-yr 数据上复现验证**(需 ~30GB / 重建全量 cache)。这是 reasoned
+    hardening + 可观测性提升,非已证根因修复。下次全量跑若仍 hang,DBG 探针 + `py-spy`
+    可定位残留卡点。3-yr 路径 + `pytest tests/test_portfolio_*` 全过(无回归)。
 
-- [ ] **F2 — `.data_source` marker 并发 race condition**
-  - `fetch-universe --workers 8` 时频繁 `Data source changed (cache=mootdx → cfg=mootdx)`
-    误报(两边都是 mootdx 但还是触发 force_refresh)。
-  - 原因:8 个 worker 没锁地读 / 写 `data/.data_source`,中间瞬态出现空内容被判定为不同。
-  - **实际无害**(都强刷同一 source,没有源混淆),只是日志吵 + 多触发一次重抓。
-  - 修法:`check_source_change` / `update_source_marker` 加 fcntl/msvcrt 文件锁,
-    或简化成 idempotent 写入(只写不读)。
+- [DONE] **F2 — `.data_source` marker 并发 race condition**
+  - `update_source_marker` 改为 **idempotent**(同 source 跳过写)+ **atomic**
+    (temp + `os.replace`);Windows 并发 replace 的 `ERROR_ACCESS_DENIED` 当良性吞掉
+    (所有 racer 写同值)。`check_source_change` 把空/空白内容当"无变化"。
+  - 测试:`tests/test_fetcher.py` 加 4 个(空 marker / idempotent no-rewrite / 无残留
+    .tmp / 8 线程并发无虚报)。全过。
 
-- [ ] **F3 — 15-yr × full universe 下 ~1% 股票 OOM 跳过**
-  - 6 workers + 15-yr × 4400 stocks 时,每 worker 内 `generate_signals` 分配
-    `(20, 3769, 4400)` = 2.47 GiB array,内存压力下 ~34/4400 (<1%) 触发
-    `Unable to allocate` 被自动 skip。
-  - 不致命,但说明 score precompute 在 15-yr × 4400 边界吃紧。降低
-    `--workers` 到 3 即可(score 阶段单进程吃约 5 GB)。
-  - 长期修法:在 `generate_signals` 内对大 panel 操作分块,或让 worker 共享
-    panel 而不是 pickle 副本。
+- [MITIGATED] **F3 — 15-yr × full universe ~1% OOM skip**
+  - F1 的 close/join 收尾让 worker RSS 跑完即释放;`precompute_scores_from_legacy`
+    auto 默认已 `min(3, cpu-1)` workers。文档化于 CLAUDE.md「15-yr scale 已知问题」:
+    降 `--workers 3` 规避。长期 panel 分块 / 共享仍未做(ROI 低,非阻塞)。
 
-### TODO — 方法学 / 研究 follow-ups
+### 方法学 / 研究 follow-ups
 
-- [ ] **F4 — Sharpe weighter 作为 regime-conditional alpha**
-  - Layer B 子段分析显示 sharpe 在 2022-2024(平台监管 / 退市新规)t=+2.73 显著占优,
-    在 2015-06~2016-02(杠杆崩盘 + 熔断)t=-2.79 显著吃亏 → **typical regime-conditional**。
-  - 不是适合替换 default 的"普适改进",但可作 ensemble 输入:动态 / regime-aware 选择
-    IC vs Sharpe weighter。
-  - 设计草案:用波动率分位 / dispersion 分位做 regime detector(避免事件日期硬编码),
-    在 detected regime 内选最优 weighter。这是新研究方向,不是 weighter 替换。
+- [DRAFTED] **F4 — Sharpe weighter 作为 regime-conditional alpha**
+  - 设计草案落地:`docs/superpowers/specs/2026-06-28-regime-conditional-weighter-design.md`
+    (expanding 分位 regime detector → 高波动用 IC / 低波动用 Sharpe;两层评估 + 过拟合护栏)。
+  - **未实装**(新研究方向,非 weighter 替换)。default 仍 `ic`。Layer B 先行验证,
+    很可能仍 NOT CONFIRMED → 那就归档草案不进生产。
 
-- [ ] **F5 — `layer_b_direct.py` 工具化**
-  - 当前在 `docs/improvement_loop/analysis/`,只在循环内部用。
-  - 如果 F1 一直没修,这工具实质成为 Layer-D-不可用时的主路径,值得 promote 到
-    `src/stockpool/` 顶层或写入 `CLAUDE.md` 文档。
+- [DONE] **F5 — `layer_b_direct.py` 工具化**
+  - 不 promote 到 `src/`(循环专用分析脚本,非公开 API)。改为**文档化**于 CLAUDE.md
+    新增「改进循环分析工具」节(layer_b_direct.py + ab_significance.py + 15-yr 已知问题)。
 
 ## 已知遗留问题 (leftover issues) — 原始登记
 - [ ] L1 — `data/ab_pool.parquet` 构建时 baostock 登录失败,跳过了 IPO 硬过滤;

@@ -16,6 +16,29 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## Follow-up 收尾 — F1-F5 技术债 / 研究方向(2026-06-28)
+- **背景**:D3-Layer-B 收尾后 `BACKLOG.md` 留了 5 个 follow-up(F1 死锁 / F2 marker race /
+  F3 worker OOM / F4 regime weighter / F5 tooling)。本次一并处理。
+- **F1(死锁,HARDENED)**:定位为 `multiprocessing.Pool` teardown —— `with Pool(...)` 的
+  `__exit__` 走 forcible `terminate()`,15-yr × ≥1000 票上 workers 不退、卡在 `__exit__`。
+  `portfolio/scoring.py` 改显式 `close()`+`join()` 优雅收尾(异常 fallback `terminate()`);
+  `portfolio_ab/runner.py` 加 `DBG:` 探针。**未在真 15-yr 数据复现验证**(需 ~30GB),
+  是 reasoned hardening + 可观测性。parallel 路径(25 票 × 2 worker)+ 全测试套件无回归。
+- **F2(marker race,DONE)**:`update_source_marker` 改 idempotent(同 source 跳过)+ atomic
+  (temp + `os.replace`,Windows 并发 replace 的 access-denied 当良性吞);`check_source_change`
+  空内容当无变化。`tests/test_fetcher.py` +4 测试(含 8 线程并发无虚报)。
+- **F3(OOM,MITIGATED)**:close/join 让 worker RSS 跑完即释放 + auto workers 默认 min(3,cpu-1);
+  文档化降 `--workers 3` 规避。panel 分块未做(低 ROI)。
+- **F4(regime weighter,DRAFTED)**:设计草案
+  `docs/superpowers/specs/2026-06-28-regime-conditional-weighter-design.md`(expanding 分位
+  detector → 高波动 IC / 低波动 Sharpe + 两层评估 + 过拟合护栏)。未实装,default 仍 ic。
+- **F5(tooling,DONE)**:不 promote 到 src/(循环专用脚本);CLAUDE.md 新增「改进循环分析工具」
+  节文档化 layer_b_direct.py + ab_significance.py + 15-yr 已知问题。
+- **判定**:技术债清理 + 研究方向归档,**无 config / 基线改动**(default 不变)。
+  L1(baostock 黑名单)/ L2(已 push)/ L3(industry_map 续命)仍是外部网络项,非本次范围。
+
+---
+
 ## D3-Layer-B — weighter ic vs sharpe @ 15-yr × top1000 (Layer B daily IC)
 - **日期**:2026-06-28 · 配置 `docs/improvement_loop/configs/D3b_sharpe_full.yaml`
   · 工具 `docs/improvement_loop/analysis/layer_b_direct.py`(绕过 portfolio_ab runner 死锁)

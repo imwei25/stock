@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Literal
@@ -88,12 +90,59 @@ def check_source_change(cache_dir: str | Path, source: Source) -> bool:
         prev = marker.read_text(encoding="utf-8").strip()
     except OSError:
         return False
+    # Empty / whitespace-only content means a concurrent writer was mid-write
+    # (or a previous run was interrupted), NOT a genuine source switch. Treat
+    # it as "no change" so parallel ``fetch_universe`` workers don't spuriously
+    # report ``cache=<empty> → cfg=mootdx`` and force needless full refreshes.
+    if not prev:
+        return False
     return prev != source
 
 
 def update_source_marker(cache_dir: str | Path, source: Source) -> None:
+    """Record ``source`` as the writer of this cache dir, atomically.
+
+    Concurrency-safe: ``fetch_universe`` fans out 8 worker threads, each of
+    which calls this through ``fetch_daily``. A naive ``write_text`` truncates
+    then writes, exposing a brief empty-file window that a concurrent
+    ``check_source_change`` reader would mis-read as a source change. We avoid
+    that two ways:
+
+    * **idempotent** — skip the write entirely when the marker already matches
+      (the common case after the first writer), so steady-state has zero
+      writes to race on;
+    * **atomic** — when a write is needed, write to a unique temp file then
+      ``os.replace`` it into place, so readers only ever observe the old or new
+      complete content, never a truncated one.
+    """
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    _source_marker_path(cache_dir).write_text(source, encoding="utf-8")
+    marker = _source_marker_path(cache_dir)
+    try:
+        if marker.exists() and marker.read_text(encoding="utf-8").strip() == source:
+            return
+    except OSError:
+        pass  # fall through to (re)write
+    tmp = marker.with_name(f".data_source.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(source, encoding="utf-8")
+        os.replace(tmp, marker)  # atomic on POSIX and Windows (same volume)
+    except OSError:
+        # Windows ``os.replace`` raises ERROR_ACCESS_DENIED when another thread
+        # is renaming onto the same target concurrently. Because every racer
+        # writes the *same* ``source`` (the marker is idempotent), losing the
+        # race is harmless — the winner already wrote identical content. Only
+        # re-raise if the marker somehow ended up with the wrong value.
+        try:
+            current = marker.read_text(encoding="utf-8").strip() if marker.exists() else None
+        except OSError:
+            current = None
+        if current != source:
+            raise
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)  # no-op if replace already consumed it
+        except OSError:
+            pass
 
 
 def validate_ohlcv(df: pd.DataFrame) -> list[str]:
