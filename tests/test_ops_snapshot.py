@@ -114,7 +114,9 @@ def test_factor_matches_snapshot(
         pytest.skip(f"factor {factor_name} not in snapshot — regenerate fixture")
     f = make_factor(factor_name)
     wide = f.compute(panel)
-    actual_long = wide.stack(dropna=False)
+    # pandas 3.0 removed ``stack(dropna=...)``; the new implementation keeps
+    # NaN cells (== old ``dropna=False``) and ``future_stack=True`` selects it.
+    actual_long = wide.stack(future_stack=True)
     exp = expected[factor_name]
     # Align actual to the snapshot's (date, code) index ordering
     actual = actual_long.reorder_levels(["date", "code"]).reindex(exp.index)

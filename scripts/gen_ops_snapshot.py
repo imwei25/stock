@@ -71,8 +71,8 @@ def panel_to_long(panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Stack OHLCV wide frames into one long DataFrame for parquet storage."""
     parts = []
     for field, wide in panel.items():
-        # TODO(pandas>=2.1): switch to future_stack=True once we pin pandas minor.
-        long = wide.stack(dropna=False).rename(field).reset_index()
+        # pandas 3.0: ``dropna`` removed from stack; ``future_stack=True`` keeps NaN.
+        long = wide.stack(future_stack=True).rename(field).reset_index()
         long.columns = ["date", "code", field]
         long = long.set_index(["date", "code"])
         parts.append(long)
@@ -111,8 +111,8 @@ def main() -> int:
     for name in tqdm(factor_names, desc="factors", unit="factor"):
         f = make_factor(name)
         wide = f.compute(panel)
-        # TODO(pandas>=2.1): switch to future_stack=True once we pin pandas minor.
-        long = wide.stack(dropna=False).rename("value").reset_index()
+        # pandas 3.0: ``dropna`` removed from stack; ``future_stack=True`` keeps NaN.
+        long = wide.stack(future_stack=True).rename("value").reset_index()
         long.columns = ["date", "code", "value"]
         long["factor"] = name
         snapshot_parts.append(long[["factor", "date", "code", "value"]])
