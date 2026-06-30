@@ -6,8 +6,25 @@
 
 ---
 
-> **更新 2026-06-28(follow-up F1)**:已做 **reasoned hardening + 可观测性**,但**未在真
-> 15-yr 数据上复现验证**(需 ~30GB / 重建全量 cache,本会话不可行)。具体:
+> **更新 2026-06-30(F1 验证完成 — 含根因)**:重抓 15-yr cache(mootdx,4396 票,
+> T=3769)后实测,结论:
+> - **根因 = 内存耗尽,不是 Pool teardown API bug**。本机只有 **31.7GB RAM**。15-yr ×
+>   4601 票场景:factor panel(~5GB)+ pooled_xy + 每 worker pickle 整个 strategy
+>   (~6GB)→ workers=6 直接超 32GB,在 **prewarm 阶段就被 OS OOM-kill**(无 Python
+>   traceback,faulthandler 停在 `_build_pooled_xy_from_panel`)。原 handoff 症状
+>   "workers idle / RSS 不释放 / 永久 hang" 正是 **worker 被 OOM-kill / 系统 thrash →
+>   Pool imap/teardown 卡死** 的典型签名。即这是 **F3(内存)问题**,teardown 改动是
+>   附带正确性提升,不是触发死锁的那一行。
+> - **teardown 修复在 15-yr 深度(T=3769)已验证可用**:用**内存安全**变体
+>   (500-票训练池 + 250-票组合 universe + workers=3,装得下 32GB)实跑 `run_single_arm`,
+>   **1064s 干净返回**(14000 trades,引擎跑完,无 hang)。faulthandler 栈确认走了真正的
+>   `multiprocessing.Pool`(3 worker × `_score_one_stock` + 主进程 `imap_unordered`)
+>   并完成 close/join teardown。验证脚本:`scratchpad/verify_deadlock_fix.py`。
+> - **能否在本机跑全 15-yr × 4601?不能** —— 超 32GB RAM,与 teardown 修复无关。要跑全
+>   universe 需:(a) 更大内存的机器,或 (b) 降 workers + 让 worker 共享 panel 而非各自
+>   pickle 副本(F3 的长期修法),或 (c) 用 ~500-1000 票子集(装得下)。
+>
+> 早前的 hardening 记录(仍有效):
 > - 根因定位:workers teardown 后仍 alive ⟹ 卡在 `Pool.__exit__`(`with Pool` 用 forcible
 >   `terminate()`)。`src/stockpool/portfolio/scoring.py` 已改为显式 `close()` + `join()`
 >   优雅收尾(结果已 drain,close/join 应立即返回),异常路径 fallback `terminate()`。

@@ -87,16 +87,20 @@
 
 ### follow-ups 处理状态(2026-06-28 收尾)
 
-- [HARDENED] **F1 — portfolio_ab runner 15-yr 死锁**
-  - 定位为 `multiprocessing.Pool` teardown:`with Pool(...)` 的 `__exit__` 走 forcible
-    `terminate()` + join,在 15-yr × ≥1000 票上 hang(workers 不退、RSS 不释放,
-    post-block checkpoint 从未到达 → 卡在 `__exit__`)。
-  - **改动**:`portfolio/scoring.py` 把 `with Pool` 改成显式 `close()` + `join()` 优雅收尾
-    (结果已 drain 完,close/join 立即返回),异常路径 fallback `terminate()`;
-    `portfolio_ab/runner.py` 在 to_parquet / strategy ctor 前后加 `DBG:` 探针。
-  - ⚠️ **未在真 15-yr 数据上复现验证**(需 ~30GB / 重建全量 cache)。这是 reasoned
-    hardening + 可观测性提升,非已证根因修复。下次全量跑若仍 hang,DBG 探针 + `py-spy`
-    可定位残留卡点。3-yr 路径 + `pytest tests/test_portfolio_*` 全过(无回归)。
+- [VERIFIED — 根因=内存] **F1 — portfolio_ab runner 15-yr 死锁**
+  - **2026-06-30 实测根因**:本机 **31.7GB RAM**。15-yr × 4601 票 × workers≥3 的内存
+    footprint(factor panel ~5GB + pooled_xy + 每 worker pickle 整 strategy ~6GB)超 32GB
+    → worker 在 prewarm 就被 **OS OOM-kill**(无 traceback)。原 "workers idle / RSS 不释放 /
+    hang" 症状 = worker 被 OOM-kill / thrash → Pool imap/teardown 卡死。**这是 F3(内存)
+    问题,不是 teardown API bug**。
+  - **teardown 修复(close/join 替 forcible terminate)在 15-yr 深度 T=3769 已验证可用**:
+    内存安全变体(500 训练池 + 250 组合 universe + workers=3)实跑 `run_single_arm`
+    **1064s 干净返回**(14000 trades,引擎跑完);faulthandler 栈确认真正走了 3-worker
+    `multiprocessing.Pool` + close/join teardown,无 hang。详见 handoff 文档。
+  - **能否本机跑全 15-yr × 4601?不能**(超 RAM,与修复无关)。需更大内存机 / worker 共享
+    panel(F3 长期修法)/ 用 ≤1000 票子集。
+  - 改动:`portfolio/scoring.py` 显式 close/join + terminate fallback;`runner.py` DBG 探针。
+    `pytest tests/test_portfolio_*` + 全套 1119 passed,无回归。
 
 - [DONE] **F2 — `.data_source` marker 并发 race condition**
   - `update_source_marker` 改为 **idempotent**(同 source 跳过写)+ **atomic**
