@@ -47,7 +47,19 @@ promote 覆盖 selection.json 后变成"自己比自己"(重跑 ΔIC +0.00002 �
 → 旧全清仓成本模型确实在给"高换手 arm"系统性罚分,过往所有换手相关 AB(L_rebal/L_h10d/MVO
 换手优势)的结论都在这个失真下得出,如需引用须重跑。
 
-**进行中(overnight wave,rv_eval_pool=静态1000∪退市244,训练池含退市,workers=1)**:
+**★ RV wave 第一轮暴露的潜伏 P0 bug(2026-07-03,已修,commit 5152305)**:
+第一轮 wave 里所有含 alpha_083 的因子集,分数在 **2015-07-31 后全 NaN**(current 池 949 天、
+holdout 池 1696 天散点、old 池 3537 天正常)。链条:alpha_083 公式 `.../(vwap−close)` 在
+H==L==C 一字板 bar 除零产出 **inf**(2015-07-13 千股复牌日 122 只);inf 躲过训练 dropna
+(`~isnan` 不筛 inf)毒化 Lasso → 该月 fit 系数 NaN → 全 NaN 预测;当日 inf 占比 ≥1% 时
+winsorize q99 clip 同样失效(分位数本身 inf);退市回填后 `tail(train_window)` 把退市股
+最后 N 行(含毒日)**永久冻结**进其后所有训练集 → 2015-08 起每个月度 fit 都带毒。
+**这不是退市回填引入的 bug,是它揭开的潜伏雷**:旧 universe 下若某日 inf 占比过 1%
+(如 2024-02 微盘千股一字跌停),生产路径同样可能静默毒化当月 fit。
+修复:compute_factor_panel 出口 inf→NaN + stack isfinite 筛 + pooled 训练 trailing-window
+日期下界(三路径一致)+ panel sig v2 / score key v3 全缓存失效。1151 tests passed。
+
+**进行中(overnight wave 第二轮,已含卫生修复,rv_eval_pool=静态1000∪退市244,训练池含退市,workers=1)**:
 ① 时间 hold-out:`holdout_reselect.py`(analyze 截断 ≤2020-12-31 重选池)vs 现池 @ 2021+
    窗口 — 因子集 win 的真 OOS 检验(池两侧时间重叠是它最后一个未排除的偏差源);
 ② 因子集 win 幸存者修正版(退市股进训练横截面 + 评估横截面);
