@@ -164,6 +164,26 @@ def test_funnel_liquidity_threshold(monkeypatch, tmp_path):
     assert "000002" not in codes
 
 
+def test_funnel_drops_stale_delisted(monkeypatch, tmp_path):
+    """A stock whose last bar is far older than the freshest bar in the
+    universe (e.g. a backfilled delisted stock) must not pass the funnel,
+    even if its trailing 20 bars were liquid."""
+    cfg = load_config(_minimal_cfg_yaml(tmp_path))
+    stale = _daily(n=60, volume=500_000)  # very liquid … years ago
+    stale["date"] = stale["date"] - pd.DateOffset(years=2)
+    universe = {
+        "000001": _daily(volume=100_000),
+        "000002": stale,
+    }
+    _patch_data(monkeypatch, universe,
+                names={"000001": "A", "000002": "退市股"},
+                industries={"000001": "X", "000002": "Y"})
+    _patch_strategy(monkeypatch, {"000001": 0.5, "000002": 0.9})
+
+    out = recommend_pool.compute_or_load_pool_b(cfg, date(2026, 5, 4))
+    assert [e.code for e in out] == ["000001"]
+
+
 def test_funnel_drops_st_by_name(monkeypatch, tmp_path):
     cfg = load_config(_minimal_cfg_yaml(tmp_path))
     universe = {

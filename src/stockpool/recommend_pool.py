@@ -151,21 +151,41 @@ def _build_name_map(cache_dir: str | Path) -> dict[str, str]:
         return {}
 
 
+#: Pool B drops stocks whose last cached bar is older than this many days
+#: relative to the freshest bar in the universe. Guards against stale parquets
+#: in the cache dir — most importantly the backfilled *delisted* stocks
+#: (``scripts/fetch_delisted_universe.py``): a stock delisted years ago can
+#: still show 20 liquid trailing bars, and without a recency check it would
+#: sail through the liquidity gate into today's recommendations.
+_MAX_STALE_DAYS = 30
+
+
 def _apply_funnel(
     universe_data: Mapping[str, pd.DataFrame],
     name_map: Mapping[str, str],
     min_avg_amount_20d: float,
 ) -> dict[str, pd.DataFrame]:
-    """Liquidity gate + secondary ST defence.
+    """Liquidity gate + staleness gate + secondary ST defence.
 
     ``list_universe`` already drops ST; we re-check here because
     ``load_universe_cache`` walks the parquet dir which may contain stale
-    files from before a ticker was renamed to ST.
+    files from before a ticker was renamed to ST — or delisted stocks
+    backfilled for survivorship-free backtests (see ``_MAX_STALE_DAYS``).
     """
+    # As-of "today" = freshest bar anywhere in the universe (avoids depending
+    # on the wall clock, which synthetic-data tests monkeypatch away).
+    max_dates = [df["date"].iloc[-1] for df in universe_data.values()
+                 if len(df) and "date" in df.columns]
+    asof = max(max_dates) if max_dates else None
+    stale_cutoff = asof - pd.Timedelta(days=_MAX_STALE_DAYS) if asof is not None else None
+
     out: dict[str, pd.DataFrame] = {}
     for code, daily in universe_data.items():
         if len(daily) < 20:
             continue
+        if stale_cutoff is not None and "date" in daily.columns:
+            if daily["date"].iloc[-1] < stale_cutoff:
+                continue
         name = name_map.get(code, "")
         if "ST" in name.upper():
             continue

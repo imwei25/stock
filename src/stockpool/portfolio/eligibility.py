@@ -77,20 +77,28 @@ class EligibilityFilter:
         # Per-panel precompute cache (keyed by id(panel_data) — the engine reuses
         # the same dict object across all rebalance bars in a run).
         self._cache_key: int | None = None
-        self._cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray | None]] = {}
 
     def eligible(
         self,
         date_t: pd.Timestamp,
         panel_data: Mapping[str, pd.DataFrame],
     ) -> set[str]:
-        """Return the set of codes that pass all three checks at ``date_t``."""
+        """Return the set of codes that pass all checks at ``date_t``.
+
+        With ``top_n_liquidity`` set, the survivors of the boolean checks are
+        additionally ranked by as-of trailing-20-bar avg amount and only the
+        top N kept — a point-in-time liquidity universe with no end-of-period
+        membership look-ahead.
+        """
         date_t = pd.Timestamp(date_t)
         if self._cache_key != id(panel_data):
             self._build_cache(panel_data)
         ts = date_t.value  # int64 nanoseconds
+        top_n = getattr(self.cfg, "top_n_liquidity", None)
         out: set[str] = set()
-        for code, (dates_ns, elig) in self._cache.items():
+        ranked: list[tuple[float, str]] = []
+        for code, (dates_ns, elig, avg20) in self._cache.items():
             if dates_ns.size == 0:
                 continue
             # j = index of the last bar with date <= date_t.
@@ -98,15 +106,26 @@ class EligibilityFilter:
             if j < 0:
                 continue
             if elig[j]:
-                out.add(code)
-        return out
+                if top_n is None:
+                    out.add(code)
+                else:
+                    amt = float(avg20[j]) if avg20 is not None else float("nan")
+                    if not np.isnan(amt):
+                        ranked.append((amt, code))
+        if top_n is None:
+            return out
+        # Deterministic: sort by (-amount, code), keep top N.
+        ranked.sort(key=lambda ac: (-ac[0], ac[1]))
+        return {code for _, code in ranked[:top_n]}
 
     def _build_cache(self, panel_data: Mapping[str, pd.DataFrame]) -> None:
-        cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray | None]] = {}
         min_hist = self.cfg.min_history_bars
         thr = self.cfg.min_avg_amount_20d
+        top_n = getattr(self.cfg, "top_n_liquidity", None)
         check_liq = thr > 0
-        empty = (np.empty(0, dtype="int64"), np.empty(0, dtype=bool))
+        need_amount = check_liq or top_n is not None
+        empty = (np.empty(0, dtype="int64"), np.empty(0, dtype=bool), None)
         for code, daily in panel_data.items():
             if self.cfg.exclude_st and _is_st(self.name_map.get(code, "")):
                 cache[code] = empty
@@ -124,19 +143,21 @@ class EligibilityFilter:
                 cache[code] = empty
                 continue
             hist_ok = np.arange(1, n + 1) >= min_hist
-            if check_liq:
+            avg20: np.ndarray | None = None
+            if need_amount:
                 if "volume" not in daily.columns:
-                    cache[code] = (dates_ns, np.zeros(n, dtype=bool))
+                    cache[code] = (dates_ns, np.zeros(n, dtype=bool), None)
                     continue
                 close = daily["close"].to_numpy(dtype=float)[order]
                 vol = daily["volume"].to_numpy(dtype=float)[order]
                 amount = close * vol * 100.0
                 avg20 = _trailing_mean_20(amount)
+            if check_liq:
                 liq_ok = ~np.isnan(avg20) & (avg20 >= thr)
                 elig = hist_ok & liq_ok
             else:
                 elig = hist_ok
-            cache[code] = (dates_ns, elig)
+            cache[code] = (dates_ns, elig, avg20)
         self._cache = cache
         self._cache_key = id(panel_data)
 

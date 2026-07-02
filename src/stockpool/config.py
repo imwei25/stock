@@ -630,6 +630,11 @@ class PortfolioEligibilityConfig(BaseModel):
     min_avg_amount_20d: float = Field(default=5e7, ge=0.0)
     exclude_st: bool = True
     min_history_bars: int = Field(default=60, ge=1)
+    # As-of dynamic liquidity universe: keep only the top-N codes by trailing
+    # 20-bar avg amount *at each rebalance date*. Replaces static pool files
+    # (e.g. top1000_liquid.parquet) whose end-of-period membership look-ahead
+    # inflates 15-yr backtests. None (default) = no top-N cut (legacy).
+    top_n_liquidity: int | None = Field(default=None, ge=1)
 
 
 class PortfolioBacktestConfig(BaseModel):
