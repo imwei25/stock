@@ -16,7 +16,43 @@
 ---
 <!-- 新记录追加到下方 -->
 
-## L_bottomline — old(GTJA+α1e3)vs new(15yr-IR+α5e4)整体基线 @ top-1000 Layer D — 累计 Sharpe ~2.2×
+## RV — 外部评审驱动的 harness 修复 + 全结论重验(2026-07-02,进行中)
+
+**背景**:外部代码/方法评审指出 harness 三大盲区:① 幸存者偏差(universe 只含当前上市股 +
+静态 top1000 池按**今天**流动性选成员回测过去 = 期末前视);② Layer B oracle 口径漂移
+(close-to-close 前向收益把拿不到的隔夜段计入分数;不检查一字涨停可交易性);③ 执行现实性
+(组合引擎全清仓 rebalance 的虚拟往返成本 + 无涨停拒单)。另发现 `P0_factorset.yaml` 在 6-30
+promote 覆盖 selection.json 后变成"自己比自己"(重跑 ΔIC +0.00002 ≠ win 消失,是配置漂移;
+已用 `RV_factorset.yaml` 钉住备份文件)。滑点误报:`BacktestCostConfig.slippage_rate` 已存在。
+
+**修复落地**(commits 07ef6f0 / b73f023 / 5defd6e / 59cc285):
+- 退市股回填:窗口内退市 258 只(universe 内 0 只!),东财回填 244 只日线进 `data/`;
+  Pool B 加 30 天新鲜度闸门。
+- `eligibility.top_n_liquidity`:as-of top-N PIT 流动性 universe(引擎侧);
+  layer_b_direct `--asof-top-n`(评估侧)。**静态 top-1000 每天仅覆盖真实 as-of top-1000 的
+  中位数 326 只;15 年 union=4565 只 ≈ 全市场**。
+- Layer B oracle 默认改 open-basis + 入场一字涨停剔除(旧口径可 `--fwd-basis close
+  --tradability none` 复现,已验证逐位复现)。
+- 引擎 `hold_survivors` + `limit_guard`(默认 false bit-exact)+ `weight_at_entry` 修复。
+
+**重验结果(cheap 层,缓存 score panel,静态 1000 打分集)**:
+
+| 结论 | 旧 oracle | open+entry | +as-of top-1000 掩码 | 判定 |
+|---|---|---|---|---|
+| alpha 5e4 win (Layer B ΔIC) | +0.00882 t=8.1 | +0.00794 t=7.3 | **+0.00540 t=3.9 CI[+0.0015,+0.0096]** | **存活,效应 −39%** |
+| 因子集 win (Layer B ΔIC) | +0.00914 t=5.4 | +0.00986 t=5.9 | **+0.01249 t=6.3 CI[+0.0056,+0.0196]** | **存活,PIT 池下更强** |
+| bottom-line (Layer D ΔSharpe) | +0.286 p=0.035 halves+thirds 全正 | — | hold_survivors+limit_guard: **+0.209 p=0.096, thirds 2+/1−** | **削弱**:方向仍正,但"Sharpe 翻倍"降级为"点估计 +0.2 不可确认" |
+
+附带发现:hold_survivors 对老基线的成本节省(Sharpe 0.247→0.345)远大于新基线(0.533→0.554)
+→ 旧全清仓成本模型确实在给"高换手 arm"系统性罚分,过往所有换手相关 AB(L_rebal/L_h10d/MVO
+换手优势)的结论都在这个失真下得出,如需引用须重跑。
+
+**进行中(overnight wave,rv_eval_pool=静态1000∪退市244,训练池含退市,workers=1)**:
+① 时间 hold-out:`holdout_reselect.py`(analyze 截断 ≤2020-12-31 重选池)vs 现池 @ 2021+
+   窗口 — 因子集 win 的真 OOS 检验(池两侧时间重叠是它最后一个未排除的偏差源);
+② 因子集 win 幸存者修正版(退市股进训练横截面 + 评估横截面);
+③ alpha win 同上(缓存复用,免费)。
+结果见下条 RV-wave 记录(待补)。
 - **日期**:2026-07-02 · `configs/L_bottomline.yaml`(本 session 两改动的累计效应)
 - **结果**:**Sharpe A(old)=0.247 → B(new)=0.533,ΔSharpe +0.286(~2.2×)**;CI [−0.019, +0.611] 勉强含 0
   (下界 −0.019 几乎触 0);单侧 p=0.035;halves+thirds **一致正**(2+/0−, 3+/0−);7-regime 5+/2−;validity ok。
