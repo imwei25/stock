@@ -313,3 +313,136 @@ def test_initial_cash_scales_curve():
     res = eng.run(panel)
     assert res.curve["equity"].iloc[0] == pytest.approx(100.0)
     assert res.curve["equity"].iloc[-1] == pytest.approx(100.0)
+
+
+# ----- execution realism (2026-07-02) -----
+
+
+def test_hold_survivors_no_churn_on_stable_target():
+    """Constant target + hold_survivors → one entry, zero rebalance churn,
+    equity strictly better than the legacy sell-and-rebuy model under costs."""
+    dates = _bars(12)
+    panel = {c: _stock(dates, 10.0, 10.0) for c in ["A", "B"]}
+    sp = pd.DataFrame(np.tile([2.0, 1.0], (len(dates), 1)),
+                      index=dates, columns=["A", "B"])
+    costs = TradeCosts(buy_cost=0.001, sell_cost=0.002)
+    common = dict(top_k=2, rebalance_n_days=2, max_per_industry=None,
+                  initial_cash=1.0)
+
+    legacy = PortfolioEngine(
+        _scores(sp), PortfolioRunConfig(**common), costs=costs).run(panel)
+    hold = PortfolioEngine(
+        _scores(sp), PortfolioRunConfig(**common, hold_survivors=True),
+        costs=costs).run(panel)
+
+    # Legacy pays a round-trip on every rebalance; hold pays entry once.
+    assert hold.curve["equity"].iloc[-1] > legacy.curve["equity"].iloc[-1]
+    # Only the two end-of-backtest close-outs — no rebalance_drop churn.
+    assert len(hold.trades) == 2
+    assert {t.exit_reason for t in hold.trades} == {"end_of_backtest"}
+    # Legacy produced fictitious churn trades.
+    assert any(t.exit_reason == "rebalance_drop" for t in legacy.trades)
+
+
+def test_hold_survivors_membership_turnover():
+    """{A,B} → {B,C}: A sold, B held with original entry date, C bought."""
+    dates = _bars(6)
+    panel = {c: _stock(dates, 10.0, 10.0) for c in ["A", "B", "C"]}
+    scores = np.array([
+        [3.0, 2.0, 1.0],   # bar0 decision → {A,B} fill @1
+        [3.0, 2.0, 1.0],
+        [0.0, 3.0, 2.0],   # bar2 decision → {B,C} fill @3
+        [0.0, 3.0, 2.0],
+        [0.0, 3.0, 2.0],   # bar4 decision → {B,C} fill @5
+        [0.0, 3.0, 2.0],
+    ])
+    sp = pd.DataFrame(scores, index=dates, columns=["A", "B", "C"])
+    eng = PortfolioEngine(
+        _scores(sp),
+        PortfolioRunConfig(top_k=2, rebalance_n_days=2, max_per_industry=None,
+                           initial_cash=1.0, hold_survivors=True),
+    )
+    res = eng.run(panel)
+    by_code = {}
+    for t in res.trades:
+        by_code.setdefault(t.code, []).append(t)
+    # A dropped at bar3.
+    assert by_code["A"][0].exit_reason == "rebalance_drop"
+    assert by_code["A"][0].exit_date == dates[3]
+    # B held throughout: single trade, entry at first fill bar1.
+    assert len(by_code["B"]) == 1
+    assert by_code["B"][0].entry_date == dates[1]
+    assert by_code["B"][0].exit_reason == "end_of_backtest"
+    # C entered at bar3.
+    assert by_code["C"][0].entry_date == dates[3]
+
+
+def test_limit_guard_buy_side_substitutes_next_rank():
+    """Top-scored name opens 一字涨停 on the fill bar → skipped at selection,
+    next-ranked name takes the slot. Without the guard it is bought."""
+    dates = _bars(4)
+    # X: close 10, fill-bar open 11.0 = exact 10% limit-up.
+    x_open = np.array([10.0, 11.0, 11.0, 11.0])
+    x_close = np.array([10.0, 11.0, 11.0, 11.0])
+    y = _stock(dates, 10.0, 10.0)
+    panel = {"X": _stock(dates, x_open, x_close), "Y": y}
+    sp = pd.DataFrame(np.tile([2.0, 1.0], (len(dates), 1)),
+                      index=dates, columns=["X", "Y"])
+    common = dict(top_k=1, rebalance_n_days=10, max_per_industry=None,
+                  initial_cash=1.0)
+
+    legacy = PortfolioEngine(
+        _scores(sp), PortfolioRunConfig(**common)).run(panel)
+    guarded = PortfolioEngine(
+        _scores(sp), PortfolioRunConfig(**common, limit_guard=True)).run(panel)
+
+    assert {t.code for t in legacy.trades} == {"X"}
+    assert {t.code for t in guarded.trades} == {"Y"}
+
+
+def test_limit_guard_sell_side_holds_through_limit_down():
+    """Held name opens 一字跌停 on the rebalance fill bar → unsellable, held
+    until the next rebalance. Without the guard it is sold at the stale open."""
+    dates = _bars(6)
+    # A: flat 10, but bar3 open = 9.0 (exact 10% limit-down vs close[2]=10).
+    a_open = np.array([10.0, 10.0, 10.0, 9.0, 10.0, 10.0])
+    a_close = np.array([10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
+    panel = {"A": _stock(dates, a_open, a_close), "B": _stock(dates, 10.0, 10.0)}
+    scores = np.array([
+        [2.0, 1.0],   # bar0 → buy A @1
+        [2.0, 1.0],
+        [0.0, 2.0],   # bar2 → drop A, fill @3 where A is limit-down
+        [0.0, 2.0],
+        [0.0, 2.0],   # bar4 → drop A again, fill @5 (sellable now)
+        [0.0, 2.0],
+    ])
+    sp = pd.DataFrame(scores, index=dates, columns=["A", "B"])
+    common = dict(top_k=1, rebalance_n_days=2, max_per_industry=None,
+                  initial_cash=1.0)
+
+    legacy = PortfolioEngine(
+        _scores(sp), PortfolioRunConfig(**common)).run(panel)
+    guarded = PortfolioEngine(
+        _scores(sp), PortfolioRunConfig(**common, limit_guard=True)).run(panel)
+
+    a_legacy = [t for t in legacy.trades if t.code == "A"][0]
+    a_guard = [t for t in guarded.trades if t.code == "A"][0]
+    assert a_legacy.exit_date == dates[3]     # sold into the limit-down open
+    assert a_guard.exit_date == dates[5]      # held until sellable
+
+
+def test_weight_at_entry_equal_split():
+    """weight_at_entry must reflect the allocation vs execution-time equity —
+    two equal-weight entries both ≈ 0.5 (pre-fix the 2nd was ≈ 1.0 because
+    the denominator was the loop-depleted cash pool)."""
+    dates = _bars(4)
+    panel = {c: _stock(dates, 10.0, 10.0) for c in ["A", "B"]}
+    sp = pd.DataFrame(np.tile([2.0, 1.0], (len(dates), 1)),
+                      index=dates, columns=["A", "B"])
+    eng = PortfolioEngine(
+        _scores(sp),
+        _trivial_cfg(top_k=2, rebalance_n_days=10),
+    )
+    res = eng.run(panel)
+    weights = sorted(t.weight_at_entry for t in res.trades)
+    assert weights == pytest.approx([0.5, 0.5], rel=1e-9)

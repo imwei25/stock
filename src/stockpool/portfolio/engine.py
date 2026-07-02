@@ -29,6 +29,11 @@ import numpy as np
 import pandas as pd
 
 from stockpool.backtesting.framework import Trade, TradeCosts
+from stockpool.backtesting.limits import (
+    infer_limit_pct,
+    open_hits_limit_down,
+    open_hits_limit_up,
+)
 from stockpool.backtesting.metrics import compute_metrics
 from stockpool.config import PortfolioRunConfig
 from stockpool.portfolio.eligibility import EligibilityFilter
@@ -114,6 +119,9 @@ class PortfolioEngine:
                     target_weights=pending_target,
                     opens_t=opens_t, t=t, date_t=date_t,
                     costs=self.costs,
+                    hold_survivors=getattr(self.cfg, "hold_survivors", False),
+                    limit_guard=getattr(self.cfg, "limit_guard", False),
+                    prev_closes=closes.iloc[t - 1] if t > 0 else None,
                 )
                 closed.extend(closed_now)
                 pending_target = None
@@ -149,6 +157,13 @@ class PortfolioEngine:
                         opens_next=opens.iloc[t + 1],
                         sector_map=self.sector_map,
                         max_per_industry=self.cfg.max_per_industry,
+                        # limit_guard: skip candidates whose open[t+1] is a
+                        # 一字涨停 vs close[t] — un-buyable at the auction;
+                        # the next-ranked name substitutes (same anticipation
+                        # class as the existing NaN-open skip).
+                        prev_closes=(closes_t
+                                     if getattr(self.cfg, "limit_guard", False)
+                                     else None),
                     )
                     pending_target = self._target_weights(target, scores, closes, t)
                     rebalance_records.append({
@@ -304,6 +319,7 @@ def _select_top_k(
     opens_next: pd.Series,
     sector_map: Mapping[str, str] | None = None,
     max_per_industry: int | None = None,
+    prev_closes: pd.Series | None = None,
 ) -> set[str]:
     """Take top-K by score, skipping codes without executable open[t+1].
 
@@ -313,6 +329,10 @@ def _select_top_k(
     is skipped (everyone would be in the same bucket otherwise); else
     unmapped codes go into a single ``"Unknown"`` bucket that counts
     normally against the cap.
+
+    If ``prev_closes`` is given (limit_guard), candidates whose ``open[t+1]``
+    hits the limit-up price vs ``close[t]`` are skipped — a 一字涨停 auction
+    open cannot be bought, so the next-ranked name substitutes.
     """
     ranked = sorted(scores.items(), key=lambda kv: -kv[1])
     apply_cap = (
@@ -328,6 +348,12 @@ def _select_top_k(
         px = opens_next.get(code)
         if pd.isna(px):
             continue
+        if prev_closes is not None:
+            pc = prev_closes.get(code)
+            if pd.notna(pc) and open_hits_limit_up(
+                float(px), float(pc), infer_limit_pct(code)
+            ):
+                continue
         if apply_cap:
             ind = sector_map.get(code) or "Unknown"
             if industry_count.get(ind, 0) >= max_per_industry:
@@ -345,31 +371,59 @@ def _rebalance_to_target(
     t: int,
     date_t: pd.Timestamp,
     costs: TradeCosts,
+    *,
+    hold_survivors: bool = False,
+    limit_guard: bool = False,
+    prev_closes: pd.Series | None = None,
 ) -> tuple[float, list[PortfolioTrade]]:
-    """Full rebalance to a target weight vector: liquidate, redistribute.
+    """Rebalance to a target weight vector.
 
     ``target_weights`` maps ``{code: weight}`` (weights over the selected
     target, summing to ~1). Codes without an executable ``open[t]`` are dropped
     and the remaining weights renormalized, so the engine stays fully invested.
     With an equal-weight vector this is bit-exact with the legacy 1/K behavior.
 
-    PR-1 simplification per spec — clean semantics, no turnover_cap. Sells
-    everything (or holds if next-bar open is NaN), pools cash, then buys
-    target codes by weight with whatever cash remains.
+    Legacy mode (``hold_survivors=False``): sells everything (or holds if the
+    open is NaN), pools cash, then buys target codes by weight — survivors in
+    (current ∩ target) are sold and re-bought, paying a fictitious round-trip.
 
-    Survivors in (current ∩ target) are sold and re-bought (T+1 fictitious
-    churn) so the math stays uniform; PR-2/3 can add a "hold survivors"
-    optimization. The cost is real (extra round-trip fees) but small at
-    typical buy/sell ratios (~0.1%).
+    ``hold_survivors=True``: survivors are held untouched (no churn, no cost);
+    only dropped names are sold and only newcomers bought, funded by the
+    pooled proceeds (weights drift between rebalances — accepted, this mirrors
+    a real membership-turnover portfolio).
+
+    ``limit_guard=True`` (needs ``prev_closes`` = close[t-1]): positions whose
+    open hits limit-down are unsellable and held until the next rebalance;
+    buys whose open hits limit-up are rejected at fill and their allocation
+    stays in cash (selection normally already substituted such names).
     """
+    def _limit_down_blocked(code: str, px: float) -> bool:
+        if not limit_guard or prev_closes is None:
+            return False
+        pc = prev_closes.get(code)
+        return pd.notna(pc) and open_hits_limit_down(
+            px, float(pc), infer_limit_pct(code))
+
+    def _limit_up_blocked(code: str, px: float) -> bool:
+        if not limit_guard or prev_closes is None:
+            return False
+        pc = prev_closes.get(code)
+        return pd.notna(pc) and open_hits_limit_up(
+            px, float(pc), infer_limit_pct(code))
+
     closed: list[PortfolioTrade] = []
-    # 1. Liquidate every position with a valid open price today.
+    # 1. Liquidate positions leaving the portfolio (all of them in legacy
+    #    mode; only non-target names with hold_survivors).
     for code in list(positions.keys()):
         pos = positions[code]
+        if hold_survivors and code in target_weights:
+            continue  # survivor — held through the rebalance, zero churn
         px = opens_t.get(code)
         if pd.isna(px):
             # No quote today — keep the position; metric impact is small.
             continue
+        if _limit_down_blocked(code, float(px)):
+            continue  # 一字跌停 — cannot sell, hold until next rebalance
         proceeds = pos.shares * float(px) * (1 - costs.sell_cost)
         cash += proceeds
         notional = pos.shares * pos.entry_price
@@ -387,10 +441,16 @@ def _rebalance_to_target(
         ))
         del positions[code]
 
-    # 2. Of the target, keep only codes with a valid open price; renormalize
-    #    weights over the buyable subset (equal-weight => 1/len(buyable),
-    #    bit-exact with the legacy per_lot = cash/len(buyable)).
-    buyable = [c for c in target_weights if pd.notna(opens_t.get(c))]
+    # 2. Of the target, keep only *new* codes (hold_survivors) with a valid
+    #    open price; renormalize weights over the buyable subset (equal-weight
+    #    => 1/len(buyable), bit-exact with legacy per_lot = cash/len(buyable)).
+    candidates = (
+        [c for c in target_weights if c not in positions]
+        if hold_survivors else list(target_weights)
+    )
+    buyable = [c for c in candidates if pd.notna(opens_t.get(c))]
+    buyable = [c for c in buyable
+               if not _limit_up_blocked(c, float(opens_t.get(c)))]
     if not buyable:
         return cash, closed
     wsum = sum(max(0.0, float(target_weights[c])) for c in buyable)
@@ -399,6 +459,15 @@ def _rebalance_to_target(
     else:
         w_re = {c: max(0.0, float(target_weights[c])) / wsum for c in buyable}
     base_cash = cash  # post-liquidation pool to allocate
+    # weight_at_entry denominator = execution-time total equity (survivors
+    # marked at today's open where available). NOT the loop-mutated `cash`
+    # (pre-2026-07 bug: later buys divided by an already-depleted pool).
+    surv_val = 0.0
+    for pos in positions.values():
+        mark = opens_t.get(pos.code)
+        surv_val += pos.shares * (
+            float(mark) if pd.notna(mark) else pos.entry_price)
+    equity_exec = max(base_cash + surv_val, 1e-12)
     for code in buyable:
         px = float(opens_t.get(code))
         alloc = base_cash * w_re[code]
@@ -409,7 +478,7 @@ def _rebalance_to_target(
         positions[code] = _Position(
             code=code, entry_idx=t, entry_date=date_t,
             entry_price=px, shares=shares,
-            weight_at_entry=alloc / max(cash, 1e-12),
+            weight_at_entry=alloc / equity_exec,
         )
         cash -= alloc
     return cash, closed

@@ -618,6 +618,19 @@ class PortfolioRunConfig(BaseModel):
     mvo_w_max: float = Field(default=0.15, gt=0.0, le=1.0)
     mvo_lookback: int = Field(default=120, ge=2)
     mvo_min_obs: int = Field(default=20, ge=2)
+    # --- execution realism (2026-07-02) ---
+    # hold_survivors: positions still in the target are held through the
+    # rebalance instead of being sold and re-bought ("fictitious churn").
+    # The legacy full-liquidation model pins turnover at ~100% per rebalance,
+    # which both overstates costs and blinds every turnover-sensitive AB
+    # (rebalance cadence, horizon, MVO's lower turnover). Weights drift
+    # between rebalances (newcomers absorb the dropped names' proceeds).
+    hold_survivors: bool = False
+    # limit_guard: A-share一字板 execution constraints — skip buying names
+    # whose next-bar open hits limit-up (substitute the next-ranked name)
+    # and hold positions whose open hits limit-down (can't sell). Uses
+    # backtesting/limits.py board-based thresholds (ST 5% not detected).
+    limit_guard: bool = False
 
 
 class PortfolioEligibilityConfig(BaseModel):
