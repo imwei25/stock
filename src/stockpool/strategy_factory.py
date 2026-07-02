@@ -282,6 +282,10 @@ def _factor_panel_sig(
         "factors": sorted(factor_names),
         "codes": codes,
         "last_date": last_iso,
+        # v2 (2026-07-02): compute_factor_panel now sanitizes ±inf → NaN;
+        # panels cached before that may carry inf (alpha_083-style bare
+        # division on H==L==C bars) and must not be reused.
+        "panel_version": 2,
     }
     if preprocess_cfg is not None and not _is_all_off(preprocess_cfg):
         blob_dict["preprocess"] = preprocess_cfg.model_dump()

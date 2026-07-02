@@ -99,6 +99,13 @@ def test_fast_path_equivalent_to_legacy_build_panel():
     pool_trunc = strat_slow._build_truncated_pool(host_daily, current_date, current_bar)
     X_slow, y_slow = build_panel(pool_trunc, factors, cfg.horizon)
     if len(X_slow) > 0 and cfg.train_window > 0:
+        # 2026-07-02 起所有 pooled 路径都先按 host 的 trailing train_window
+        # 日期做下界(退市股冻结窗口老化),oracle 同步该语义。
+        label_end = strat_slow._embargoed_label_end(current_bar)
+        lower_iloc = max(0, max(0, label_end - 1) - cfg.train_window)
+        lower_ts = pd.Timestamp(host_daily["date"].iloc[lower_iloc])
+        keep = X_slow.index.get_level_values("date") >= lower_ts
+        X_slow, y_slow = X_slow[keep], y_slow[keep]
         X_slow = X_slow.groupby(level="stock", group_keys=False, sort=False).tail(cfg.train_window)
         y_slow = y_slow.loc[X_slow.index]
 
@@ -328,6 +335,12 @@ def test_fast_fallback_applies_mask_when_enabled():
     pool_t = strat_legacy._build_truncated_pool(host_daily, cur_date, current_bar)
     X_l, y_l = build_panel(pool_t, factors, cfg.horizon, mask_config=cfg.mask)
     if len(X_l) > 0 and cfg.train_window > 0:
+        # 与生产路径一致的 trailing-window 日期下界(2026-07-02)。
+        label_end = strat_legacy._embargoed_label_end(current_bar)
+        lower_iloc = max(0, max(0, label_end - 1) - cfg.train_window)
+        lower_ts = pd.Timestamp(host_daily["date"].iloc[lower_iloc])
+        keep = X_l.index.get_level_values("date") >= lower_ts
+        X_l, y_l = X_l[keep], y_l[keep]
         X_l = X_l.groupby(level="stock", group_keys=False, sort=False).tail(cfg.train_window)
         y_l = y_l.loc[X_l.index]
 

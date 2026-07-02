@@ -253,6 +253,11 @@ def main() -> int:
     icA, icB = icA.loc[common], icB.loc[common]
     delta = (icB - icA).to_numpy()
     T = delta.size
+    if T == 0:
+        print("\nERROR: no common IC observations between arms in the chosen "
+              "window — check score-panel coverage (per-arm 'IC obs=' above) "
+              "before interpreting anything.")
+        return 2
     mean_d, std_d = float(delta.mean()), float(delta.std(ddof=1))
     from math import erf, sqrt
     t_stat = mean_d / (std_d / np.sqrt(T)) if std_d > 0 else float("nan")

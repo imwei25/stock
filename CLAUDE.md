@@ -212,6 +212,7 @@ python -m stockpool ab-pool show    # 渲染 reports/ab_pool.html + 浏览器打
 - **顶层各阶段计时**:`cmd_run` 会按 `[TIME] setup+config / market_index_context / _prepare_ml_pool / sector_context prefetch / per_stock_loop / pool_b / render_report / TOTAL cmd_run` 打印 stdout,便于排查 `python -m stockpool run` 速度回归。Pool B 内部按 200 股粒度也会打 `[TIME] Pool B i/total ... build_avg= predict_avg= ETA=` 进度
 - **Partial NaN 容忍**(`generate_signals` 和 `predict_latest`):predict 路径不再要求 X 行所有因子都非 NaN — 用 fill 0 对 NaN 列做 impute(归一化后 0 是中性值),仅在**整行** NaN 时才返 `signal=neutral, score=NaN`。原因:`selection.json` 含 alpha_037 这种 200 日 rolling correlation 因子,warmup 必然 36% NaN 比例,严格 `notna().all()` 会让模型 100% 拒绝预测 → 0 trade。
 - **`generate_signals` 同时输出 `score` 和 `final_score`**(两列数值相同),便于 portfolio 的 `precompute_scores_from_legacy`(默认读 `final_score`)直接对接,无需特殊代码路径
+- **训练数据卫生(2026-07-02,RV session)**:三层修复,起因是 alpha_083(公式含 `.../(vwap−close)` 裸除法)在 2015-07-13 千股复牌一字板日(H==L==C → 除零)对 122 只股票产出 **inf**——inf 躲过训练 dropna 毒化 Lasso(系数 NaN → 该月起全 NaN 预测),且当日 inf 占比 ≥1% 时 winsorize 的 q99 clip 也失效(分位数本身 inf);退市股回填后 `groupby(stock).tail(train_window)` 把退市股**最后 N 行永久冻结**在其后每个训练集里(含毒行 → 2015-08 后所有月度 fit 静默失败、score 全 NaN)。修复:① `ml/dataset.py:compute_factor_panel` 出口统一 ±inf→NaN(所有因子的唯一咽喉);② `stack_panel_to_xy` dropna 改用 `np.isfinite` 筛(纵深防御);③ pooled 训练切片(fast pre-stack / per-call fallback / 无 panel 的 build_panel 分支,三路径一致)加 **host trailing train_window 日期下界**——退市股数据结束后随 cutoff 推进自然退出训练集,连续上市股在连续数据下不受影响(有停牌 gap 的股不再回溯补满 N 行,时间同质性更好)。**缓存版本升级**:factor panel sig 加 `panel_version: 2`、score_cache_key 前缀 v2→**v3**,旧缓存(可能含 inf / 冻结窗口语义)自动失效全部重算。测试 `tests/test_training_hygiene.py`。
 - **Portfolio 打分切片预建面板(2026-06-25 修正)**:`precompute_scores_from_legacy` 现在每股调 `scoring._set_stock_context(legacy, code)` 设 `_current_stock_code`,使 `generate_signals` **切片预建的横截面因子面板**(与训练一致、与日报逐股路径 `cli._analyze_one` **逐位一致**),而非旧的**逐股 `build_factor_matrix` 重算**——后者对截面因子(rank/industry_relative/rank-corr)在单股上得到退化的错值(实测 100% 单元格不同)。**⚠️ 这是正确性修正:所有 ml_factor 组合回测/AB 的分数会变(变正确);旧的 `data/portfolio_scores` 缓存已由 v2 key 自动失效。** 兼带 ~1.5× 提速(省去重算)+ `_strategy_signature` memoize(原每 bar 重算配置哈希)。code 不在面板时回退重算(off-panel 股仍可打分)。
 - **`IndustryRelativeStrengthFactor`** 在 `get_sector_map()` 为空时**raise**(不再 silent 返全 NaN),防止 factor_panel cache 中毒 — sector_map 必须在 build factor_panel 前由 caller 通过 `factors.context.set_sector_map(...)` 注入(`backtest_runner.prepare_pool` / `cli.cmd_portfolio_*` / `recommend_pool` 都已做)
 
@@ -324,6 +325,7 @@ python -m stockpool ab-pool show    # 渲染 reports/ab_pool.html + 浏览器打
 | `test_factors_fundamentals.py` | 关键 PIT 测试:pubDate 之前 NaN、pubDate 后 ffill、亏损 PE NaN |
 | `test_fundamentals_loader.py` | baostock mock + cache hit / stale / force_refresh / failure-fallback |
 | `test_cli_refresh_fundamentals.py` | `--refresh-fundamentals` argparse wiring on run/backtest/portfolio-backtest |
+| `test_training_hygiene.py` | 训练数据卫生:compute_factor_panel inf→NaN 消毒 / stack_panel_to_xy 非有限值筛除 / pooled 训练日期下界(退市股冻结窗口老化 + 近期结束的股保留)/ fast 与 fallback 路径在含退市池上等价 |
 
 写测试时:**用合成 OHLCV、`monkeypatch` 掉 AKShare 和 `_today`**(`test_cli_backtest.py` 是参考)。
 

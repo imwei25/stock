@@ -69,7 +69,11 @@ def score_cache_key(cfg, universe_codes: Iterable[str]) -> str:
     # Version tag: bump when scoring SEMANTICS change so stale cached panels are
     # not served. v2 = predict-time slices the prebuilt cross-sectional factor
     # panel per stock (was: recompute factors per single stock → wrong cross-sec).
-    return hashlib.sha256(f"v2|{blob}|{codes}".encode("utf-8")).hexdigest()[:16]
+    # v3 (2026-07-02) = training hygiene: factor panels sanitize ±inf → NaN
+    # (alpha_083 inf on 一字板 days silently killed every fit after 2015-07),
+    # stack screens non-finite, pooled training bounds rows to the host's
+    # trailing train_window dates (delisted frozen windows age out).
+    return hashlib.sha256(f"v3|{blob}|{codes}".encode("utf-8")).hexdigest()[:16]
 
 
 # Module-global populated by ``_worker_init`` inside each Pool worker so the

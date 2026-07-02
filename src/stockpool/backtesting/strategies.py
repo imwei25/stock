@@ -835,6 +835,18 @@ class MLFactorStrategy(Strategy):
                 label_basis=cfg.label_basis,
             )
             if len(X_pool) > 0 and cfg.train_window > 0:
+                # Same lower date bound as _build_pooled_xy_from_panel: keep
+                # only the host's trailing train_window dates so stocks whose
+                # data ends mid-history (delisted) age out of the pool instead
+                # of contributing frozen stale rows forever.
+                label_end_lb = self._embargoed_label_end(current_bar)
+                lower_iloc_lb = max(0, max(0, label_end_lb - 1) - cfg.train_window)
+                lower_ts_lb = pd.Timestamp(daily_df["date"].iloc[lower_iloc_lb])
+                date_level = X_pool.index.get_level_values("date")
+                keep = date_level >= lower_ts_lb
+                if not keep.all():
+                    X_pool = X_pool[keep]
+                    y_pool = y_pool.loc[X_pool.index]
                 X_pool = X_pool.groupby(
                     level="stock", group_keys=False, sort=False,
                 ).tail(cfg.train_window)
@@ -950,8 +962,18 @@ class MLFactorStrategy(Strategy):
             # date terms): same observable-label window as the legacy path.
             label_iloc = max(0, label_end - 1)
             label_cutoff_ts = pd.Timestamp(daily_df["date"].iloc[label_iloc])
+            # Lower date bound (2026-07-02): without it, a stock whose data
+            # ENDS mid-history (delisted backfill) contributes its frozen
+            # final rows to every later training set via the per-stock
+            # tail(train_window) — 2013 cross-sections training 2026 fits.
+            # Bound the pool to the host's trailing train_window dates; for
+            # continuously-traded stocks tail(train_window) already picked
+            # exactly these rows, so this is a no-op for the pre-backfill
+            # world.
+            lower_iloc = max(0, label_iloc - self.cfg.train_window)
+            lower_ts = pd.Timestamp(daily_df["date"].iloc[lower_iloc])
             X_long, y_long = pre
-            X = X_long.loc[:label_cutoff_ts]
+            X = X_long.loc[lower_ts:label_cutoff_ts]
             y = y_long.loc[X.index]
             if drop_host:
                 stock_level = X.index.get_level_values("stock")
@@ -972,13 +994,21 @@ class MLFactorStrategy(Strategy):
 
         # Legacy fallback: per-call slice + stack (used when shared_cache
         # isn't provided, e.g. some single-stock unit tests).
+        # Same lower date bound as the fast path (see comment there) so the
+        # two paths keep producing identical training sets.
+        label_iloc_lb = max(0, label_end - 1)
+        lower_iloc_lb = max(0, label_iloc_lb - cfg.train_window)
+        lower_ts_lb = pd.Timestamp(daily_df["date"].iloc[lower_iloc_lb])
         sliced_fp: dict[str, pd.DataFrame] = {}
         for name, wide in self._factor_panel.items():
-            sub = wide.loc[wide.index <= cutoff_ts]
+            sub = wide.loc[(wide.index >= lower_ts_lb) & (wide.index <= cutoff_ts)]
             if drop_host and self._current_stock_code in sub.columns:
                 sub = sub.drop(columns=[self._current_stock_code])
             sliced_fp[name] = sub
-        close_sub = self._close_panel.loc[self._close_panel.index <= cutoff_ts]
+        close_sub = self._close_panel.loc[
+            (self._close_panel.index >= lower_ts_lb)
+            & (self._close_panel.index <= cutoff_ts)
+        ]
         if drop_host and self._current_stock_code in close_sub.columns:
             close_sub = close_sub.drop(columns=[self._current_stock_code])
 
@@ -997,7 +1027,9 @@ class MLFactorStrategy(Strategy):
         open_full = self._open_panel_for_labels()
         open_sub = None
         if open_full is not None:
-            sub_o = open_full.loc[open_full.index <= cutoff_ts]
+            sub_o = open_full.loc[
+                (open_full.index >= lower_ts_lb) & (open_full.index <= cutoff_ts)
+            ]
             if drop_host and self._current_stock_code in sub_o.columns:
                 sub_o = sub_o.drop(columns=[self._current_stock_code])
             open_sub = sub_o

@@ -51,6 +51,13 @@ def compute_factor_panel(
     Mask 仅在标签 (``forward_return_panel``) 和模型训练样本筛选(通过
     label NaN 自然 dropna)上生效。详见
     ``docs/handoff/2026-05-31-mask-ab-investigation.md``。
+
+    **±inf 一律转 NaN**(2026-07-02):公式含裸除法的因子(如 alpha_083 的
+    ``.../(vwap - close)``)在 H==L==C 的一字板 bar 上除零产出 inf。inf 躲过
+    训练侧 dropna 直接毒化 Lasso(系数 NaN → 全 NaN 预测);且当日 inf 占比
+    ≥1% 时 winsorize 的 q99 clip 也会失效(分位数本身变 inf)。2015-07-13
+    千股复牌日实测 122 只 inf,曾使整个因子集 2015-08 后所有月度 fit 静默失败。
+    inf 从来不是有意义的因子值 → 在此唯一出口统一消毒。
     """
     out: dict[str, pd.DataFrame] = {}
     try:
@@ -65,7 +72,17 @@ def compute_factor_panel(
         factor_iter = factor_names
     for name in factor_iter:
         f = make_factor(name)
-        out[f.name] = f.compute(panel)
+        wide = f.compute(panel)
+        # numpy-level isfinite pass (~free vs factor compute cost); avoids
+        # DataFrame.replace which is slow on large frames.
+        vals = wide.to_numpy()
+        if vals.dtype.kind == "f":
+            nonfinite = ~np.isfinite(vals)
+            if nonfinite.any():
+                vals = vals.copy()
+                vals[nonfinite] = np.nan
+                wide = pd.DataFrame(vals, index=wide.index, columns=wide.columns)
+        out[f.name] = wide
     return out
 
 
@@ -194,7 +211,11 @@ def stack_panel_to_xy(
     y_arr = fwd_ret.reindex(index=dates, columns=stocks).to_numpy(dtype=float).ravel(order="F")
 
     if dropna:
-        mask = ~np.isnan(X_arr).any(axis=1) & ~np.isnan(y_arr)
+        # isfinite (not just ~isnan): a single ±inf row — e.g. a bare-division
+        # factor on an H==L==C bar computed before the compute_factor_panel
+        # sanitizer existed, or any future regression — silently poisons the
+        # Lasso fit (NaN coefficients → all-NaN predictions for the month).
+        mask = np.isfinite(X_arr).all(axis=1) & np.isfinite(y_arr)
         if not mask.all():
             X_arr = X_arr[mask]
             y_arr = y_arr[mask]
