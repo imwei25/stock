@@ -47,6 +47,7 @@ start reports/latest.html    # macOS: open;Linux: xdg-open
 .venv/Scripts/python -m stockpool backtest                       # 回测所有股票
 .venv/Scripts/python -m stockpool backtest --refresh-factor-panel # 重算 ml_factor 因子面板缓存 (data/factor_panels/)
 .venv/Scripts/python -m stockpool fetch-universe                 # 拉全 A 股缓存 (训练用 + Pool B 必需)
+.venv/Scripts/python scripts/fetch_delisted_universe.py          # 回填退市股日线 (长回测去幸存者偏差; 幂等可重跑)
 .venv/Scripts/python -m pytest                                   # 全套单元测试
 
 # 因子库 (~165 base names / ~280-320 variants:WQ101 全集 + 论文 B 9 家族精神复现 + EWMA + 基本面)
@@ -131,10 +132,14 @@ portfolio_backtest:
     mvo_w_max: 0.15                 # 单票上限, 必须 ≥ 1/top_k 否则该次回退等权
     mvo_lookback: 120              # 协方差用的 trailing 收益窗口 (bar)
     mvo_min_obs: 20                # 窗口样本不足时回退等权
+    # --- 执行现实性 (2026-07-02, 默认 false = 旧行为 bit-exact) ---
+    hold_survivors: false           # true: 留任股持有不动 (不再"卖出重买"付虚拟往返成本)
+    limit_guard: false              # true: 一字涨停买不进 (次名递补) / 一字跌停卖不出 (持到下次调仓)
   eligibility:                      # 逐 bar 漏斗过滤 (PR-2 起生效)
     min_avg_amount_20d: 5e7         # 最近 20 bar 均成交额下限 (close * volume * 100)
     exclude_st: true                # 名称含 "ST" 排除
     min_history_bars: 60            # 历史不足这么多 bar 的剔除
+    top_n_liquidity: null           # 设 N: 每个调仓日按 as-of 20 日成交额取 top-N (point-in-time 流动性池, 替代静态池文件)
   staggered_starts: 1               # >1 启用 staggered ensemble (PR-3): N 个 offset 串行各跑一份, 聚合成 envelope (min/p25/median/p75/max) + ensemble mean
   score_cache_dir: data/portfolio_scores
 ```

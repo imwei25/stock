@@ -1,0 +1,85 @@
+base_config: ../../../config.yaml
+use_ab_pool: false
+arms:
+  holdout_pool:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection_holdout2020.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso:
+            alpha: 0.0005
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter:
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+        thresholds:
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        buy_verdicts:
+        - buy
+        - strong_buy
+        sell_verdicts:
+        - sell
+        - strong_sell
+        refresh_verdicts:
+        - strong_buy
+        preprocess:
+          winsorize:
+          - 0.01
+          - 0.99
+          zscore: true
+          industry_neutralize: false
+  current_pool:
+    strategy:
+      name: ml_factor
+      ml_factor:
+        factors_file: reports/selection.json
+        horizon: 3
+        train_window: 250
+        min_train_samples: 60
+        refit_every: 20
+        panel_mode: pooled
+        training_universe: all
+        selector:
+          type: lasso
+          lasso:
+            alpha: 0.0005
+            max_iter: 1000
+            tol: 1.0e-06
+        weighter:
+          type: ic
+          ic:
+            use_rank: true
+            min_abs_ic: 0.0
+        thresholds:
+          strong_buy: 0.9
+          buy: 0.7
+          sell: 0.3
+          strong_sell: 0.1
+        buy_verdicts:
+        - buy
+        - strong_buy
+        sell_verdicts:
+        - sell
+        - strong_sell
+        refresh_verdicts:
+        - strong_buy
+        preprocess:
+          winsorize:
+          - 0.01
+          - 0.99
+          zscore: true
+          industry_neutralize: false
