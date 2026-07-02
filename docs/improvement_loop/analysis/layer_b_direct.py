@@ -8,6 +8,24 @@ Pipeline:
   4. Save score panels to disk + compute daily cross-sectional IC.
   5. Paired bootstrap CI on ΔIC; report sub-periods + regime buckets.
 
+Oracle realism (2026-07-02 hardening — defaults changed):
+  * ``--fwd-basis open`` (default): forward return = open[t+1+h]/open[t+1]−1,
+    matching ``label_basis=open`` and the engine's T+1 open fill. The legacy
+    ``close`` basis silently credited the un-capturable close[t]→open[t+1]
+    overnight gap to every score.
+  * ``--tradability entry`` (default): (score, fwd) pairs whose entry bar
+    open[t+1] is a 一字涨停 vs close[t] are excluded — those fills don't
+    exist, and momentum-family scores are positively selected into them.
+  * ``--asof-top-n N``: point-in-time liquidity membership — per day, keep
+    only the top-N codes by trailing-20d amount over the *whole* loaded
+    universe (incl. backfilled delisted stocks). Replaces the static
+    ``--pool`` file whose end-of-period membership is look-ahead.
+  * ``--date-start/--date-end``: restrict the IC window (time-holdout tests).
+
+⚠️ Numbers produced under the new defaults are NOT comparable to pre-2026-07
+Layer-B records (close-basis, no tradability, static pool). Pass
+``--fwd-basis close --tradability none`` to reproduce the legacy oracle.
+
 Usage:
   .venv/Scripts/python.exe docs/improvement_loop/analysis/layer_b_direct.py \\
       --config docs/improvement_loop/configs/D3b_sharpe_full.yaml \\
@@ -72,6 +90,16 @@ def main() -> int:
     ap.add_argument("--n-boot", type=int, default=5000)
     ap.add_argument("--regime-boundaries", type=str, default=None)
     ap.add_argument("--subperiods", type=str, default="5,8")
+    ap.add_argument("--fwd-basis", choices=["open", "close"], default="open",
+                    help="forward-return basis; 'open' matches label_basis=open "
+                         "+ T+1 open fills (default), 'close' = legacy oracle")
+    ap.add_argument("--tradability", choices=["none", "entry"], default="entry",
+                    help="'entry' drops pairs whose entry open[t+1] is 一字涨停")
+    ap.add_argument("--asof-top-n", type=int, default=None,
+                    help="per-day PIT top-N liquidity membership over the full "
+                         "loaded universe (replaces static --pool membership)")
+    ap.add_argument("--date-start", type=str, default=None)
+    ap.add_argument("--date-end", type=str, default=None)
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -154,14 +182,70 @@ def main() -> int:
         panels[arm_name] = sp
         print(f"[{arm_name}] done.")
 
-    print(f"\n[layer-B] building forward-return panel (horizon={args.horizon})…")
-    close = pd.DataFrame({c: pool_data[c].set_index("date")["close"]
-                          for c in portfolio_codes if c in pool_data})
-    fwd_ret = close.shift(-args.horizon) / close - 1.0
+    print(f"\n[layer-B] building forward-return panel "
+          f"(horizon={args.horizon}, basis={args.fwd_basis}, "
+          f"tradability={args.tradability}, asof_top_n={args.asof_top_n})…")
+    codes_avail = [c for c in portfolio_codes if c in pool_data]
+
+    def _wide(col: str, fallback: str | None = None) -> pd.DataFrame:
+        out = {}
+        for c in codes_avail:
+            df = pool_data[c]
+            use = col if col in df.columns else fallback
+            if use is not None and use in df.columns:
+                out[c] = df.set_index("date")[use].astype(float)
+        return pd.DataFrame(out).sort_index()
+
+    close = _wide("close")
+    opn = _wide("open", fallback="close")
+    if args.fwd_basis == "open":
+        # open[t+1+h]/open[t+1] − 1: the return a T+1 open fill can realize.
+        entry_px = opn.shift(-1)
+        exit_px = opn.shift(-(args.horizon + 1))
+        fwd_ret = exit_px / entry_px - 1.0
+    else:
+        fwd_ret = close.shift(-args.horizon) / close - 1.0
+
+    if args.tradability == "entry":
+        from stockpool.backtesting.limits import _REL_TOL, infer_limit_pct
+        limit_pct = pd.Series({c: infer_limit_pct(c) for c in close.columns})
+        limit_px = close.mul((1.0 + limit_pct) * (1.0 - _REL_TOL), axis=1)
+        blocked = opn.shift(-1) >= limit_px  # 一字涨停 entry open → un-buyable
+        n_blocked = int(blocked.sum().sum())
+        fwd_ret = fwd_ret.mask(blocked)
+        print(f"[layer-B] tradability: {n_blocked} (day, code) pairs excluded "
+              f"(limit-up entry open)")
+
+    if args.asof_top_n:
+        # PIT membership over the FULL loaded universe (incl. delisted
+        # backfill), then intersected with the scored codes.
+        amt = {}
+        for c, df in pool_data.items():
+            if "volume" in df.columns and "close" in df.columns:
+                s = df.set_index("date")
+                amt[c] = (s["close"] * s["volume"] * 100.0).astype(float)
+        amt = pd.DataFrame(amt).sort_index()
+        avg20 = amt.rolling(20, min_periods=1).mean()
+        rank = avg20.rank(axis=1, ascending=False, method="first")
+        member_full = rank <= args.asof_top_n
+        member = member_full.reindex(
+            index=fwd_ret.index, columns=fwd_ret.columns).fillna(False)
+        cov = member.sum(axis=1)
+        print(f"[layer-B] as-of top-{args.asof_top_n} membership: scored-code "
+              f"coverage per day min={int(cov.min())} median={int(cov.median())} "
+              f"max={int(cov.max())} (of {args.asof_top_n})")
+        fwd_ret = fwd_ret.where(member)
+        del amt, avg20, rank, member_full
 
     nameA, nameB = arms[0][0], arms[1][0]
     icA = _per_day_ic(panels[nameA], fwd_ret)
     icB = _per_day_ic(panels[nameB], fwd_ret)
+    if args.date_start:
+        lo_ts = pd.Timestamp(args.date_start)
+        icA, icB = icA[icA.index >= lo_ts], icB[icB.index >= lo_ts]
+    if args.date_end:
+        hi_ts = pd.Timestamp(args.date_end)
+        icA, icB = icA[icA.index <= hi_ts], icB[icB.index <= hi_ts]
     print(f"[{nameA}] IC obs={len(icA)} mean={icA.mean():+.5f} std={icA.std(ddof=1):.5f}")
     print(f"[{nameB}] IC obs={len(icB)} mean={icB.mean():+.5f} std={icB.std(ddof=1):.5f}")
 
@@ -177,6 +261,9 @@ def main() -> int:
 
     print(f"\n{'='*70}")
     print(f"Layer-B significance: {nameB} (B) vs {nameA} (A)")
+    print(f"oracle: fwd_basis={args.fwd_basis} tradability={args.tradability} "
+          f"asof_top_n={args.asof_top_n} horizon={args.horizon} "
+          f"window=[{args.date_start or 'full'}, {args.date_end or 'full'}]")
     print(f"common IC observations: T = {T}    bootstrap block: {block}    n_boot: {args.n_boot}")
     print(f"{'-'*70}")
     print(f"IC mean   A = {icA.mean():+.5f}   B = {icB.mean():+.5f}   ΔIC mean = {mean_d:+.5f}")
