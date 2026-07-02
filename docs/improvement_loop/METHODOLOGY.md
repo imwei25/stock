@@ -58,6 +58,30 @@ wq101 基础集利好**中等流动性**名。前 24 方向循环的结论是**�
 config.yaml 处置:top_k 已恢复 20;GTJA selection.json **暂保留**(在设计池/大盘上确有强 edge,
 反转可能是真实的 universe 效应而非纯过拟合),但**降级为 universe-conditional**,待用户定目标池后定夺。
 
+## 2026-07-02 — harness 三盲区修复(外部评审驱动),oracle 口径第二次变更
+
+前述硬化(bootstrap/子段/两池)解决的是**统计功率与多重比较**;本次修的是 harness 自身
+测不到的**样本构建与执行现实性**盲区。四项修复,全部默认向后兼容、研究路径显式 opt-in:
+
+1. **幸存者偏差**:训练/评估 universe 只含当前上市股(窗口内退市 258 只全部缺席),
+   且 `top1000_liquid.parquet` 按**期末**流动性选成员 → 双重前视。修复:退市股回填
+   (`scripts/fetch_delisted_universe.py`,244/253)+ as-of PIT 流动性成员
+   (`eligibility.top_n_liquidity` / layer_b `--asof-top-n`)。实测静态池每天只覆盖
+   真实 as-of top-1000 的中位数 326 只;15 年 union ≈ 全市场。
+2. **Layer B oracle 口径**:close-to-close 前向收益含拿不到的隔夜段;不查可交易性。
+   修复:默认 open-basis + 入场一字涨停剔除。**新旧 Layer B 数字不可直接比较**
+   (旧口径 `--fwd-basis close --tradability none` 可逐位复现)。
+3. **执行现实性**:全清仓 rebalance 的虚拟往返成本把换手钉死在 ~100%/rebalance,
+   **所有换手敏感 AB(rebalance 周期 / horizon 换手论证 / MVO 换手优势)在旧模型下
+   均失焦**;组合引擎无涨停拒单。修复:`hold_survivors` + `limit_guard`。
+4. **时间维度 selection bias**:因子池在完整评估期上重选,"两池验证"只解决 universe 轴
+   不解决时间轴。修复:`holdout_reselect.py`(截断 ≤cutoff 重选)+ layer_b
+   `--date-start`,因子池类结论必须加时间 hold-out 检验。
+
+**重验协议(新方向自此适用)**:Layer B 用新默认 oracle + `--asof-top-n` + 评估池含
+退市回填;因子池变更加时间 hold-out;Layer D 引用换手/成本相关结论时必须
+`hold_survivors: true` + `limit_guard: true`。既有结论的重验结果见 WORKLOG「RV」条目。
+
 ## 后续优化的工作流(硬化版)
 
 每个新方向:portfolio-ab → **两池**(原 ab_pool + ab_pool_v2)各跑 → `ab_significance.py` 出
