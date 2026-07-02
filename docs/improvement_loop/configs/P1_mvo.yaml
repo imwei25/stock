@@ -1,0 +1,21 @@
+# P1-1: MVO + Ledoit-Wolf portfolio weighting vs equal weight.
+# Both arms share the SAME strategy (config.yaml selection.json = 15yr-IR pool)
+# → identical scores → shared score-panel cache → engine-only diff (fast).
+# Layer D (portfolio Sharpe) test; run on top-1000 via ab_significance --pool.
+base_config: ../../../config.yaml
+use_ab_pool: false
+
+arms:
+  equal_weight:
+    portfolio_backtest:
+      portfolio:
+        weighting: equal
+
+  mvo_weight:
+    portfolio_backtest:
+      portfolio:
+        weighting: mvo
+        mvo_risk_aversion: 10.0
+        mvo_w_max: 0.15
+        mvo_lookback: 120
+        mvo_min_obs: 20

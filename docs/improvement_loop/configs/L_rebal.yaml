@@ -1,0 +1,11 @@
+base_config: ../../../config.yaml
+use_ab_pool: false
+arms:
+  rebal_5:
+    portfolio_backtest:
+      portfolio:
+        rebalance_n_days: 5
+  rebal_10:
+    portfolio_backtest:
+      portfolio:
+        rebalance_n_days: 10

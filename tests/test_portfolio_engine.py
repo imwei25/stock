@@ -49,6 +49,62 @@ def _trivial_cfg(top_k=2, rebalance_n_days=2) -> PortfolioRunConfig:
 # ----- tests -----
 
 
+def test_mvo_weighting_runs_and_differs_from_equal():
+    """weighting='mvo' produces a valid curve and diverges from equal weight
+    when stocks have distinct volatilities (so the covariance matters)."""
+    dates = _bars(80)
+    codes = ["A", "B", "C", "D", "E", "F"]
+    rng = np.random.default_rng(42)
+    # Distinct per-stock vol so LW covariance is non-trivial.
+    panel = {}
+    for i, c in enumerate(codes):
+        vol = 0.5 + 0.5 * i
+        closes = 10 + np.cumsum(rng.normal(0, vol, len(dates)))
+        closes = np.clip(closes, 1.0, None)
+        panel[c] = _stock(dates, closes, closes)
+    sp = pd.DataFrame(rng.normal(0, 1, (len(dates), len(codes))),
+                      index=dates, columns=codes)
+
+    def _cfg(weighting):
+        return PortfolioRunConfig(
+            top_k=4, rebalance_n_days=5, max_per_industry=None, initial_cash=1.0,
+            weighting=weighting, mvo_risk_aversion=10.0, mvo_w_max=0.5,
+            mvo_lookback=40, mvo_min_obs=20,
+        )
+
+    res_eq = PortfolioEngine(_scores(sp), _cfg("equal")).run(panel)
+    res_mvo = PortfolioEngine(_scores(sp), _cfg("mvo")).run(panel)
+    # Both valid, positive, finite.
+    assert (res_mvo.curve["equity"] > 0).all()
+    assert not res_mvo.curve["equity"].isna().any()
+    assert len(res_mvo.curve) == len(res_eq.curve)
+    # MVO allocates non-equally => the two equity paths diverge somewhere.
+    assert not np.allclose(res_eq.curve["equity"].to_numpy(),
+                           res_mvo.curve["equity"].to_numpy())
+
+
+def test_mvo_cold_start_falls_back_equal():
+    """Before mvo_lookback/min_obs bars accumulate, mvo == equal (cold-start
+    fallback inside compute_target_weights)."""
+    dates = _bars(12)
+    codes = ["A", "B", "C"]
+    rng = np.random.default_rng(1)
+    panel = {c: _stock(dates, 10 + rng.normal(0, 0.3, 12), 10 + rng.normal(0, 0.3, 12))
+             for c in codes}
+    sp = pd.DataFrame(rng.normal(0, 1, (len(dates), len(codes))),
+                      index=dates, columns=codes)
+    common = dict(top_k=3, rebalance_n_days=3, max_per_industry=None, initial_cash=1.0)
+    res_eq = PortfolioEngine(_scores(sp), PortfolioRunConfig(**common)).run(panel)
+    res_mvo = PortfolioEngine(
+        _scores(sp),
+        PortfolioRunConfig(**common, weighting="mvo", mvo_min_obs=20, mvo_lookback=120),
+    ).run(panel)
+    # min_obs=20 never reached in a 12-bar panel → mvo falls back to equal →
+    # identical equity curves.
+    assert np.allclose(res_eq.curve["equity"].to_numpy(),
+                       res_mvo.curve["equity"].to_numpy())
+
+
 def test_empty_panel_returns_empty_result():
     sp = pd.DataFrame()
     strat = PrecomputedScoreStrategy(sp, name="empty")

@@ -1,0 +1,13 @@
+# L_topk: top_k 20 vs 10 on new baseline (selection.json 15yr-IR pool, alpha=0.0005).
+# Both arms share strategy => same scores => engine-only Layer D (fast).
+base_config: ../../../config.yaml
+use_ab_pool: false
+arms:
+  topk_20:
+    portfolio_backtest:
+      portfolio:
+        top_k: 20
+  topk_10:
+    portfolio_backtest:
+      portfolio:
+        top_k: 10

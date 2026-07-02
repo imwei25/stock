@@ -121,10 +121,16 @@ arms:
 portfolio_backtest:
   enabled: true                     # 默认 false (opt-in)
   portfolio:
-    top_k: 20                       # 每次取分数前 K 等权
+    top_k: 20                       # 每次取分数前 K
     rebalance_n_days: 5             # 每 N 个 bar 调仓一次
     max_per_industry: 5             # 同行业最多持仓数 (PR-2 起生效;null 关闭)
     initial_cash: 1.0
+    weighting: equal                # equal (默认, 1/K) | mvo (Ledoit-Wolf 协方差 + 均值方差优化)
+    # --- 以下仅 weighting=mvo 时生效 ---
+    mvo_risk_aversion: 10.0         # γ: 越大越分散 (趋近等权)
+    mvo_w_max: 0.15                 # 单票上限, 必须 ≥ 1/top_k 否则该次回退等权
+    mvo_lookback: 120              # 协方差用的 trailing 收益窗口 (bar)
+    mvo_min_obs: 20                # 窗口样本不足时回退等权
   eligibility:                      # 逐 bar 漏斗过滤 (PR-2 起生效)
     min_avg_amount_20d: 5e7         # 最近 20 bar 均成交额下限 (close * volume * 100)
     exclude_st: true                # 名称含 "ST" 排除

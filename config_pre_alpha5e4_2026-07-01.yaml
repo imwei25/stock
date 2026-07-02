@@ -189,7 +189,7 @@ strategy:
     selector:
       type: lasso             # 目前唯一支持的 selector (PR-B 后增加 lightgbm)
       lasso:
-        alpha: 0.0005         # 2026-07-01 自驱循环 0.001→0.0005: Layer B CONFIRMED ΔIC+15.3% t=8.1 全7regime正(OOS反驳过拟合), Layer D +0.051 not-worse. 备份 config_pre_alpha5e4_2026-07-01.yaml
+        alpha: 0.001          # L1 强度; 越大越稀疏 (1e-4 ~ 1e-1 合理)
         max_iter: 1000
         tol: 1.0e-6
 

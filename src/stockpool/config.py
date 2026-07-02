@@ -608,6 +608,16 @@ class PortfolioRunConfig(BaseModel):
     rebalance_n_days: int = Field(default=5, ge=1)
     max_per_industry: int | None = Field(default=5, ge=1)
     initial_cash: float = Field(default=1.0, gt=0.0)
+    # --- weighting (PR-P1-1) ---
+    # "equal" = legacy 1/K (default, bit-exact). "mvo" = mean-variance with a
+    # Ledoit-Wolf shrunk covariance, long-only, box-constrained, fully invested.
+    weighting: Literal["equal", "mvo"] = "equal"
+    mvo_risk_aversion: float = Field(default=10.0, gt=0.0)
+    # Per-name cap for mvo. Must be >= 1/top_k to be feasible; the engine falls
+    # back to equal weight on any infeasible/degenerate rebalance.
+    mvo_w_max: float = Field(default=0.15, gt=0.0, le=1.0)
+    mvo_lookback: int = Field(default=120, ge=2)
+    mvo_min_obs: int = Field(default=20, ge=2)
 
 
 class PortfolioEligibilityConfig(BaseModel):

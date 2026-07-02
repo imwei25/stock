@@ -34,6 +34,7 @@ from stockpool.config import PortfolioRunConfig
 from stockpool.portfolio.eligibility import EligibilityFilter
 from stockpool.portfolio.result import PortfolioBacktestResult, PortfolioTrade
 from stockpool.portfolio.strategy import PortfolioStrategy
+from stockpool.portfolio.weighting import compute_target_weights
 
 log = logging.getLogger("stockpool")
 
@@ -99,7 +100,7 @@ class PortfolioEngine:
         num_pos = np.zeros(n_bars, dtype=int)
         cash_ratio = np.zeros(n_bars)
         rebalance_records: list[dict] = []
-        pending_target: set[str] | None = None
+        pending_target: dict[str, float] | None = None
 
         for t in range(n_bars):
             date_t = dates[t]
@@ -110,7 +111,7 @@ class PortfolioEngine:
             if pending_target is not None:
                 cash, closed_now = _rebalance_to_target(
                     positions=positions, cash=cash,
-                    target=pending_target,
+                    target_weights=pending_target,
                     opens_t=opens_t, t=t, date_t=date_t,
                     costs=self.costs,
                 )
@@ -142,17 +143,18 @@ class PortfolioEngine:
                     eligible_codes = self.eligibility.eligible(date_t, panel_data)
                     scores = {c: s for c, s in scores.items() if c in eligible_codes}
                 if scores:
-                    pending_target = _select_top_k(
+                    target = _select_top_k(
                         scores=scores,
                         k=self.cfg.top_k,
                         opens_next=opens.iloc[t + 1],
                         sector_map=self.sector_map,
                         max_per_industry=self.cfg.max_per_industry,
                     )
+                    pending_target = self._target_weights(target, scores, closes, t)
                     rebalance_records.append({
                         "date": date_t,
-                        "target_codes": sorted(pending_target),
-                        "num_target": len(pending_target),
+                        "target_codes": sorted(target),
+                        "num_target": len(target),
                     })
 
         # End-of-backtest close-out: realize remaining positions so trade-level
@@ -215,6 +217,42 @@ class PortfolioEngine:
             rebalance_log=rebalance_log,
             metrics=metrics,
             strategy_name=self.strategy.name,
+        )
+
+    # ---- weighting ----
+
+    def _target_weights(
+        self,
+        target: set[str],
+        scores: Mapping[str, float],
+        closes: pd.DataFrame,
+        t: int,
+    ) -> dict[str, float]:
+        """Map a selected target set to ``{code: weight}`` (sums to 1).
+
+        ``weighting="equal"`` returns the 1/K vector (legacy, bit-exact).
+        ``weighting="mvo"`` builds a trailing return window from ``closes`` up
+        to and including bar ``t`` and delegates to ``compute_target_weights``
+        (Ledoit-Wolf cov + box-constrained QP), which itself falls back to
+        equal weight on any degenerate window.
+        """
+        if not target:
+            return {}
+        method = getattr(self.cfg, "weighting", "equal")
+        if method == "equal":
+            w = 1.0 / len(target)
+            return {c: w for c in target}
+        # mvo: trailing daily returns over the lookback window (inclusive of t).
+        lookback = self.cfg.mvo_lookback
+        lo = max(0, t - lookback)
+        cols = [c for c in target if c in closes.columns]
+        window = closes.iloc[lo:t + 1][cols].pct_change().iloc[1:] if cols else pd.DataFrame()
+        return compute_target_weights(
+            sorted(target), scores, window,
+            method="mvo",
+            risk_aversion=self.cfg.mvo_risk_aversion,
+            w_max=self.cfg.mvo_w_max,
+            min_obs=self.cfg.mvo_min_obs,
         )
 
 
@@ -302,17 +340,22 @@ def _select_top_k(
 def _rebalance_to_target(
     positions: dict[str, _Position],
     cash: float,
-    target: set[str],
+    target_weights: Mapping[str, float],
     opens_t: pd.Series,
     t: int,
     date_t: pd.Timestamp,
     costs: TradeCosts,
 ) -> tuple[float, list[PortfolioTrade]]:
-    """Full equal-weight rebalance: liquidate, redistribute.
+    """Full rebalance to a target weight vector: liquidate, redistribute.
+
+    ``target_weights`` maps ``{code: weight}`` (weights over the selected
+    target, summing to ~1). Codes without an executable ``open[t]`` are dropped
+    and the remaining weights renormalized, so the engine stays fully invested.
+    With an equal-weight vector this is bit-exact with the legacy 1/K behavior.
 
     PR-1 simplification per spec — clean semantics, no turnover_cap. Sells
     everything (or holds if next-bar open is NaN), pools cash, then buys
-    target codes equal-weight with whatever cash remains.
+    target codes by weight with whatever cash remains.
 
     Survivors in (current ∩ target) are sold and re-bought (T+1 fictitious
     churn) so the math stays uniform; PR-2/3 can add a "hold survivors"
@@ -344,23 +387,31 @@ def _rebalance_to_target(
         ))
         del positions[code]
 
-    # 2. Of the target, keep only codes with a valid open price.
-    buyable = [c for c in target if pd.notna(opens_t.get(c))]
+    # 2. Of the target, keep only codes with a valid open price; renormalize
+    #    weights over the buyable subset (equal-weight => 1/len(buyable),
+    #    bit-exact with the legacy per_lot = cash/len(buyable)).
+    buyable = [c for c in target_weights if pd.notna(opens_t.get(c))]
     if not buyable:
         return cash, closed
-    per_lot = cash / len(buyable)
+    wsum = sum(max(0.0, float(target_weights[c])) for c in buyable)
+    if wsum <= 1e-12:
+        w_re = {c: 1.0 / len(buyable) for c in buyable}
+    else:
+        w_re = {c: max(0.0, float(target_weights[c])) / wsum for c in buyable}
+    base_cash = cash  # post-liquidation pool to allocate
     for code in buyable:
         px = float(opens_t.get(code))
-        committed = per_lot * (1 - costs.buy_cost)
+        alloc = base_cash * w_re[code]
+        committed = alloc * (1 - costs.buy_cost)
         shares = committed / px if px > 0 else 0.0
         if shares <= 0:
             continue
         positions[code] = _Position(
             code=code, entry_idx=t, entry_date=date_t,
             entry_price=px, shares=shares,
-            weight_at_entry=per_lot / max(cash, 1e-12),
+            weight_at_entry=alloc / max(cash, 1e-12),
         )
-        cash -= per_lot
+        cash -= alloc
     return cash, closed
 
 
