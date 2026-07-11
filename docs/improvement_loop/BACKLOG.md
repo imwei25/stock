@@ -4,9 +4,12 @@
 > 完成一个方向后更新其状态,并把结果写进 [WORKLOG.md](WORKLOG.md)。
 >
 > **基线 (baseline)**:`config.yaml` = `factors_file: reports/selection.json`。
-> ⚠️ **2026-06-30 起 selection.json = 15yr-IR 重选池**(top-1000 × 15yr IR 重选;Layer B CONFIRMED
->   ΔIC +18.5% / Layer D Sharpe 0.23→0.47;旧 GTJA 集备份 selection_pre_15yr_2026-06-30.json)。见 WORKLOG「P0-3」。
->   revert: `cp reports/selection_pre_15yr_2026-06-30.json reports/selection.json`。
+> ⚠️ **2026-07-11:15yr-IR 池已回滚**(RV 重验:promote 证据在修正 harness 下不成立——@5e4 全期
+>   CI 含 0、2021+ Δ=−0.0064 跨 alpha 稳定为负;见 WORKLOG「RV wave 第二轮结果」)。
+>   **selection.json 恢复 = pre-15yr(GTJA era)池**;新池备份
+>   `reports/selection_15yr_irpool_promoted_2026-06-30.json`。**alpha=0.0005 保留**(跨池跨期稳健)。
+> ⚠️ (历史)2026-06-30 曾 promote 15yr-IR 重选池(Layer B CONFIRMED ΔIC+18.5%,后判定为
+>   2011-2020 时段集中 + 选择偏差(holdout 定界 ~+0.009)+ 旧 oracle 的复合产物)。见 WORKLOG「P0-3」。
 > ⚠️ (历史)A1 起 selection.json 曾 = GTJA 集(备份 selection_pre_gtja_2026-06-26.json)。
 > ⚠️ **G1 起 portfolio.top_k = 10**(原 20)。+
 > ml_factor / lasso(α=0.001) / IC(rank) / horizon=3 / train_window=250 / refit=20 /
