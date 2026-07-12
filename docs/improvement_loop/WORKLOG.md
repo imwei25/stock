@@ -16,6 +16,26 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## RV-D — 换手敏感 AB 全量重验 @ 修正引擎(2026-07-12,RV 收尾)
+- **设置**:回滚后基线(old 池 @ alpha 5e4),`config_rv_engine.yaml` = hold_survivors +
+  limit_guard + `top_n_liquidity: 1000`(PIT as-of 流动性 universe);rv_eval_pool(含退市 244);
+  score panel 全部 v3 缓存命中,engine-only。基线 Sharpe = **0.331**(诚实执行语义下的绝对水平,
+  显著低于旧 harness 的 0.5+ ——旧绝对数含静态池前视 + 无涨停约束)。
+- **结果**:
+
+| 方向 | 旧引擎结论 | 修正引擎(本次) | 终判 |
+|---|---|---|---|
+| top_k 20→10 | 点 +0.07~+0.27 但不稳 | **−0.212,CI [−0.40,−0.03] 排 0(负)**,halves/thirds/7regime 全负 | **翻转:k10 显著更差**。k10 在 PIT 池 + 涨停约束下覆盖掉到 0.84,集中组合受执行约束伤害更大。保留 k20 |
+| rebalance 5→10 | −0.045 含 0 | −0.090,CI 含 0 | 维持 NOT CONFIRMED,保留 5(本次才是有分辨力的量测) |
+| weighting equal→mvo | +0.119 含 0(点正) | **−0.089,CI 含 0,子段乱** | **点估计翻负**:MVO 的"换手 −31% 省成本"优势在 hold_survivors 下消失 —— 印证其点正主要是旧全清仓成本模型的伪影。保留 equal |
+| horizon 3→10 | −0.111(L_h10d) | **+0.100,CI 含 0(P=0.13),halves+thirds+7regime 全正** | **方向翻正,最强新 lead**:hold_survivors 下 h10 慢信号→更多留任→真实省换手。未达门槛不 promote;记 provisional,后续可 Layer B+双池追 |
+- **结论**:4 个方向里 2 个在修正引擎下改变性质(topk 翻显著负、mvo 点翻负)、1 个出现方向翻转的
+  新 lead(h10)。**"换手敏感结论必须在 hold_survivors 引擎下量"从推断升级为实证。**
+- **RV 全程收官**:所有列入"不可信清单"的结论已在修正 harness 下重验完毕。最终处置:
+  alpha=0.0005 ✅ 维持 / 因子集切换 ❌ 已回滚 / bottom-line 2.2× ❌ 已撤销 /
+  topk=20、rebal=5、equal 权重 ✅ 维持(其中 k10 从"方向存疑"变为"显著更差") /
+  h10 ⚠️ provisional 正向 lead。
+
 ## RV — 外部评审驱动的 harness 修复 + 全结论重验(2026-07-02,进行中)
 
 **背景**:外部代码/方法评审指出 harness 三大盲区:① 幸存者偏差(universe 只含当前上市股 +
