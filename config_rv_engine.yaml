@@ -153,6 +153,7 @@ portfolio_backtest:
     min_avg_amount_20d: 5.0e7
     exclude_st: true
     min_history_bars: 60
+    top_n_liquidity: 1000   # RV: PIT as-of liquidity universe
 
 # === 策略选择 ===
 # name: composite_verdict (默认, 原综合评级) | ml_factor (Lasso + IC 两步法)
