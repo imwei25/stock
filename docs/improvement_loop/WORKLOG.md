@@ -16,6 +16,29 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## RV-h10 — h3→h10 双层双池硬化(2026-07-13 跑完/07-16 判定)— NOT CONFIRMED,不 promote
+- **背景**:RV-D 里 h10 是唯一正向 lead(Layer D 主池 +0.100,粗子段全正)。按硬化协议补
+  Layer B 双口径 + 双池(pool2_midliq 1500 只,0 重叠)+ pool2 Layer D。全部在修正 harness
+  (old 池@5e4 基线,PIT top-1000,open-basis,入场涨停剔除,hold_survivors+limit_guard)。
+- **证据矩阵**:
+
+| 层 | 口径 | 主池(rv_eval) | pool2(disjoint) |
+|---|---|---|---|
+| Layer B | fwd=10(自家) | +0.0066,CI **含 0**,8 段 7 正 | **+0.0101,t=7.9,CI 排 0,halves/thirds/5 全正 → CONFIRMED** |
+| Layer B | fwd=3 | +0.0023 ns | +0.0040,CI 勉强含 0 |
+| Layer D | 组合 Sharpe | **+0.100**,halves/thirds/7regime 全正,CI 含 0 | **−0.057**(**符号翻转**),子段乱 |
+
+- **判定**:**NOT CONFIRMED,不 promote,保留 h3**。h10 在 IC 层的增量信号是真的
+  (两池同号、pool2 过 CI),但**组合层跨池符号翻转**(+0.100 vs −0.057)——正是当年
+  GTJA 被否的失败签名(universe-conditional 组合效应)。IC 增益在 mid-liq 池上被组合
+  整合环节(与 rebalance=5 的节奏错配、选股重叠、换手结构)吃掉。
+- **可选后续**(新方向,非本判定一部分):h10 + rebalance_n_days=10 的**节奏匹配**变体
+  从未测过 —— h10 慢信号配快调仓可能是自缚手脚;若未来重启优化循环,这是 h10 线上
+  唯一值得再试的形态。
+- **RV 全程至此完全收官**:不可信结论清单全部重验完毕,provisional lead 亦已按协议
+  处置。基线 = old 池 @ alpha 5e4 + h3 + k20 + rebal5 + equal + ic + lasso(tw250),
+  全部经修正 harness 验证。
+
 ## RV-D — 换手敏感 AB 全量重验 @ 修正引擎(2026-07-12,RV 收尾)
 - **设置**:回滚后基线(old 池 @ alpha 5e4),`config_rv_engine.yaml` = hold_survivors +
   limit_guard + `top_n_liquidity: 1000`(PIT as-of 流动性 universe);rv_eval_pool(含退市 244);
