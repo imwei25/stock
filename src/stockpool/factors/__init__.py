@@ -58,6 +58,7 @@ from stockpool.factors import vwap_deviation  # noqa: F401
 from stockpool.factors import close_position  # noqa: F401
 from stockpool.factors import turnover_extra  # noqa: F401
 from stockpool.factors import acceleration  # noqa: F401
+from stockpool.factors import overnight  # noqa: F401
 from stockpool.factors import single_stock_vol  # noqa: F401
 from stockpool.factors import composite  # noqa: F401
 from stockpool.factors import rank_correlation  # noqa: F401
