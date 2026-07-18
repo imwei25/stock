@@ -47,6 +47,15 @@ EXPECTED_RUST_DIVERGENCE: dict[str, dict[str, float]] = {
     # decay_linear then ts_rank again, those 1-ULP diffs can flip rank order by
     # exactly 1/19 ≈ 0.0526 per cell. Observed: 15 cells / max_diff = 0.0526.
     "alpha_076": {"atol": 0.06, "rtol": 0.5, "max_mismatches": 30},
+    # 2026-07-18 fixture regeneration extended coverage to the wq101 window
+    # variants + GTJA191 — same rank-flip cascade class as alpha_040 (1-ULP
+    # ts_std/decay drift through rank() flips near-ties by 1/k). Caps ≈ 2×
+    # the observed worst case (measured against the fresh pandas snapshot).
+    "alpha_040_compress":    {"atol": 0.06, "rtol": 0.5, "max_mismatches": 1400},
+    "alpha_040_rev_short":   {"atol": 0.06, "rtol": 0.5, "max_mismatches": 1400},
+    "alpha_040_expand_long": {"atol": 0.02, "rtol": 0.5, "max_mismatches": 150},
+    "gtja_042":              {"atol": 0.02, "rtol": 0.5, "max_mismatches": 150},
+    "gtja_104":              {"atol": 0.03, "rtol": 0.5, "max_mismatches": 40},
 }
 
 _STRICT_ATOL = 1e-9

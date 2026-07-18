@@ -31,6 +31,19 @@ class _ExplodingLegacy:
         raise RuntimeError("boom")
 
 
+class _HangingLegacy:
+    """Picklable strategy whose workers never produce a result — simulates a
+    worker that died / wedged (the F1 hang class). Module-level so Windows
+    spawn can import it inside Pool workers."""
+    def generate_signals(self, daily):
+        import time
+        time.sleep(60)
+        return pd.DataFrame({
+            "date": daily["date"], "close": daily["close"],
+            "final_score": [1.0] * len(daily),
+        })
+
+
 class _NoScoreLegacy:
     def generate_signals(self, daily):
         return pd.DataFrame({
@@ -104,3 +117,18 @@ def test_passes_full_daily_history_to_legacy():
     # Helper called legacy once with the whole daily frame (legacy is
     # responsible for walk-forward).
     assert legacy.calls == [4]
+
+
+def test_parallel_no_result_times_out_instead_of_hanging():
+    """F1 guard: when workers never deliver a result (dead/wedged worker),
+    the result loop must raise within result_timeout_s instead of blocking
+    forever on ``imap_unordered`` (multiprocessing.Pool cannot detect
+    abruptly-dead workers)."""
+    # ≥20 stocks so the tiny-workload guard doesn't force serial mode.
+    dates = ["2024-01-02", "2024-01-03"]
+    panel_data = {f"S{i:02d}": _mk_daily(dates) for i in range(20)}
+    with pytest.raises(RuntimeError, match="no result within"):
+        precompute_scores_from_legacy(
+            _HangingLegacy(), panel_data,
+            n_workers=2, result_timeout_s=3.0,
+        )

@@ -259,6 +259,7 @@ def precompute_scores_from_legacy(
     score_field: str = "final_score",
     n_workers: int | None = None,
     prewarm: bool = True,
+    result_timeout_s: float | None = None,
 ) -> pd.DataFrame:
     """Build a (T × N) score panel by calling ``legacy.generate_signals`` per stock.
 
@@ -274,6 +275,14 @@ def precompute_scores_from_legacy(
             monthly ML fits in the main process so workers inherit them via
             the pickled ``_shared_cache``. Set False to disable (verifies
             equivalence in tests).
+        result_timeout_s: parallel mode only — max seconds to wait for the
+            NEXT result before declaring the pool dead. ``multiprocessing.Pool``
+            does NOT detect abruptly-dead workers (e.g. OS OOM-kill): the
+            iterator just blocks forever, which is exactly the 15-yr "stuck at
+            1499/1500" hang (F1). Converting that hang into a RuntimeError
+            makes the failure visible and retryable with fewer workers.
+            ``None`` (default) reads env ``STOCKPOOL_SCORE_RESULT_TIMEOUT_S``,
+            falling back to 1800s. ``float("inf")`` disables the guard.
 
     Returns:
         ``pd.DataFrame`` indexed by date, columns = codes, values = score.
@@ -339,6 +348,7 @@ def precompute_scores_from_legacy(
         series_by_code = _serial_loop(legacy_strategy, tasks, score_field, code_iter)
     else:
         from multiprocessing import Pool
+        from multiprocessing import TimeoutError as MpTimeoutError
         log.info(
             "precompute_scores: parallel mode (n_workers=%d) over %d stocks",
             n_workers, len(tasks),
@@ -368,9 +378,33 @@ def precompute_scores_from_legacy(
             initializer=_worker_init,
             initargs=(legacy_strategy, parent_sector_map),
         )
+        if result_timeout_s is None:
+            result_timeout_s = float(
+                os.environ.get("STOCKPOOL_SCORE_RESULT_TIMEOUT_S", "1800"))
         try:
             checkpoint("Pool() spawned — workers initialised")
-            for code, series, err in pool.imap_unordered(_score_one_stock, tasks):
+            result_iter = pool.imap_unordered(_score_one_stock, tasks)
+            n_seen = 0
+            while True:
+                try:
+                    if result_timeout_s == float("inf"):
+                        code, series, err = result_iter.next()
+                    else:
+                        code, series, err = result_iter.next(
+                            timeout=result_timeout_s)
+                except StopIteration:
+                    break
+                except MpTimeoutError:
+                    # No result for result_timeout_s: a worker most likely
+                    # died abruptly (OS OOM-kill) and Pool can't see it —
+                    # without this guard the loop blocks forever (F1 hang).
+                    raise RuntimeError(
+                        f"precompute_scores: no result within "
+                        f"{result_timeout_s:.0f}s ({n_seen}/{len(tasks)} "
+                        "done) — a worker was likely OOM-killed. Retry "
+                        "with fewer workers (e.g. --workers 1)."
+                    ) from None
+                n_seen += 1
                 if err is not None:
                     log.warning("score panel: %s %s; skip", code, err)
                 else:
