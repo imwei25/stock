@@ -26,6 +26,23 @@
 >
 > **状态图例**:TODO · IN_PROGRESS · KEPT(采纳)· REJECTED(无增益)· BLOCKED
 
+## ★★★★ AUDIT-2026-07-18 wave(新 /loop session)— 见 WORKLOG「AUDIT-2026-07-18」
+
+- **修复落地**(commits `ea892a7`/`085829c`/`0d4d24d`):3 CONFIRMED bug(跌停持仓被覆盖 /
+  退市股 entry-price 估值 / per-arm universe_codes 被忽略)+ F1 hang→timeout fast-fail +
+  snapshot fixture 重生成(219 skip→live)+ ipo_dates akshare fallback(**L1 解锁**,
+  `ab-pool build --refresh` 可离线重建 IPO 硬过滤)。
+- **⚠️ 修正引擎基线变化**:BUG-2 修复后 rv_eval 基线 Sharpe 0.331→**0.288**(退市股
+  假反弹被去掉)。所有含退市池的历史 Layer D 数字与新数字不可直接比。
+- **h10 线彻底关闭**:L_h10rebal10(节奏匹配,最后一个未试形态)ΔSharpe −0.077 反向。
+- **rank_buffer_mult 已实现**(opt-in,默认 None=bit-exact):buffer=2.0 AB NOT CONFIRMED
+  (+0.042 含 0),不 promote 但机制可用。
+- **blend(0.5·z(h3)+0.5·z(h10))= 最强 provisional lead**:Layer B 双池 CONFIRMED
+  (ΔIC +6%,t=4.7/6.3,CI 排 0,全子段正,w 敏感性稳),Layer D rv_eval +0.075 全子段正
+  但 CI 含 0、pool2 持平 → **不 promote**。重启时优先回访(WORKLOG 列了 3 个后续形态)。
+- **剩余队列**(来自 scout,未动):④ cross_sec_rank 标签(stub 实装+Layer B)
+  ⑤ 隔夜/日内分解因子族(新家族,analyze 先筛)⑥ walk-forward 周期重选(重计算)。
+
 ## ★ 自驱循环当前状态 (cron 0715a0ec, 每 30min, 2026-06-30 起)
 
 > 每个 cron fire:① 读本节;② PowerShell `Get-Process python` 查在跑实验,有(GB 级)就读其 log 看进度、结束本 cycle;

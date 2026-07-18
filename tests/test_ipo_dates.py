@@ -190,7 +190,7 @@ def test_fetch_from_akshare_merges_exchanges(monkeypatch):
     assert out.set_index("code").loc["000001", "ipo_date"] == pd.Timestamp("1991-04-03")
 
 
-def test_unknown_source_raises(tmp_path):
+def test_unknown_source_raises():
     from stockpool import ipo_dates
     with pytest.raises(ValueError, match="unknown ipo_dates source"):
         ipo_dates._fetch("tushare")

@@ -135,6 +135,8 @@ portfolio_backtest:
     # --- 执行现实性 (2026-07-02, 默认 false = 旧行为 bit-exact) ---
     hold_survivors: false           # true: 留任股持有不动 (不再"卖出重买"付虚拟往返成本)
     limit_guard: false              # true: 一字涨停买不进 (次名递补) / 一字跌停卖不出 (持到下次调仓)
+    rank_buffer_mult: null          # 滞回带: 留任股 rank 在 top(k×mult) 内保留席位, 新入场仍需 top-k
+                                    # (降换手不拖慢入场; null = 无记忆 top-K, 旧行为 bit-exact)
   eligibility:                      # 逐 bar 漏斗过滤 (PR-2 起生效)
     min_avg_amount_20d: 5e7         # 最近 20 bar 均成交额下限 (close * volume * 100)
     exclude_st: true                # 名称含 "ST" 排除
@@ -472,8 +474,8 @@ strategy:
 ```
 
 **关键**:`mask.enabled=true` 时 `MLFactorStrategy` 会自动调 `stockpool.ipo_dates.load_or_build_ipo_dates`
-拉一次全 A 股 IPO 日期(baostock,缓存到 `data/ipo_dates.parquet`,30 天有效期)。
-首次需要网络拉 ~3-5 秒;后续直接读盘。
+拉一次全 A 股 IPO 日期(多源:baostock 优先,失败自动落到 akshare 三张交易所名录;
+缓存到 `data/ipo_dates.parquet`,30 天有效期)。首次需要网络拉几秒;后续直接读盘。
 
 启用后训练样本数下降 ~1-5%(取决于股池规模),大样本(训练池 = 全 A 股)上 Sharpe 预期提升 0.05-0.4(论文 B 在 4000+ 票 × 3 年 × 213 因子上报告 +0.44)。
 

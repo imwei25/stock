@@ -51,15 +51,51 @@ RV-h10 的 v3 缓存面板:rv_eval(1241 codes)与 pool2(1500 codes)per-day 秩�
 mean 0.835 / 0.842(p10≈0.72)。**远低于 0.95 杀线** → h10 有独立截面信息,
 blend(0.5·z(h3)+0.5·z(h10))方向存活,待跑 Layer B(见队列)。
 
-### 未决队列(下一迭代)
+### Wave-2 研究结果(2026-07-18,commits `0d4d24d` + docs)
 
-- Kill-check B:RV-D 基线 gross-vs-net 成本拖累(<0.1 Sharpe 则杀 rank-buffer 方向)
-- 方向1:blend Layer B(fwd=3/10 × 两池 × 2021+ 子窗,w=0.5 预注册)
-- 方向3:h10×rebal10 节奏匹配 Layer D(纯 config,score 缓存命中)
-- ipo_dates akshare fallback(解 L1;之后可重建 ab_pool IPO 硬过滤)
-- 文档:CLAUDE.md 陈旧项(mask_exec 已落地/测试数/correlation 措辞)
-- **注意**:BUG-2 修复改变含退市池的 engine 数字 → 涉及退市股的历史 Layer D 结论
-  (RV-D/RV-h10 的组合层数字)如需引用应在新 engine 下重跑;IC 层(Layer B)不受影响。
+**Kill-check B(成本拖累)✅ 放行**:RV-D 基线(h3/k20/rebal5,修正引擎)gross Sharpe
+0.528 vs net 0.288 → **拖累 0.239**,远超 0.1 杀线。附带:修正引擎下基线 net Sharpe
+0.288 < RV-D 记录的 0.331 —— 差值 ≈ BUG-2(退市股按入场价估值)此前虚增的部分。
+
+**方向3 h10×rebal10 节奏匹配 — ❌ NOT CONFIRMED,h10 线彻底关闭**
+(config `L_h10rebal10.yaml`,rv_eval,ab_significance 全套):
+ΔSharpe **−0.077**(方向反),CI [−0.295,+0.138] 含 0,thirds/5/8 桶符号乱;
+换手确实降了(9790→5315 trades,−46%)但 Sharpe 更差 → "慢信号配慢调仓"不成立。
+结合 RV-h10 的 pool2 符号翻转,**h10 作为独立 horizon 的全部形态(@rebal5 / @rebal10 /
+替换式)均已测负,不再回访**。h10 信息只在 blend 里活着(见下)。
+
+**方向2 rank buffer(滞回带)— 已实现,❌ NOT CONFIRMED,不 promote**
+(`portfolio.rank_buffer_mult`,默认 None=bit-exact;AB config `L_rankbuffer.yaml`):
+buffer=2.0(预注册)ΔSharpe **+0.042**,CI [−0.053,+0.147] 含 0,子段早负晚正
+(2021+ 桶 +0.127,但 8 桶 4+/4−)。换手仅降 17%(9790→8100)——top-K 边界抖动
+比预想小。机制保留为生产可用 opt-in,基线不变。
+
+**方向1 h3+h10 blend — Layer B ✅ CONFIRMED(双池),Layer D ❌ 不硬化 → 不 promote**
+(`analysis/blend_horizons.py` + `blend_layer_d.py`;w=0.5 预注册,修正 oracle:
+open-basis + 入场涨停剔除 + as-of top-1000):
+
+| 层 | 池 | 结果 |
+|---|---|---|
+| Layer B fwd=3 | rv_eval | ΔIC **+0.0034**(+6.4%)t=4.7 CI[+0.0010,+0.0059] 排0,halves/thirds 全正 |
+| Layer B fwd=3 | pool2 | ΔIC **+0.0043**(+5.9%)t=6.3 CI 排0,全子段正;2021+ 亦过 CI |
+| 敏感性 w=0.3/0.7 | 双池 | 同号同量级 → 非权重挑选产物 |
+| Layer D | rv_eval | ΔSharpe **+0.075**,halves/thirds 全正,但 CI [−0.045,+0.198] 含 0(P=0.108)|
+| Layer D | pool2 | ΔSharpe **−0.004** 持平,子段不一致 |
+
+**判定:不 promote**(Layer D 跨池不硬化 —— 与 h10 独立形态同款签名:IC 层真实、
+组合整合层吃掉)。**但这是本 session 最强的 provisional lead**:rv_eval Layer D 子段
+全正 + return +0.82(1.60→2.42)+ maxDD 略优 + 换手更低,pool2 也只是持平而非负。
+若未来重启:可试 ① blend 配 MVO/更高 k 的组合形态;② 三 horizon(3/5/10)blend;
+③ pool2 组合层持平的归因(选股重叠度)。
+
+### 本 session 收官状态
+
+- 修复:3 CONFIRMED bug + eligibility 缓存隐患 + F1 hang→fast-fail + 219 skip 测试复活
+  + ipo_dates akshare fallback(L1 解锁,ab_pool IPO 硬过滤可离线重建)。
+- 研究:4 方向全走硬化判定,0 promote(blend 为最强 provisional,双层证据入档)。
+- 基线不变:h3 / k20 / rebal5 / equal / ic / lasso(α=5e-4)/ old 池。
+- **注意**:BUG-2 修复改变含退市池的 engine 绝对数字(基线 0.331→0.288)→ 历史 Layer D
+  数字与新数字不可直接比;本 wave 所有 Layer D 均在修正引擎下同口径对比。IC 层不受影响。
 
 ## RV-h10 — h3→h10 双层双池硬化(2026-07-13 跑完/07-16 判定)— NOT CONFIRMED,不 promote
 - **背景**:RV-D 里 h10 是唯一正向 lead(Layer D 主池 +0.100,粗子段全正)。按硬化协议补
