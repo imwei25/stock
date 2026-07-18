@@ -357,6 +357,14 @@ class MLFactorStrategy(Strategy):
         shared_cache: dict | None = None,
     ):
         self.cfg = cfg
+        if cfg.label_type != "return" and cfg.panel_mode != "pooled":
+            # vol_adjusted / cross_sec_rank are panel-only transforms; the
+            # per_stock training path computes labels per stock (no
+            # cross-section) and would otherwise silently ignore the setting.
+            raise ValueError(
+                f"label_type={cfg.label_type!r} requires panel_mode='pooled' "
+                f"(got {cfg.panel_mode!r})"
+            )
         self.pool_data: dict[str, pd.DataFrame] = dict(pool_data or {})
         self._current_stock_code = current_stock_code
         # 可选: 跨股票预算好的因子面板 (name -> T×N wide frame)。
@@ -833,6 +841,7 @@ class MLFactorStrategy(Strategy):
                 preprocess_cfg=cfg.preprocess,
                 cache_dir=self._cache_dir,
                 label_basis=cfg.label_basis,
+                label_type=cfg.label_type,
             )
             if len(X_pool) > 0 and cfg.train_window > 0:
                 # Same lower date bound as _build_pooled_xy_from_panel: keep
@@ -912,8 +921,8 @@ class MLFactorStrategy(Strategy):
                     ohlcv, self.cfg.mask, ipo_dates=self._get_ipo_dates(),
                 )
         fwd = forward_return_panel(
-            self._close_panel, self.cfg.horizon, mask=mask,
-            open_=self._open_panel_for_labels(),
+            self._close_panel, self.cfg.horizon, self.cfg.label_type,
+            mask=mask, open_=self._open_panel_for_labels(),
         )
         X, y = stack_panel_to_xy(self._factor_panel, fwd, dropna=True)
         # Original layout is (stock, date); swap so date is outer + sort so
@@ -1035,7 +1044,7 @@ class MLFactorStrategy(Strategy):
             open_sub = sub_o
 
         fwd = forward_return_panel(
-            close_sub, cfg.horizon, mask=mask, open_=open_sub,
+            close_sub, cfg.horizon, cfg.label_type, mask=mask, open_=open_sub,
         )
         X, y = stack_panel_to_xy(sliced_fp, fwd, dropna=True)
         if len(X) > 0 and cfg.train_window > 0:

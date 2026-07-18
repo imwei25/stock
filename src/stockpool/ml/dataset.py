@@ -101,8 +101,13 @@ def forward_return_panel(
         horizon: 前瞻天数 h。
         label_type:
             "return"          — 收益标签(基准见 open_ 参数)。
-            "vol_adjusted"    — NotImplementedError (placeholder for future PR).
-            "cross_sec_rank"  — NotImplementedError (placeholder for future PR).
+            "vol_adjusted"    — return ÷ 决策 bar 时点的 trailing-20d 日收益
+                                波动(rolling std, min_periods=10;look-ahead
+                                安全:vol 只用 ≤t 的 close)。压低高波动股对
+                                Lasso 损失的支配。
+            "cross_sec_rank"  — per-day 截面 pct rank − 0.5 ∈ [−0.5, +0.5]。
+                                与 rank-IC 评价口径对齐,天然中性化每日共同
+                                涨跌与肥尾。仅面板路径可用(需要截面)。
         mask: 可选 T × N bool 可交易性。close 基准:要求 mask[t] ∧ mask[t+h];
               open 基准:检查实际进出场 bar — mask[t+1] ∧ mask[t+1+h]。
               不满足的 t 位置 y 值变 NaN。
@@ -113,35 +118,40 @@ def forward_return_panel(
     """
     if horizon <= 0:
         raise ValueError(f"horizon must be > 0, got {horizon}")
-    if label_type == "return":
-        if open_ is not None:
-            entry = open_.shift(-1)
-            exit_ = open_.shift(-(horizon + 1))
-            y = exit_ / entry - 1.0
-            if mask is not None:
-                m_entry = mask.shift(-1)
-                m_exit = mask.shift(-(horizon + 1))
-                label_valid = (
-                    m_entry.where(m_entry.notna(), False).astype(bool)
-                    & m_exit.where(m_exit.notna(), False).astype(bool)
-                )
-                y = y.where(label_valid)
-            return y
+    if label_type not in ("return", "vol_adjusted", "cross_sec_rank"):
+        raise ValueError(
+            f"unknown label_type={label_type!r}; "
+            f"expected one of: return, vol_adjusted, cross_sec_rank"
+        )
+    # Base return label (open or close basis) + tradability mask.
+    if open_ is not None:
+        entry = open_.shift(-1)
+        exit_ = open_.shift(-(horizon + 1))
+        y = exit_ / entry - 1.0
+        if mask is not None:
+            m_entry = mask.shift(-1)
+            m_exit = mask.shift(-(horizon + 1))
+            label_valid = (
+                m_entry.where(m_entry.notna(), False).astype(bool)
+                & m_exit.where(m_exit.notna(), False).astype(bool)
+            )
+            y = y.where(label_valid)
+    else:
         y = close.shift(-horizon) / close - 1.0
         if mask is not None:
             shifted = mask.shift(-horizon)
             label_valid = mask & shifted.where(shifted.notna(), False).astype(bool)
             y = y.where(label_valid)
+    if label_type == "return":
         return y
-    if label_type in ("vol_adjusted", "cross_sec_rank"):
-        raise NotImplementedError(
-            f"label_type={label_type!r} is not implemented in PR-A; "
-            f"interface stub only."
-        )
-    raise ValueError(
-        f"unknown label_type={label_type!r}; "
-        f"expected one of: return, vol_adjusted, cross_sec_rank"
-    )
+    if label_type == "cross_sec_rank":
+        # Per-day cross-sectional pct rank, centered. NaN cells stay NaN
+        # (rank skips them), so mask/dropna semantics are unchanged.
+        return y.rank(axis=1, pct=True) - 0.5
+    # vol_adjusted — trailing realized vol as of the DECISION bar t (uses
+    # only closes ≤ t → look-ahead safe). Zero/undefined vol → NaN label.
+    vol = close.pct_change().rolling(20, min_periods=10).std()
+    return y.div(vol.where(vol > 0))
 
 
 def stack_panel_to_xy(
@@ -311,8 +321,9 @@ def forward_return(
 
     basis="open" 时标签为 open[t+1+h]/open[t+1] − 1(与 T+1 开盘成交对齐);
     默认 "close" 维持 legacy close[t+h]/close[t] − 1。
-    Only ``label_type='return'`` is implemented in PR-A; other documented
-    options raise NotImplementedError as interface placeholders.
+    ``vol_adjusted`` / ``cross_sec_rank`` 仅在 **panel 路径**
+    (``forward_return_panel``, panel_mode=pooled)实装;per-stock 路径
+    raise —— cross_sec_rank 需要截面,单股无从谈起。
     """
     if horizon <= 0:
         raise ValueError(f"horizon must be > 0, got {horizon}")
@@ -330,8 +341,8 @@ def forward_return(
         return y
     if label_type in ("vol_adjusted", "cross_sec_rank"):
         raise NotImplementedError(
-            f"label_type={label_type!r} is not implemented in PR-A; "
-            f"interface stub only."
+            f"label_type={label_type!r} is panel-only (needs the "
+            f"cross-section); use panel_mode=pooled."
         )
     raise ValueError(
         f"unknown label_type={label_type!r}; "
@@ -359,6 +370,7 @@ def build_panel(
     preprocess_cfg: "PreprocessConfig | None" = None,
     cache_dir: str | Path | None = None,
     label_basis: str = "close",
+    label_type: str = "return",
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Pool multi-stock data into a single (X, y) panel.
 
@@ -443,7 +455,7 @@ def build_panel(
         mask = compute_tradability_mask(panel, mask_config, ipo_dates=ipo_dates)
 
     fwd = forward_return_panel(
-        panel["close"], horizon, mask=mask,
+        panel["close"], horizon, label_type, mask=mask,
         open_=panel["open"] if label_basis == "open" else None,
     )
     X, y = stack_panel_to_xy(fp, fwd, dropna=True)
