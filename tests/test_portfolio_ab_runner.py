@@ -157,6 +157,36 @@ def test_score_memo_shares_panel_across_arms(base_cfg, monkeypatch):
     assert calls["n"] == 1, f"expected 1 shared precompute across arms, got {calls['n']}"
 
 
+def test_per_arm_universe_codes_override_is_honored(base_cfg):
+    """An arm's explicit portfolio_backtest.universe_codes must restrict that
+    arm's portfolio universe (pre-fix it was silently ignored — both arms
+    traded the shared base universe with the same score cache key)."""
+    pool_data = _seed_panel(["A", "B", "C", "D"])
+    ab_cfg = PortfolioABConfig(
+        base_config="config.yaml",
+        arms={
+            "ab_only": PortfolioArmOverride(
+                strategy={"name": "composite_verdict"},
+                portfolio_backtest={"universe_codes": ["A", "B"]},
+            ),
+            "cd_only": PortfolioArmOverride(
+                strategy={"name": "composite_verdict"},
+                portfolio_backtest={"universe_codes": ["C", "D"]},
+            ),
+        },
+    )
+    res = run_portfolio_ab(
+        ab_cfg, base_cfg, pool_data=pool_data,
+        sector_map={}, name_map={c: c for c in pool_data},
+    )
+    assert not res.arms["ab_only"].failed
+    assert not res.arms["cd_only"].failed
+    traded_ab = {t.code for t in res.arms["ab_only"].trades}
+    traded_cd = {t.code for t in res.arms["cd_only"].trades}
+    assert traded_ab <= {"A", "B"} and traded_ab
+    assert traded_cd <= {"C", "D"} and traded_cd
+
+
 def test_armresult_primary_curve_empty_when_failed():
     arm = ArmResult(name="x", effective_cfg=None, failed=True, error="boom")
     assert arm.primary_curve.empty

@@ -53,6 +53,7 @@ class _Position:
     entry_price: float
     shares: float            # share count (continuous: dollars / price)
     weight_at_entry: float   # fraction of equity allocated at entry
+    last_mark: float = 0.0   # last known close (falls back to entry_price)
 
 
 class PortfolioEngine:
@@ -133,11 +134,11 @@ class PortfolioEngine:
             for pos in positions.values():
                 close_t = closes_t.get(pos.code)
                 if pd.notna(close_t):
-                    held_value += pos.shares * float(close_t)
-                else:
-                    # Fall back to entry-price valuation if today's close is
-                    # missing (rare; defensive only).
-                    held_value += pos.shares * pos.entry_price
+                    pos.last_mark = float(close_t)
+                # Missing close (suspension / delisting) → keep the last known
+                # mark. Marking at entry_price here would fake away the entire
+                # drawdown of a stock that crashed and then stopped quoting.
+                held_value += pos.shares * pos.last_mark
             total_equity = cash + held_value
             equity[t] = total_equity
             num_pos[t] = len(positions)
@@ -184,7 +185,9 @@ class PortfolioEngine:
             for code, pos in list(positions.items()):
                 price = closes_last.get(code)
                 if pd.isna(price):
-                    price = pos.entry_price
+                    # Delisted/suspended at the end: realize at the last known
+                    # mark, not entry_price (which would hide the real loss).
+                    price = pos.last_mark
                 proceeds = pos.shares * float(price) * (1 - self.costs.sell_cost)
                 notional = pos.shares * pos.entry_price
                 ret = (proceeds / notional) - 1 if notional > 0 else 0.0
@@ -441,13 +444,14 @@ def _rebalance_to_target(
         ))
         del positions[code]
 
-    # 2. Of the target, keep only *new* codes (hold_survivors) with a valid
-    #    open price; renormalize weights over the buyable subset (equal-weight
+    # 2. Of the target, keep only codes not already held, with a valid open
+    #    price; renormalize weights over the buyable subset (equal-weight
     #    => 1/len(buyable), bit-exact with legacy per_lot = cash/len(buyable)).
-    candidates = (
-        [c for c in target_weights if c not in positions]
-        if hold_survivors else list(target_weights)
-    )
+    #    The `not in positions` exclusion is unconditional: in legacy mode
+    #    positions is empty after step 1 *except* for unsellable holds (NaN
+    #    open or limit-down) — re-buying those would overwrite the held
+    #    position and silently destroy its equity.
+    candidates = [c for c in target_weights if c not in positions]
     buyable = [c for c in candidates if pd.notna(opens_t.get(c))]
     buyable = [c for c in buyable
                if not _limit_up_blocked(c, float(opens_t.get(c)))]
@@ -466,7 +470,7 @@ def _rebalance_to_target(
     for pos in positions.values():
         mark = opens_t.get(pos.code)
         surv_val += pos.shares * (
-            float(mark) if pd.notna(mark) else pos.entry_price)
+            float(mark) if pd.notna(mark) else pos.last_mark)
     equity_exec = max(base_cash + surv_val, 1e-12)
     for code in buyable:
         px = float(opens_t.get(code))
@@ -479,6 +483,7 @@ def _rebalance_to_target(
             code=code, entry_idx=t, entry_date=date_t,
             entry_price=px, shares=shares,
             weight_at_entry=alloc / equity_exec,
+            last_mark=px,
         )
         cash -= alloc
     return cash, closed

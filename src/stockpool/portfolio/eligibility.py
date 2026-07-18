@@ -76,7 +76,7 @@ class EligibilityFilter:
         self.name_map = dict(name_map or {})
         # Per-panel precompute cache (keyed by id(panel_data) — the engine reuses
         # the same dict object across all rebalance bars in a run).
-        self._cache_key: int | None = None
+        self._cache_panel: Mapping[str, pd.DataFrame] | None = None
         self._cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray | None]] = {}
 
     def eligible(
@@ -92,7 +92,10 @@ class EligibilityFilter:
         membership look-ahead.
         """
         date_t = pd.Timestamp(date_t)
-        if self._cache_key != id(panel_data):
+        # Identity check via a strong reference — NOT id(): a dict allocated
+        # at a garbage-collected panel's address would silently reuse stale
+        # per-code arrays. Holding the reference makes `is` sound.
+        if self._cache_panel is not panel_data:
             self._build_cache(panel_data)
         ts = date_t.value  # int64 nanoseconds
         top_n = getattr(self.cfg, "top_n_liquidity", None)
@@ -159,7 +162,7 @@ class EligibilityFilter:
                 elig = hist_ok
             cache[code] = (dates_ns, elig, avg20)
         self._cache = cache
-        self._cache_key = id(panel_data)
+        self._cache_panel = panel_data
 
 
 def _is_st(name: str) -> bool:

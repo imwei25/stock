@@ -151,6 +151,29 @@ def run_single_arm(
     """
     if portfolio_pool_data is None:
         portfolio_pool_data = pool_data
+    # Per-arm universe override: build_effective_cfg documents that an arm's
+    # explicit portfolio_backtest.universe_codes wins, so honor it here by
+    # re-filtering from the (full) training pool — BEFORE score_cache_key is
+    # computed, so arms with different universes get different cache keys.
+    # When the arm inherits the base/ab_pool universe this is a no-op
+    # (same codes the caller already filtered portfolio_pool_data down to).
+    arm_codes = effective_cfg.portfolio_backtest.universe_codes
+    if arm_codes:
+        arm_pool = {}
+        missing = 0
+        for raw in arm_codes:
+            c = str(raw)
+            key = c if c in pool_data else c.zfill(6)
+            if key in pool_data:
+                arm_pool[key] = pool_data[key]
+            else:
+                missing += 1
+        if missing:
+            log.warning(
+                "[%s] %d universe_codes not in training pool (skipped)",
+                arm_name, missing,
+            )
+        portfolio_pool_data = arm_pool
     log.info(
         "[%s] running portfolio arm (training pool=%d, portfolio universe=%d)",
         arm_name, len(pool_data), len(portfolio_pool_data),

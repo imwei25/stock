@@ -446,3 +446,56 @@ def test_weight_at_entry_equal_split():
     res = eng.run(panel)
     weights = sorted(t.weight_at_entry for t in res.trades)
     assert weights == pytest.approx([0.5, 0.5], rel=1e-9)
+
+
+def test_limit_guard_legacy_retarget_does_not_overwrite_blocked_hold():
+    """Legacy mode (hold_survivors=False) + limit_guard: a held name that
+    STAYS in the target and opens limit-down is unsellable — the buy loop
+    must not re-buy/overwrite it (pre-fix the position was replaced by a
+    ~0-share entry funded from the empty cash pool, destroying its equity)."""
+    dates = _bars(6)
+    # A: flat 10, bar3 open = 9.0 (exact 10% limit-down vs close[2]=10).
+    a_open = np.array([10.0, 10.0, 10.0, 9.0, 10.0, 10.0])
+    panel = {"A": _stock(dates, a_open, 10.0), "B": _stock(dates, 10.0, 10.0)}
+    # A is always the top pick → stays in the target across every rebalance.
+    sp = pd.DataFrame(np.tile([2.0, 1.0], (len(dates), 1)),
+                      index=dates, columns=["A", "B"])
+    res = PortfolioEngine(
+        _scores(sp),
+        PortfolioRunConfig(top_k=1, rebalance_n_days=2, max_per_industry=None,
+                           initial_cash=1.0, limit_guard=True),
+    ).run(panel)
+    eq = res.curve["equity"].to_numpy()
+    # Shares survive the blocked bar-3 rebalance → equity stays ~1.0
+    # (pre-fix it collapsed to ~0 when the position was overwritten).
+    assert eq[3] > 0.9
+    assert eq[3] == pytest.approx(eq[2], rel=1e-9)
+    # The blocked bar produced no A trade (later bars may legacy-round-trip).
+    a_trades = [t for t in res.trades if t.code == "A"]
+    assert not any(t.exit_date == dates[3] for t in a_trades)
+
+
+def test_delisted_position_marked_at_last_close_not_entry():
+    """A held stock that crashes and then stops quoting (delisting) must be
+    marked at its LAST known close — pre-fix the mark snapped back to
+    entry_price, faking away the loss in both the curve and the close-out."""
+    dates = _bars(6)
+    a_open = np.array([10.0, 10.0, 5.0, np.nan, np.nan, np.nan])
+    a_close = np.array([10.0, 10.0, 5.0, np.nan, np.nan, np.nan])
+    panel = {"A": _stock(dates, a_open, a_close), "B": _stock(dates, 10.0, 10.0)}
+    sp = pd.DataFrame(np.tile([2.0, 1.0], (len(dates), 1)),
+                      index=dates, columns=["A", "B"])
+    res = PortfolioEngine(
+        _scores(sp),
+        _trivial_cfg(top_k=1, rebalance_n_days=10),
+    ).run(panel)
+    eq = res.curve["equity"].to_numpy()
+    # Crash marked at bar2; the quote-less bars keep that mark — no fake
+    # rebound to entry price (pre-fix eq[3] jumped back to ~1.0).
+    assert eq[2] == pytest.approx(eq[3], rel=1e-9)
+    assert eq[3] == pytest.approx(eq[4], rel=1e-9)
+    assert eq[3] < 0.6
+    # Close-out realizes the last quote (5.0), showing the real ~50% loss.
+    a_trade = [t for t in res.trades if t.code == "A"][0]
+    assert a_trade.exit_price == pytest.approx(5.0)
+    assert a_trade.ret < -0.4
