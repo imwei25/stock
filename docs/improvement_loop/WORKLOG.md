@@ -16,6 +16,51 @@
 ---
 <!-- 新记录追加到下方 -->
 
+## AUDIT-2026-07-18 — agent 三路审计 + 修复 wave(新 /loop session,进行中)
+
+**背景**:用户重启 /loop("派 agent 审视可提升点或修 bug → 逐个实现+验证")。三个并行
+audit agents(代码正确性 / 研究方向 / 工程遗留)返回后合并出 12+ 项任务队列。
+
+### 已落地修复(commits `21fa926` + `085829c`,分支 `fix/engine-audit-2026-07-18`)
+
+1. **BUG-1(CONFIRMED,engine)**:legacy 模式(`hold_survivors=false`)+ `limit_guard` 下,
+   仍在 target 且开盘一字跌停的持仓被 sell step 保留后又被 buy loop **覆盖**(空现金池
+   → ~0 股新仓,旧股份权益凭空蒸发;audit agent 实跑复现 190 权益毁 90)。修复:buy
+   candidates 无条件排除已持仓 code。**影响面**:仅 `limit_guard=true + hold_survivors=false`
+   组合;RV 全部用 hold_survivors=true,不受影响。
+2. **BUG-2(CONFIRMED,engine)**:持仓股 close 缺失(停牌/退市)后 MTM 与期末平仓都
+   回退到 **entry_price** — 崩盘后退市显示 ~0% 亏损。含退市回填(244 只)的 RV 评估
+   会被此失真**抬高**。修复:`_Position.last_mark` 追踪最后已知 close,MTM/平仓/
+   weight_at_entry 分母全部改用。**⚠️ 后续所有含退市股的 Layer D 数字与旧数字不可直接比。**
+3. **BUG-3(CONFIRMED,portfolio_ab)**:per-arm `portfolio_backtest.universe_codes`
+   (文档承诺"仍优先")被 runner 静默忽略 — 两 arm 实跑同一 universe + 同一 score cache
+   key。修复:`run_single_arm` 顶部按 arm 的 universe_codes 重过滤(在 cache key 之前)。
+4. **eligibility `id()` 缓存**:改强引用 + `is` 比较(id 复用可 serve 旧数组,latent)。
+5. **F1 hang → fast-fail**:`multiprocessing.Pool` 不检测 OOM-killed worker,
+   `imap_unordered` 永久阻塞(= 15-yr "卡 1499/1500")。改 `next(timeout=1800s)`
+   (env `STOCKPOOL_SCORE_RESULT_TIMEOUT_S` / 参数 `result_timeout_s`),超时抛
+   RuntimeError 提示 `--workers 1`。健康路径不变。
+6. **ops snapshot fixture 重生成**:旧 fixture 缺 GTJA191+新家族 → **219 测试静默 skip**。
+   重生成后暴露 5 个新的 Rust rank-flip 级联分歧因子(alpha_040 变体×3 / gtja_042 /
+   gtja_104),按既有 `EXPECTED_RUST_DIVERGENCE` 机制加 cap(≈2× 实测)。
+   全套 **1374 passed / 0 skipped**。
+
+### Kill-check A — h3/h10 分数面板相关性(方向1 预检)✅ 通过
+
+RV-h10 的 v3 缓存面板:rv_eval(1241 codes)与 pool2(1500 codes)per-day 秩相关
+mean 0.835 / 0.842(p10≈0.72)。**远低于 0.95 杀线** → h10 有独立截面信息,
+blend(0.5·z(h3)+0.5·z(h10))方向存活,待跑 Layer B(见队列)。
+
+### 未决队列(下一迭代)
+
+- Kill-check B:RV-D 基线 gross-vs-net 成本拖累(<0.1 Sharpe 则杀 rank-buffer 方向)
+- 方向1:blend Layer B(fwd=3/10 × 两池 × 2021+ 子窗,w=0.5 预注册)
+- 方向3:h10×rebal10 节奏匹配 Layer D(纯 config,score 缓存命中)
+- ipo_dates akshare fallback(解 L1;之后可重建 ab_pool IPO 硬过滤)
+- 文档:CLAUDE.md 陈旧项(mask_exec 已落地/测试数/correlation 措辞)
+- **注意**:BUG-2 修复改变含退市池的 engine 数字 → 涉及退市股的历史 Layer D 结论
+  (RV-D/RV-h10 的组合层数字)如需引用应在新 engine 下重跑;IC 层(Layer B)不受影响。
+
 ## RV-h10 — h3→h10 双层双池硬化(2026-07-13 跑完/07-16 判定)— NOT CONFIRMED,不 promote
 - **背景**:RV-D 里 h10 是唯一正向 lead(Layer D 主池 +0.100,粗子段全正)。按硬化协议补
   Layer B 双口径 + 双池(pool2_midliq 1500 只,0 重叠)+ pool2 Layer D。全部在修正 harness
