@@ -88,6 +88,35 @@ open-basis + 入场涨停剔除 + as-of top-1000):
 若未来重启:可试 ① blend 配 MVO/更高 k 的组合形态;② 三 horizon(3/5/10)blend;
 ③ pool2 组合层持平的归因(选股重叠度)。
 
+### Wave-3(2026-07-19):方向4 cross_sec_rank 标签 + 方向5 隔夜因子族
+
+**方向4 label_type 实装 + plumbing 修复**(commit `fc49d34`):`cross_sec_rank`(per-day
+截面 pct rank − 0.5)与 `vol_adjusted`(÷ trailing-20d vol)实装于 panel 路径;
+**顺带修复 plumbing 缺口 —— `cfg.label_type` 此前从未传入任何训练路径,yaml 里设了被静默
+忽略**;per_stock + 非 return 标签现在 ctor 报错。附带修一个实战暴露的 bug(Rust
+`stack_factors_long` OOM 时抛 pyo3 `PanicException`(BaseException)穿透失败隔离杀死
+worker —— 已捕获回退 numpy)。
+
+**csrank Layer B @ rv_eval(α=5e-4 预注册,修正 oracle,8.6h 串行打分)**:
+
+| 指标 | 值 |
+|---|---|
+| ΔIC(csrank − return) | **+0.00450(+8.4%)** |
+| paired t | +3.11(iid p≈0.002)|
+| block-bootstrap 95% CI | **[−0.0004, +0.0097] — 差 0.0004 未排除 0** |
+| halves / thirds | 2+/0− 与 3+/0− **全正** |
+| 5/8 桶 | 4+/1− 与 6+/2− |
+
+**中期判定:borderline NOT CONFIRMED(单池)→ 按协议启动 pool2 跨池硬化**(ret_label
+pool2 面板已缓存,csrank 边 ~10h 串行,过夜)。若 pool2 同号过 CI → 综合两池证据再判;
+若 pool2 翻负 → 关闭。**注意 α confound 未排除**:rank 标签改变标签尺度,若 pool2 也
+borderline,下一步应加测 α=1e-3 敏感性再下结论。
+
+**方向5 隔夜/日内分解族已实现**(commit `2401115`):`overnight_mom/intraday_mom/
+oi_spread/overnight_vol` 4 因子 ×窗口变体,恒等式/无 look-ahead/NaN 隔离测试全过,
+snapshot fixture 390 因子重生成。**下一 gate:factors analyze 覆盖率筛(等 csrank
+打分腾出机器)** → 过 gate 才做 pick-by-ic/AB。
+
 ### 本 session 收官状态
 
 - 修复:3 CONFIRMED bug + eligibility 缓存隐患 + F1 hang→fast-fail + 219 skip 测试复活
