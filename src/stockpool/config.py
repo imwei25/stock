@@ -631,6 +631,14 @@ class PortfolioRunConfig(BaseModel):
     # and hold positions whose open hits limit-down (can't sell). Uses
     # backtesting/limits.py board-based thresholds (ST 5% not detected).
     limit_guard: bool = False
+    # rank_buffer_mult (2026-07-18): asymmetric hysteresis / no-trade band.
+    # A held name keeps its seat while it still ranks within top
+    # (top_k × mult); NEW entries always require top-k rank. Cuts turnover
+    # without slowing entries (unlike a longer rebalance cadence, which slows
+    # both sides). None = legacy memoryless top-K (bit-exact). Only
+    # meaningful with hold_survivors=True (else the kept seat is still
+    # sold-and-rebought each rebalance).
+    rank_buffer_mult: float | None = Field(default=None, gt=1.0)
 
 
 class PortfolioEligibilityConfig(BaseModel):

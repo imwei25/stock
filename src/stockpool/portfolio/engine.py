@@ -165,6 +165,9 @@ class PortfolioEngine:
                         prev_closes=(closes_t
                                      if getattr(self.cfg, "limit_guard", False)
                                      else None),
+                        held=set(positions),
+                        rank_buffer_mult=getattr(
+                            self.cfg, "rank_buffer_mult", None),
                     )
                     pending_target = self._target_weights(target, scores, closes, t)
                     rebalance_records.append({
@@ -323,6 +326,8 @@ def _select_top_k(
     sector_map: Mapping[str, str] | None = None,
     max_per_industry: int | None = None,
     prev_closes: pd.Series | None = None,
+    held: set[str] | None = None,
+    rank_buffer_mult: float | None = None,
 ) -> set[str]:
     """Take top-K by score, skipping codes without executable open[t+1].
 
@@ -336,6 +341,12 @@ def _select_top_k(
     If ``prev_closes`` is given (limit_guard), candidates whose ``open[t+1]``
     hits the limit-up price vs ``close[t]`` are skipped — a 一字涨停 auction
     open cannot be bought, so the next-ranked name substitutes.
+
+    If ``rank_buffer_mult`` and ``held`` are given (hysteresis band), held
+    names that still rank within top ``k × mult`` keep their seats with
+    priority (no open/limit checks — keeping a seat requires no trade);
+    remaining seats are filled with the best candidates under the normal
+    entry rules. ``None`` (default) = legacy memoryless top-K, bit-exact.
     """
     ranked = sorted(scores.items(), key=lambda kv: -kv[1])
     apply_cap = (
@@ -345,9 +356,33 @@ def _select_top_k(
     )
     out: set[str] = set()
     industry_count: dict[str, int] = {}
+
+    def _cap_blocks(code: str) -> bool:
+        """True if the industry cap rejects ``code``; else count it in."""
+        if not apply_cap:
+            return False
+        ind = sector_map.get(code) or "Unknown"
+        if industry_count.get(ind, 0) >= max_per_industry:
+            return True
+        industry_count[ind] = industry_count.get(ind, 0) + 1
+        return False
+
+    # Pass 1 — hysteresis: incumbents within the buffer keep their seats.
+    if rank_buffer_mult is not None and held:
+        buffer_n = max(k, int(round(k * rank_buffer_mult)))
+        for code, _ in ranked[:buffer_n]:
+            if len(out) >= k:
+                break
+            if code not in held or _cap_blocks(code):
+                continue
+            out.add(code)
+
+    # Pass 2 — fill remaining seats under the normal entry rules.
     for code, _ in ranked:
         if len(out) >= k:
             break
+        if code in out:
+            continue
         px = opens_next.get(code)
         if pd.isna(px):
             continue
@@ -357,11 +392,8 @@ def _select_top_k(
                 float(px), float(pc), infer_limit_pct(code)
             ):
                 continue
-        if apply_cap:
-            ind = sector_map.get(code) or "Unknown"
-            if industry_count.get(ind, 0) >= max_per_industry:
-                continue
-            industry_count[ind] = industry_count.get(ind, 0) + 1
+        if _cap_blocks(code):
+            continue
         out.add(code)
     return out
 

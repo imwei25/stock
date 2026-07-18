@@ -475,6 +475,70 @@ def test_limit_guard_legacy_retarget_does_not_overwrite_blocked_hold():
     assert not any(t.exit_date == dates[3] for t in a_trades)
 
 
+def test_rank_buffer_keeps_incumbent_within_band():
+    """Hysteresis: with rank_buffer_mult=2.0 and k=1, a held name that slips
+    to rank 2 (inside top k×2) keeps its seat — the higher-scored challenger
+    is NOT bought. Without the buffer the incumbent is swapped out."""
+    dates = _bars(6)
+    panel = {c: _stock(dates, 10.0, 10.0) for c in ["A", "B", "C"]}
+    scores = np.array([
+        [3.0, 1.0, 0.0],   # bar0 → buy A
+        [3.0, 1.0, 0.0],
+        [2.0, 3.0, 1.0],   # bar2 on: B overtakes, A slips to rank 2
+        [2.0, 3.0, 1.0],
+        [2.0, 3.0, 1.0],
+        [2.0, 3.0, 1.0],
+    ])
+    sp = pd.DataFrame(scores, index=dates, columns=["A", "B", "C"])
+    common = dict(top_k=1, rebalance_n_days=2, max_per_industry=None,
+                  initial_cash=1.0, hold_survivors=True)
+
+    plain = PortfolioEngine(
+        _scores(sp), PortfolioRunConfig(**common)).run(panel)
+    buffered = PortfolioEngine(
+        _scores(sp), PortfolioRunConfig(**common, rank_buffer_mult=2.0)).run(panel)
+
+    # Memoryless top-K: A dropped for B at the bar-3 fill.
+    assert any(t.code == "A" and t.exit_reason == "rebalance_drop"
+               for t in plain.trades)
+    # Buffered: A (rank 2 ≤ 1×2) keeps the seat; B never enters.
+    assert {t.code for t in buffered.trades} == {"A"}
+    a = [t for t in buffered.trades if t.code == "A"][0]
+    assert a.exit_reason == "end_of_backtest"
+
+
+def test_rank_buffer_drops_incumbent_below_band():
+    """An incumbent that falls OUTSIDE top k×mult is dropped normally."""
+    dates = _bars(6)
+    panel = {c: _stock(dates, 10.0, 10.0) for c in ["A", "B", "C"]}
+    scores = np.array([
+        [3.0, 1.0, 0.5],   # bar0 → buy A
+        [3.0, 1.0, 0.5],
+        [0.1, 3.0, 2.5],   # bar2 on: A falls to rank 3 (> 1×2 band)
+        [0.1, 3.0, 2.5],
+        [0.1, 3.0, 2.5],
+        [0.1, 3.0, 2.5],
+    ])
+    sp = pd.DataFrame(scores, index=dates, columns=["A", "B", "C"])
+    res = PortfolioEngine(
+        _scores(sp),
+        PortfolioRunConfig(top_k=1, rebalance_n_days=2, max_per_industry=None,
+                           initial_cash=1.0, hold_survivors=True,
+                           rank_buffer_mult=2.0),
+    ).run(panel)
+    a = [t for t in res.trades if t.code == "A"][0]
+    assert a.exit_reason == "rebalance_drop"
+    assert any(t.code == "B" for t in res.trades)
+
+
+def test_rank_buffer_mult_validation():
+    """rank_buffer_mult must be > 1.0 (1.0 or less is meaningless)."""
+    with pytest.raises(Exception):
+        PortfolioRunConfig(top_k=10, rank_buffer_mult=1.0)
+    with pytest.raises(Exception):
+        PortfolioRunConfig(top_k=10, rank_buffer_mult=0.5)
+
+
 def test_delisted_position_marked_at_last_close_not_entry():
     """A held stock that crashes and then stops quoting (delisting) must be
     marked at its LAST known close — pre-fix the mark snapped back to

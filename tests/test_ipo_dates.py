@@ -97,6 +97,7 @@ def test_load_or_build_ipo_dates_fetch_failure_uses_stale_cache(monkeypatch, tmp
         raise RuntimeError("baostock offline")
 
     monkeypatch.setattr(ipo_dates, "_fetch_from_baostock", failing_fetch)
+    monkeypatch.setattr(ipo_dates, "_fetch_from_akshare", failing_fetch)
 
     result = ipo_dates.load_or_build_ipo_dates(tmp_path, max_age_days=30)
     # Failed fetch + stale cache → returns stale
@@ -111,9 +112,88 @@ def test_load_or_build_ipo_dates_fetch_failure_no_cache(monkeypatch, tmp_path):
         raise RuntimeError("baostock offline")
 
     monkeypatch.setattr(ipo_dates, "_fetch_from_baostock", failing_fetch)
+    monkeypatch.setattr(ipo_dates, "_fetch_from_akshare", failing_fetch)
 
     result = ipo_dates.load_or_build_ipo_dates(tmp_path)
     assert result == {}
+
+
+def test_auto_chain_falls_back_to_akshare(monkeypatch, tmp_path):
+    """baostock 失败(黑名单)→ auto 链自动落到 akshare。"""
+    from stockpool import ipo_dates
+
+    def failing_baostock():
+        raise RuntimeError("login failed: 黑名单用户")
+
+    def fake_akshare():
+        return pd.DataFrame({
+            "code": ["600000", "000001"],
+            "ipo_date": pd.to_datetime(["1999-11-10", "1991-04-03"]),
+        })
+
+    monkeypatch.setattr(ipo_dates, "_fetch_from_baostock", failing_baostock)
+    monkeypatch.setattr(ipo_dates, "_fetch_from_akshare", fake_akshare)
+
+    result = ipo_dates.load_or_build_ipo_dates(tmp_path)
+    assert result["600000"] == pd.Timestamp("1999-11-10")
+    assert result["000001"] == pd.Timestamp("1991-04-03")
+    # akshare 结果落盘,二次调用走缓存
+    assert (tmp_path / "ipo_dates.parquet").exists()
+
+
+def test_akshare_source_only(monkeypatch, tmp_path):
+    """source='akshare' 不碰 baostock。"""
+    from stockpool import ipo_dates
+
+    def must_not_call():
+        raise AssertionError("baostock should not be called")
+
+    def fake_akshare():
+        return pd.DataFrame({
+            "code": ["830799"], "ipo_date": pd.to_datetime(["2015-01-01"]),
+        })
+
+    monkeypatch.setattr(ipo_dates, "_fetch_from_baostock", must_not_call)
+    monkeypatch.setattr(ipo_dates, "_fetch_from_akshare", fake_akshare)
+
+    result = ipo_dates.load_or_build_ipo_dates(tmp_path, source="akshare")
+    assert result == {"830799": pd.Timestamp("2015-01-01")}
+
+
+def test_fetch_from_akshare_merges_exchanges(monkeypatch):
+    """三张交易所名录拼接 + 列名兼容 + 单交易所失败只丢那一张。"""
+    from stockpool import ipo_dates
+
+    class FakeAk:
+        @staticmethod
+        def stock_info_sh_name_code():
+            return pd.DataFrame({
+                "证券代码": ["600000"], "证券简称": ["浦发银行"],
+                "上市日期": ["1999-11-10"],
+            })
+
+        @staticmethod
+        def stock_info_sz_name_code():
+            return pd.DataFrame({
+                "A股代码": ["000001"], "A股简称": ["平安银行"],
+                "A股上市日期": ["1991-04-03"],
+            })
+
+        @staticmethod
+        def stock_info_bj_name_code():
+            raise RuntimeError("bj endpoint down")
+
+    import sys as _sys
+    monkeypatch.setitem(_sys.modules, "akshare", FakeAk)
+    out = ipo_dates._fetch_from_akshare()
+    assert set(out["code"]) == {"600000", "000001"}
+    assert out.set_index("code").loc["000001", "ipo_date"] == pd.Timestamp("1991-04-03")
+
+
+def test_unknown_source_raises(tmp_path):
+    from stockpool import ipo_dates
+    with pytest.raises(ValueError, match="unknown ipo_dates source"):
+        ipo_dates._fetch("tushare")
 
 
 def test_df_to_dict_strips_invalid_dates(tmp_path):
