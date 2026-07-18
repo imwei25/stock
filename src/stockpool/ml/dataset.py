@@ -207,10 +207,26 @@ def stack_panel_to_xy(
     except ImportError:
         pass
 
+    X_arr = None
     if _use_rust:
         # Rust: (F, T, N) → (T*N, F) with rayon parallelism over stocks.
-        X_arr = _rust_mod.stack_factors_long(panels_3d)
-    else:
+        try:
+            X_arr = _rust_mod.stack_factors_long(panels_3d)
+        except BaseException as e:  # noqa: BLE001 — see below
+            # pyo3 raises PanicException (a BaseException subclass, like
+            # SystemExit) when the Rust side panics — e.g. numpy allocation
+            # failure under memory pressure. Left uncaught it sails past
+            # every `except Exception` failure-isolation layer and kills the
+            # whole worker process. Convert to the numpy fallback; a genuine
+            # MemoryError there is a normal Exception and is handled upstream.
+            if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "stack_factors_long Rust dispatch failed (%s: %s); "
+                "falling back to numpy", type(e).__name__, e,
+            )
+    if X_arr is None:
         # Numpy fallback: transpose (F,T,N)→(N,T,F) + contiguous copy + reshape.
         # Equivalent to per-factor F-order ravel + column_stack but ~3× faster.
         # (N,T,F) contiguous reshape gives (N*T, F) in C order, matching idx layout.
