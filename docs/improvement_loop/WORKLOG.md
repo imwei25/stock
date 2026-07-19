@@ -112,6 +112,23 @@ pool2 面板已缓存,csrank 边 ~10h 串行,过夜)。若 pool2 同号过 CI �
 若 pool2 翻负 → 关闭。**注意 α confound 未排除**:rank 标签改变标签尺度,若 pool2 也
 borderline,下一步应加测 α=1e-3 敏感性再下结论。
 
+**csrank 终判(2026-07-19)— ❌ REJECTED,不 promote**:
+pool2 Layer B **CONFIRMED**(ΔIC +0.00832(+11.4%)t=+6.7 CI[+0.0044,+0.0125] 排 0,
+halves/thirds/5桶全正、8桶 7+/1−)→ 两池 IC 证据成立(rv_eval borderline 正 + pool2 硬化)。
+**但 Layer D @ rv_eval ΔSharpe = −0.123**(A=0.288 B=0.164),halves/thirds/5桶**全负**,
+CI [−0.31,+0.07] 含 0。IC 增益在组合层不但不转化还反噬 → 不 promote,保留 return 标签。
+α=1e-3 敏感性不再跑(那是救假阴性的,Layer D 明确为负无救)。
+**机制解释**:rank 标签把标签压平到 [−0.5,0.5],训练出的分数丢失**幅度**信息;
+截面平均 rank-IC 变好,但 top-K 选股只消费分数分布的**极端尾部**,尾部区分度反而受损。
+
+**★ 方法学发现(本 session 三连:h10 / blend / csrank)**:
+"Layer B(全截面平均 rank-IC)确认 → Layer D(top-K 组合 Sharpe)不转化甚至为负"
+已连续出现 3 次,非偶然。**全截面 IC oracle 与 top-K 组合消费的是分数分布的不同部分**
+(平均排序质量 vs 极端尾部区分度)。后续任何"改变分数形状"的方向(标签变换/weighter/
+blend)应在 Layer B 与 Layer D 之间加一层 **tail-IC 或 top-K overlap oracle**
+(例如只在每日 top-decile 内算 IC,或量 top-K 选股集合与真实 top 收益集合的重叠),
+用便宜信号提前预测组合层转化;或对这类方向直接跑 Layer D(engine-only 时很便宜)。
+
 **方向5 隔夜/日内分解族已实现**(commit `2401115`):`overnight_mom/intraday_mom/
 oi_spread/overnight_vol` 4 因子 ×窗口变体,恒等式/无 look-ahead/NaN 隔离测试全过,
 snapshot fixture 390 因子重生成。**下一 gate:factors analyze 覆盖率筛(等 csrank

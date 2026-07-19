@@ -40,8 +40,14 @@
 - **blend(0.5·z(h3)+0.5·z(h10))= 最强 provisional lead**:Layer B 双池 CONFIRMED
   (ΔIC +6%,t=4.7/6.3,CI 排 0,全子段正,w 敏感性稳),Layer D rv_eval +0.075 全子段正
   但 CI 含 0、pool2 持平 → **不 promote**。重启时优先回访(WORKLOG 列了 3 个后续形态)。
-- **剩余队列**(来自 scout,未动):④ cross_sec_rank 标签(stub 实装+Layer B)
-  ⑤ 隔夜/日内分解因子族(新家族,analyze 先筛)⑥ walk-forward 周期重选(重计算)。
+- **④ cross_sec_rank 标签 = ❌ REJECTED(2026-07-19)**:Layer B 两池正(pool2 CONFIRMED
+  t=6.7)但 Layer D −0.123 全子段负 —— rank 标签抹平幅度、伤 top-K 尾部。已实装留库
+  (`label_type` 可用),不进生产。
+- **★ 方法学教训(h10/blend/csrank 三连)**:全截面 IC oracle 与 top-K 组合消费不同的
+  分数分布部位;score-shape 类方向以后先加 tail-IC/top-K-overlap 中间 oracle 或直接
+  Layer D(engine-only 便宜)。见 WORKLOG「方法学发现」。
+- **剩余队列**:⑤ 隔夜/日内分解因子族(已实现,analyze gate 进行中)
+  ⑥ walk-forward 周期重选(重计算,未动)。
 
 ## ★ 自驱循环当前状态 (cron 0715a0ec, 每 30min, 2026-06-30 起)
 
