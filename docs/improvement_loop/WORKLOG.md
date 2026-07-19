@@ -129,10 +129,27 @@ blend)应在 Layer B 与 Layer D 之间加一层 **tail-IC 或 top-K overlap ora
 (例如只在每日 top-decile 内算 IC,或量 top-K 选股集合与真实 top 收益集合的重叠),
 用便宜信号提前预测组合层转化;或对这类方向直接跑 Layer D(engine-only 时很便宜)。
 
-**方向5 隔夜/日内分解族已实现**(commit `2401115`):`overnight_mom/intraday_mom/
-oi_spread/overnight_vol` 4 因子 ×窗口变体,恒等式/无 look-ahead/NaN 隔离测试全过,
-snapshot fixture 390 因子重生成。**下一 gate:factors analyze 覆盖率筛(等 csrank
-打分腾出机器)** → 过 gate 才做 pick-by-ic/AB。
+**方向5 隔夜/日内分解族 — ❌ CLOSED(gate-2 冗余判负,2026-07-19)**
+(commit `2401115` 实现;analyze 报告 `reports/factor_analysis_overnight/` +
+`factor_analysis_gate2/`):
+- gate-1(单因子质量)**通过且强**:`oi_spread_5` IC +0.048 / IR 0.433(32 因子中排 8,
+  过生产池 p75)、`intraday_mom_5` IC −0.052、`overnight_vol_10` IR −0.34;退化日 ~0。
+  族内定妆:spread↔intraday −0.96 冗余、spread↔overnight_vol −0.005 正交。
+- gate-2(与生产池冗余,预注册杀线 max|IC-corr|<0.5)**失败**:`oi_spread_5` ↔ `gtja_020`
+  IC 序列相关 **0.81**,`overnight_vol_10` ↔ `gtja_158` **0.82** —— 隔夜/日内分解的信息
+  已被生产池 GTJA 因子(close-open 型)捕获。按预注册规则**不跑** add-to-pool AB
+  (必然复现 L_poolsize flat 先例)。
+- 处置:4 因子留库(`sources=builtin`),未来 walk-forward 重选中可直接参与竞争;
+  不进 selection.json。
+
+### AUDIT session 最终收官(2026-07-19)
+
+scout 6 方向全部处理完毕:①blend(最强 provisional,双层证据入档)②rank buffer
+(实现留库)③h10×rebal10(h10 线关闭)④csrank(REJECTED + tail-IC 方法学发现)
+⑤隔夜族(gate-2 冗余关闭)⑥walk-forward 周期重选 = **唯一未做**(2-3 天代码 +
+多日计算的大项目,含义:给 Barra/隔夜/基本面族一个无偏差竞争窗口)。
+修复侧全清:3 CONFIRMED bug + F1 fast-fail + PanicException 逃逸 + snapshot 219 复活
++ ipo_dates 多源 + label_type plumbing。测试 1383 passed / 0 skip。全部已推 origin。
 
 ### 本 session 收官状态
 

@@ -46,8 +46,13 @@
 - **★ 方法学教训(h10/blend/csrank 三连)**:全截面 IC oracle 与 top-K 组合消费不同的
   分数分布部位;score-shape 类方向以后先加 tail-IC/top-K-overlap 中间 oracle 或直接
   Layer D(engine-only 便宜)。见 WORKLOG「方法学发现」。
-- **剩余队列**:⑤ 隔夜/日内分解因子族(已实现,analyze gate 进行中)
-  ⑥ walk-forward 周期重选(重计算,未动)。
+- **⑤ 隔夜/日内分解族 = ❌ CLOSED(gate-2)**:单因子强(oi_spread_5 IR 0.43 排 8/32)
+  但与生产池 GTJA 因子 IC 相关 0.81/0.82 >> 0.5 杀线 —— 信息已被池内捕获,不跑 pool AB。
+  因子留库,walk-forward 重选中可再竞争。
+- **★ AUDIT session 结束状态(2026-07-19)**:6 方向 5 关闭 1 留库,0 promote;基线不变
+  (h3/k20/rebal5/equal/ic/lasso@5e-4/old 池)。修复侧全清(见 WORKLOG)。
+  **唯一剩余方向 = ⑥ walk-forward 周期重选**(RV 回滚结论自己的建议;2-3 天代码 +
+  多日计算;顺带给 Barra/隔夜/基本面族无偏竞争窗口)——**需用户拍板再启动**。
 
 ## ★ 自驱循环当前状态 (cron 0715a0ec, 每 30min, 2026-06-30 起)
 
